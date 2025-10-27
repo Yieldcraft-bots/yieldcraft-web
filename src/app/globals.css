@@ -1,3 +1,4 @@
+/* 🔒 LOCKED THEME BUILD: YieldCraft Pro — do not overwrite without Scout approval */
 :root{
   --yc-bg:#0b1224; --yc-bg-2:#0f1832; --yc-card:#101a2e; --yc-stroke:#1e2a49;
   --yc-text:#f2f2f7; --yc-muted:#9aa3b2;
@@ -71,3 +72,8 @@ a.learn:hover{color:var(--yc-text)}
 .yc-footer__links{display:flex; gap:16px}
 .yc-footer__links a{color:var(--yc-muted); text-decoration:none}
 .yc-footer__links a:hover{color:var(--yc-text)}
+/* 🔒 Theme guard — ensures dark gradient + white text are always present */
+body {
+  background: radial-gradient(circle at 30% 30%, #0b0e19 0%, #03040a 100%) !important;
+  color: #ffffff !important;
+}
