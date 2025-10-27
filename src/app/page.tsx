@@ -3,9 +3,8 @@
 import React from "react";
 
 const LINKS = {
-  pulse: "https://buy.stripe.com/28EbJ36KB8Zz2jibAn7kc00",
-  allAccess:
-    process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#",
+  pulse: "https://buy.stripe.com/28EbJ36KB8Zz2jibAn7kc00", // Pulse direct
+  allAccess: process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#", // All-Access from Vercel env
 };
 
 export default function Home() {
@@ -75,7 +74,7 @@ export default function Home() {
               <h3 className="text-xl font-bold mt-1">Low-risk spot bot</h3>
               <p className="text-white/60 mt-2">
                 Maker-first logic with conservative entries. Designed for steady compounding.
-                <span className="ml-1 text-yellow-300">Recon included.</span>
+                <span className="ml-1 text-yellow-300"> Recon included.</span>
               </p>
               <div className="mt-6 flex items-baseline gap-1">
                 <span className="text-4xl font-extrabold">$9</span>
@@ -93,13 +92,13 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Horizon (points to All-Access for now, keeps flow simple) */}
+            {/* Horizon (for now routes via All-Access) */}
             <div className="rounded-3xl bg-white/5 border border-white/10 p-6 flex flex-col">
               <div className="text-sm text-cyan-300 font-semibold">Horizon</div>
               <h3 className="text-xl font-bold mt-1">Mid-risk expansion</h3>
               <p className="text-white/60 mt-2">
                 Broader participation with adaptive filters and risk gates.
-                <span className="ml-1 text-yellow-300">Recon included.</span>
+                <span className="ml-1 text-yellow-300"> Recon included.</span>
               </p>
               <div className="mt-6 flex items-baseline gap-1">
                 <span className="text-4xl font-extrabold">$19</span>
@@ -144,7 +143,6 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Small print */}
           <p className="text-[11px] text-white/40 mt-6">
             Trading involves risk. No performance guarantees. Recon “included” indicates access to
             our signal layer within enabled bots and venues.
