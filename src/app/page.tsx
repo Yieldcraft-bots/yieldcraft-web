@@ -3,8 +3,10 @@
 import React from "react";
 
 const LINKS = {
-  pulse: "https://buy.stripe.com/28EbJ36KB8Zz2jibAn7kc00", // Pulse direct
-  allAccess: process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#", // All-Access from Vercel env
+  // DIRECT Stripe links
+  pulse: "https://buy.stripe.com/28EbJ36KB8Zz2jibAn7kc00", // Pulse $9/mo
+  // All-Access comes from your Vercel env var
+  allAccess: process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#",
 };
 
 export default function Home() {
@@ -19,6 +21,7 @@ export default function Home() {
         <nav className="hidden md:flex items-center gap-6 text-sm text-white/70">
           <a href="#pricing" className="hover:text-white">Pricing</a>
           <a href="/api/health" className="hover:text-white">Status</a>
+          {/* Top Subscribe = All-Access */}
           <a
             href={LINKS.allAccess}
             target="_blank"
@@ -81,6 +84,7 @@ export default function Home() {
                 <span className="text-white/60">/mo</span>
               </div>
               <div className="mt-auto pt-6">
+                {/* PULSE BUTTON → Pulse Stripe link */}
                 <a
                   href={LINKS.pulse}
                   target="_blank"
@@ -92,7 +96,7 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Horizon (for now routes via All-Access) */}
+            {/* Horizon (routes via All-Access for now) */}
             <div className="rounded-3xl bg-white/5 border border-white/10 p-6 flex flex-col">
               <div className="text-sm text-cyan-300 font-semibold">Horizon</div>
               <h3 className="text-xl font-bold mt-1">Mid-risk expansion</h3>
