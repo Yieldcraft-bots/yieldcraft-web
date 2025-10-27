@@ -1,196 +1,161 @@
-// src/app/page.tsx
 "use client";
 
-const STRIPE_ALL_ACCESS =
-  process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS ||
-  "https://buy.stripe.com/test_all_access_replace_me";
+import React from "react";
 
-function YcLogo({ size = 28 }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 64 64"
-      aria-label="YieldCraft Logo"
-      role="img"
-    >
-      <defs>
-        <linearGradient id="ycGold" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#f9d85a" />
-          <stop offset="100%" stopColor="#d7b73b" />
-        </linearGradient>
-      </defs>
-      <circle cx="32" cy="32" r="30" fill="url(#ycGold)" />
-      <path
-        d="M18 38c8-1 10-16 18-17 5 0 7 5 10 9"
-        fill="none"
-        stroke="#0e1528"
-        strokeWidth="4"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
+const LINKS = {
+  pulse: "https://buy.stripe.com/28EbJ36KB8Zz2jibAn7kc00",
+  allAccess:
+    process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#",
+};
 
-export default function Page() {
+export default function Home() {
   return (
-    <main className="yc-page">
+    <main className="min-h-screen bg-[#0b0e19] text-white">
       {/* Top bar */}
-      <header className="yc-topbar">
-        <div className="yc-topbar__left">
-          <YcLogo size={28} />
-          <span className="yc-brand">YieldCraft</span>
+      <header className="max-w-6xl mx-auto px-4 py-5 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-8 w-8 rounded-lg bg-yellow-400/90" />
+          <span className="font-semibold tracking-tight text-lg">YieldCraft</span>
         </div>
-        <nav className="yc-nav">
-          <a href="#bots">Bots</a>
-          <a href="#why">Why YieldCraft</a>
-          <a href="#pricing">Pricing</a>
-        </nav>
-        <div className="yc-actions">
-          <a className="yc-btn ghost" href="/login">Log in</a>
-          <a className="yc-btn gold" href={STRIPE_ALL_ACCESS} target="_blank" rel="noopener noreferrer">
+        <nav className="hidden md:flex items-center gap-6 text-sm text-white/70">
+          <a href="#pricing" className="hover:text-white">Pricing</a>
+          <a href="/api/health" className="hover:text-white">Status</a>
+          <a
+            href={LINKS.allAccess}
+            target="_blank"
+            rel="noreferrer"
+            className="px-4 py-2 rounded-xl bg-yellow-400 text-black font-semibold hover:brightness-110"
+          >
             Subscribe
           </a>
-        </div>
+        </nav>
       </header>
 
       {/* Hero */}
-      <section className="yc-hero">
-        <div className="yc-hero__inner">
-          <h1>
-            The first <span className="glow">multi-platform direct-execution</span> AI trading platform
+      <section className="relative">
+        <div className="max-w-6xl mx-auto px-4 py-16 md:py-24">
+          <h1 className="text-3xl md:text-5xl font-extrabold leading-tight">
+            The first <span className="text-yellow-300">multi-platform direct-execution</span> AI
+            trading platform
           </h1>
-          <p>
-            Execute directly on <b>Coinbase, Kraken, and IBKR</b> — no middle layers.
-            Powered by our institutional predictive stack, <b>Mile-Ahead AI</b>.
+          <p className="mt-4 text-white/70 max-w-2xl">
+            Execute directly on Coinbase, Kraken, and IBKR—no signal delays. Powered by Recon
+            signal AI and institutional logic. Maker-first, risk-aware, mile-ahead.
           </p>
-          <div className="yc-hero__ctas">
-            <a className="yc-btn gold lg" href={STRIPE_ALL_ACCESS} target="_blank" rel="noopener noreferrer">
-              Subscribe Now
+
+          <div className="mt-8 flex flex-wrap gap-3">
+            <a
+              href={LINKS.allAccess}
+              target="_blank"
+              rel="noreferrer"
+              className="px-5 py-3 rounded-xl bg-yellow-400 text-black font-semibold hover:brightness-110"
+            >
+              Subscribe (All-Access)
             </a>
-            <a className="yc-btn ghost lg" href="#pricing">See Pricing</a>
+            <a
+              href="#pricing"
+              className="px-5 py-3 rounded-xl border border-white/20 hover:border-white/40"
+            >
+              See Pricing
+            </a>
           </div>
         </div>
       </section>
 
-      {/* Bots / Pricing */}
-      <section id="pricing" className="yc-section">
-        <h2 className="yc-h2">Strategies tuned to your risk</h2>
-        <p className="yc-sub">From conservative scalpers to momentum hunters, pick what fits you.</p>
+      {/* Pricing */}
+      <section id="pricing" className="py-12 md:py-16">
+        <div className="max-w-6xl mx-auto px-4">
+          <h2 className="text-2xl md:text-3xl font-bold">Strategies tuned to your risk</h2>
+          <p className="text-white/60 mt-2">Recon signal layer is included with every plan.</p>
 
-        <div className="pricing-grid">
-          {/* Pulse */}
-          <article className="card">
-            <div className="card-head">
-              <div className="card-icon">〰️</div>
-              <h3>YieldCraft Pulse</h3>
-              <p className="sub">Low-Risk BTC Scalper</p>
-              <span className="risk low">Low Risk</span>
+          <div className="grid md:grid-cols-3 gap-6 mt-8">
+            {/* Pulse */}
+            <div className="rounded-3xl bg-white/5 border border-white/10 p-6 flex flex-col">
+              <div className="text-sm text-yellow-300 font-semibold">Pulse</div>
+              <h3 className="text-xl font-bold mt-1">Low-risk spot bot</h3>
+              <p className="text-white/60 mt-2">
+                Maker-first logic with conservative entries. Designed for steady compounding.
+                <span className="ml-1 text-yellow-300">Recon included.</span>
+              </p>
+              <div className="mt-6 flex items-baseline gap-1">
+                <span className="text-4xl font-extrabold">$9</span>
+                <span className="text-white/60">/mo</span>
+              </div>
+              <div className="mt-auto pt-6">
+                <a
+                  href={LINKS.pulse}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full inline-flex justify-center px-4 py-3 rounded-xl bg-yellow-400 text-black font-semibold hover:brightness-110"
+                >
+                  Subscribe to Pulse
+                </a>
+              </div>
             </div>
 
-            <p className="blurb">
-              Conservative scalping targeting <b>2–4%</b> monthly returns with minimal drawdown.
-            </p>
-
-            <div className="metrics">
-              <div><span>Monthly Return</span><b>2–4%</b></div>
-              <div><span>Max Drawdown</span><b>&lt;2%</b></div>
+            {/* Horizon (points to All-Access for now, keeps flow simple) */}
+            <div className="rounded-3xl bg-white/5 border border-white/10 p-6 flex flex-col">
+              <div className="text-sm text-cyan-300 font-semibold">Horizon</div>
+              <h3 className="text-xl font-bold mt-1">Mid-risk expansion</h3>
+              <p className="text-white/60 mt-2">
+                Broader participation with adaptive filters and risk gates.
+                <span className="ml-1 text-yellow-300">Recon included.</span>
+              </p>
+              <div className="mt-6 flex items-baseline gap-1">
+                <span className="text-4xl font-extrabold">$19</span>
+                <span className="text-white/60">/mo</span>
+              </div>
+              <div className="mt-auto pt-6">
+                <a
+                  href={LINKS.allAccess}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full inline-flex justify-center px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20"
+                >
+                  Subscribe (via All-Access)
+                </a>
+              </div>
             </div>
 
-            <div className="card-cta">
-              <div className="price">$9<span>/month</span></div>
-              <a className="yc-btn gold stretch" href={STRIPE_ALL_ACCESS} target="_blank" rel="noopener noreferrer">
-                Subscribe Now →
-              </a>
-              <a className="learn" href="#pulse">Learn More</a>
+            {/* All-Access */}
+            <div className="rounded-3xl bg-white/5 border border-yellow-400/40 p-6 flex flex-col ring-1 ring-yellow-400/40">
+              <div className="text-sm text-yellow-300 font-semibold">All-Access</div>
+              <h3 className="text-xl font-bold mt-1">Everything we have</h3>
+              <p className="text-white/60 mt-2">
+                All current & future bots, priority support, and full Recon signal layer.
+              </p>
+              <div className="mt-6 flex items-baseline gap-1">
+                <span className="text-4xl font-extrabold">$39</span>
+                <span className="text-white/60">/mo</span>
+              </div>
+              <div className="mt-auto pt-6">
+                <a
+                  href={LINKS.allAccess}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full inline-flex justify-center px-4 py-3 rounded-xl bg-yellow-400 text-black font-semibold hover:brightness-110"
+                >
+                  Subscribe (All-Access)
+                </a>
+                <p className="text-xs text-white/50 mt-3">
+                  Ignition will appear here at launch; for pre-launch, All-Access keeps it simple.
+                </p>
+              </div>
             </div>
-          </article>
+          </div>
 
-          {/* Recon */}
-          <article className="card">
-            <div className="card-head">
-              <div className="card-icon">🌀</div>
-              <h3>YieldCraft Recon</h3>
-              <p className="sub">AI Signal Scanner</p>
-              <span className="risk med">Medium Risk</span>
-            </div>
-
-            <p className="blurb">
-              Advanced signal layer that powers all other YieldCraft bots. Use as a signal provider
-              or pair with Pulse/Ignition.
-            </p>
-
-            <div className="metrics">
-              <div><span>Monthly Return</span><b>Signal Provider</b></div>
-              <div><span>Max Drawdown</span><b>N/A</b></div>
-            </div>
-
-            <div className="card-cta">
-              <div className="price">$9<span>/month</span></div>
-              <a className="yc-btn gold stretch" href={STRIPE_ALL_ACCESS} target="_blank" rel="noopener noreferrer">
-                Subscribe Now →
-              </a>
-              <a className="learn" href="#recon">Learn More</a>
-            </div>
-          </article>
-
-          {/* Ignition */}
-          <article className="card">
-            <div className="card-head">
-              <div className="card-icon">🚀</div>
-              <h3>YieldCraft Ignition</h3>
-              <p className="sub">Aggressive Altcoin Momentum</p>
-              <span className="risk high">High Risk</span>
-            </div>
-
-            <p className="blurb">
-              High-performance momentum bot for experienced traders targeting explosive altcoin moves.
-            </p>
-
-            <div className="metrics">
-              <div><span>Monthly Return</span><b>10–18%</b></div>
-              <div><span>Max Drawdown</span><b>&lt;8%</b></div>
-            </div>
-
-            <div className="card-cta">
-              <div className="price">$19<span>/month</span></div>
-              <a className="yc-btn gold stretch" href={STRIPE_ALL_ACCESS} target="_blank" rel="noopener noreferrer">
-                Subscribe Now →
-              </a>
-              <a className="learn" href="#ignition">Learn More</a>
-            </div>
-          </article>
+          {/* Small print */}
+          <p className="text-[11px] text-white/40 mt-6">
+            Trading involves risk. No performance guarantees. Recon “included” indicates access to
+            our signal layer within enabled bots and venues.
+          </p>
         </div>
       </section>
 
-      {/* Why section */}
-      <section id="why" className="yc-section compact">
-        <h2 className="yc-h2">Why YieldCraft</h2>
-        <div className="why-grid">
-          <div className="why-card">
-            <h4>Direct Execution</h4>
-            <p>No 3Commas. No TradingView. We place orders directly on the exchange.</p>
-          </div>
-          <div className="why-card">
-            <h4>Mile-Ahead AI</h4>
-            <p>Institutional predictive logic that adapts to regimes and optimizes risk.</p>
-          </div>
-          <div className="why-card">
-            <h4>Made for Builders</h4>
-            <p>Fast setup, clean UI, and clear logs. Start today, scale tomorrow.</p>
-          </div>
-        </div>
-      </section>
-
-      <footer className="yc-footer">
-        <div className="yc-footer__brand">
-          <YcLogo size={22} />
-          <span>YieldCraft</span>
-        </div>
-        <div className="yc-footer__links">
-          <a href="/terms">Terms</a>
-          <a href="/privacy">Privacy</a>
-          <a href="mailto:hello@yieldcraft.co">Contact</a>
+      {/* Footer */}
+      <footer className="border-t border-white/10">
+        <div className="max-w-6xl mx-auto px-4 py-8 text-sm text-white/50">
+          © {new Date().getFullYear()} YieldCraft. All rights reserved.
         </div>
       </footer>
     </main>
