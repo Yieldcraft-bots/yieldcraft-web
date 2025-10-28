@@ -1,24 +1,17 @@
-// src/app/layout.tsx
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
+<header className="yc-topbar">
+  <div className="yc-topbar__left">
+    <a href="/" className="yc-brand">YieldCraft</a>
+  </div>
 
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
-
-export const metadata: Metadata = {
-  title: "YieldCraft",
-  description: "Pulse + Recon • Institutional-grade automation made simple.",
-};
-
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0b0e19] text-white`}
-      >
-        {children}
-      </body>
-    </html>
-  );
-}
+  <nav className="yc-nav">
+    <a href="/bots">Bots</a>
+    <a href="/why">Why YieldCraft</a>
+    <a href="/pricing">Pricing</a>
+    <a href="/quick-start" className="yc-btn ghost">QuickStart</a>
+    <a href="/affiliate" className="yc-btn ghost">Affiliate</a>
+    <a href={process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#"}
+       target="_blank" rel="noreferrer" className="yc-btn gold">
+      Subscribe
+    </a>
+  </nav>
+</header>
