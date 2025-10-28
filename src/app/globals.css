@@ -3,62 +3,59 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 🔒 LOCKED THEME BUILD: YieldCraft Pro — do not overwrite without Scout approval */
+/* 🔒 LOCKED THEME BUILD: YieldCraft Pro — Regie-style navy + YC gold */
 :root{
-  /* Regie-style deep navy palette + YC gold */
-  --yc-bg:#081225;         /* page base */
-  --yc-bg-2:#0b1630;       /* deeper navy for blends */
-  --yc-card:#0e1a35;       /* card surface */
-  --yc-stroke:#1b2a4d;     /* subtle borders */
+  /* Deep navy stack (Regie vibe) */
+  --yc-bg:#061225;          /* base */
+  --yc-bg-2:#0a1c37;        /* mid navy */
+  --yc-card:#0d1b36;        /* card */
+  --yc-stroke:#1b2a4d;      /* lines */
 
-  --yc-text:#f2f5fb;       /* primary text */
-  --yc-muted:#99a6c3;      /* secondary text */
+  --yc-text:#eef3fb;        /* primary text */
+  --yc-muted:#9fb0cc;       /* secondary */
 
-  /* YieldCraft golds */
-  --yc-gold:#f9d85a;
-  --yc-gold-2:#d7b73b;
+  /* YieldCraft golds (logo/button) */
+  --yc-gold:#f7d36a;
+  --yc-gold-2:#d3b13e;
 
-  /* Regie-like aqua/teal accents for gradients */
-  --yc-accent:#18b4ff;     /* aqua */
-  --yc-accent-2:#00d5c4;   /* teal */
+  /* Regie-style aqua/teal for gradients */
+  --yc-accent:#2bb5ff;      /* aqua */
+  --yc-accent-2:#18d4c8;    /* teal */
 
-  /* Signal colors */
-  --yc-green:#3ac777;
-  --yc-red:#d66767;
-  --yc-amber:#d3a651;
+  /* Signals */
+  --yc-green:#3ac777; --yc-red:#d66767; --yc-amber:#d3a651;
 
   /* Effects */
-  --yc-gold-glow: 0 10px 28px rgba(249,216,90,.22);
-  --yc-gold-wash: linear-gradient(180deg, rgba(249,216,90,.10), rgba(215,183,59,.06));
-  --yc-aqua-glow: 0 10px 32px rgba(24,180,255,.22);
+  --yc-gold-glow: 0 10px 28px rgba(247,211,106,.22);
+  --yc-gold-wash: linear-gradient(180deg, rgba(247,211,106,.10), rgba(211,177,62,.06));
+  --yc-aqua-glow: 0 12px 36px rgba(43,181,255,.22);
 }
 
 *{box-sizing:border-box}
 html,body{height:100%}
 
-/* ===== Page Base (Regie-style gradient + vignette) ===== */
+/* ===== Page Base (Regie gradient + aqua/teal blooms) ===== */
 body{
-  margin:0;
-  color:var(--yc-text);
+  margin:0; color:var(--yc-text);
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji";
   background:
-    radial-gradient(1200px 700px at 15% -10%, rgba(24,180,255,.14), transparent 60%),
-    radial-gradient(900px 560px at 85% 0%, rgba(0,213,196,.12), transparent 60%),
-    linear-gradient(180deg, #0a1731 0%, #071228 55%, #061022 100%),
+    radial-gradient(1200px 700px at 18% -10%, rgba(43,181,255,.14), transparent 60%),
+    radial-gradient(900px 560px at 82% 0%, rgba(24,212,200,.12), transparent 60%),
+    linear-gradient(180deg, #0a1c37 0%, #08162c 55%, #061225 100%),
     var(--yc-bg);
 }
 
 /* 🔒 Theme guard — ensures dark gradient + white text are always present */
-body { background: linear-gradient(180deg, #0a1731 0%, #071228 55%, #061022 100%) !important; color:#ffffff !important; }
+body { background: linear-gradient(180deg, #0a1c37 0%, #08162c 55%, #061225 100%) !important; color:#ffffff !important; }
 
 /* Links - subtle, gold on hover */
 a{color:inherit; text-decoration:none}
 a:hover{color:var(--yc-gold)}
 
-/* ---------- Layout ---------- */
+/* ---------- Page/Layout ---------- */
 .yc-page{display:flex; flex-direction:column; min-height:100dvh}
 
-/* ===== Topbar (glass, gradient, single row) ===== */
+/* ===== Topbar (glass, gradient) ===== */
 .yc-topbar{
   position:sticky; top:0; z-index:50;
   border-bottom:1px solid rgba(255,255,255,.05);
@@ -121,8 +118,8 @@ a:hover{color:var(--yc-gold)}
 .yc-hero{
   padding:88px 20px 44px;
   background:
-    radial-gradient(700px 320px at 20% 0%, rgba(24,180,255,.16), transparent 60%),
-    radial-gradient(600px 300px at 80% 10%, rgba(0,213,196,.16), transparent 60%),
+    radial-gradient(700px 320px at 20% 0%, rgba(43,181,255,.16), transparent 60%),
+    radial-gradient(600px 300px at 80% 10%, rgba(24,212,200,.16), transparent 60%),
     linear-gradient(180deg, rgba(8,18,37,0) 0%, rgba(8,18,37,.45) 100%);
 }
 .yc-hero__inner{max-width:1120px; margin:0 auto; text-align:center}
@@ -130,15 +127,17 @@ a:hover{color:var(--yc-gold)}
 .yc-hero p{max-width:840px; margin:0 auto 20px; color:var(--yc-muted); font-size:18px}
 
 /* Gloss gradient on key words */
+.h1-gloss{
+  background:linear-gradient(90deg, #eaf1ff 0%, #bfe8ff 40%, #aaf7ef 60%, #eaf1ff 100%);
+  -webkit-background-clip:text; background-clip:text; color:transparent;
+}
 .glow{
   background:linear-gradient(90deg, var(--yc-accent), var(--yc-accent-2));
   -webkit-background-clip:text; background-clip:text; color:transparent;
 }
 
-/* Subtle gold underline utility */
-.yc-underline{
-  box-shadow: inset 0 -10px 0 rgba(249,216,90,.15);
-}
+/* Subtle gold underline */
+.yc-underline{ box-shadow: inset 0 -10px 0 rgba(247,211,106,.15); }
 
 /* Sections */
 .yc-section{padding:56px 20px}
@@ -151,7 +150,7 @@ a:hover{color:var(--yc-gold)}
   max-width:1200px; margin:0 auto;
   display:grid; gap:18px; grid-template-columns:repeat(1,1fr)
 }
-@media (min-width:860px){.pricing-grid{grid-template-columns:repeat(3,1fr)}}
+@media (min-width:860px){.pricing-grid{grid-template-columns:repeat(3,1,1fr)}}
 
 .card{
   background:var(--yc-card);
@@ -162,7 +161,7 @@ a:hover{color:var(--yc-gold)}
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
 }
 .card:hover{
-  border-color: rgba(249,216,90,.35);
+  border-color: rgba(247,211,106,.35);
   box-shadow: var(--yc-gold-glow);
   background: var(--yc-gold-wash), var(--yc-card);
   transform: translateY(-2px);
@@ -171,7 +170,7 @@ a:hover{color:var(--yc-gold)}
 .card-head{display:flex; flex-direction:column; gap:6px}
 .card-icon{
   width:44px; height:44px; display:grid; place-items:center; border-radius:12px;
-  background:rgba(24,180,255,.14); border:1px solid rgba(24,180,255,.35); font-size:20px
+  background:rgba(43,181,255,.14); border:1px solid rgba(43,181,255,.35); font-size:20px
 }
 .card h3{margin:6px 0 0}
 .card .sub{margin:0; color:var(--yc-muted)}
@@ -206,7 +205,7 @@ a.learn:hover{color:var(--yc-text)}
   transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
 }
 .why-card:hover{
-  border-color: rgba(249,216,90,.35);
+  border-color: rgba(247,211,106,.35);
   box-shadow: var(--yc-gold-glow);
   background: var(--yc-gold-wash), linear-gradient(180deg, #0f1a34, #0c152d);
 }
@@ -223,17 +222,10 @@ a.learn:hover{color:var(--yc-text)}
 .yc-footer__links a{color:var(--yc-muted); border-radius:10px; padding:.2rem .4rem}
 .yc-footer__links a:hover{color:var(--yc-text); background: var(--yc-gold-wash)}
 
-/* ---------- Extras / Utilities ---------- */
-/* Headline gloss like Regie */
-.h1-gloss{
-  background:linear-gradient(90deg, #eaf1ff 0%, #bfe8ff 40%, #aaf7ef 60%, #eaf1ff 100%);
-  -webkit-background-clip:text; background-clip:text; color:transparent;
-}
-
-/* Card lift polish duplicated here to ensure priority */
+/* ---------- Extra polish ---------- */
 .card{transition: transform .18s ease, box-shadow .18s ease, background .18s ease}
 .card:hover{
   transform: translateY(-2px);
-  box-shadow: 0 14px 32px rgba(0,0,0,.35), 0 0 0 1px rgba(249,216,90,.25) inset;
-  background: linear-gradient(0deg, rgba(249,216,90,0.06), rgba(249,216,90,0.06)), var(--yc-card);
+  box-shadow: 0 14px 32px rgba(0,0,0,.35), 0 0 0 1px rgba(247,211,106,.25) inset;
+  background: linear-gradient(0deg, rgba(247,211,106,0.06), rgba(247,211,106,0.06)), var(--yc-card);
 }
