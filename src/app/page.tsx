@@ -12,20 +12,6 @@ const LINKS = {
 export default function Home() {
   return (
     <main className="yc-page">
-      {/* Topbar */}
-      <header className="yc-topbar">
-        <div className="yc-topbar__left">
-          <span className="yc-brand">YieldCraft</span>
-        </div>
-        <nav className="yc-nav">
-          <a href="/bots">Bots</a>
-          <a href="/why">Why YieldCraft</a>
-          <a href={LINKS.pricing}>Pricing</a>
-          <a className="yc-btn ghost" href="/affiliate">Affiliate</a>
-          <a className="yc-btn gold" href={LINKS.stripeAllAccess} target="_blank" rel="noreferrer">Subscribe</a>
-        </nav>
-      </header>
-
       {/* Hero */}
       <section className="yc-hero">
         <div className="yc-hero__inner">
@@ -34,8 +20,8 @@ export default function Home() {
             platform
           </h1>
           <p>
-            Execute directly on <b>Coinbase, Kraken, and IBKR</b> — no middle layers. Powered by our institutional
-            predictive stack, <b>Mile-Ahead AI</b>.
+            Execute directly on <b>Coinbase, Kraken, and IBKR</b> — no middle layers. Powered by our
+            institutional predictive stack, <b>Mile-Ahead AI</b>.
           </p>
           <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 14 }}>
             <a className="yc-btn gold lg" href={LINKS.stripeAllAccess} target="_blank" rel="noreferrer">
