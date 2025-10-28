@@ -5,8 +5,7 @@ import { usePathname } from "next/navigation";
 export default function NavBar() {
   const pathname = usePathname();
 
-  const isActive = (href: string) =>
-    pathname === href ? "is-active" : "";
+  const isActive = (href: string) => (pathname === href ? "is-active" : "");
 
   return (
     <header className="yc-topbar">
@@ -19,11 +18,11 @@ export default function NavBar() {
 
         {/* Center nav */}
         <nav className="yc-nav">
-          <Link href="/bots"       className={isActive("/bots")}>Bots</Link>
-          <Link href="/why"        className={isActive("/why")}>Why YieldCraft</Link>
-          <Link href="/pricing"    className={isActive("/pricing")}>Pricing</Link>
+          <Link href="/bots"        className={isActive("/bots")}>Bots</Link>
+          <Link href="/why"         className={isActive("/why")}>Why YieldCraft</Link>
+          <Link href="/pricing"     className={isActive("/pricing")}>Pricing</Link>
           <Link href="/quick-start" className={isActive("/quick-start")}>Quick Start</Link>
-          <Link href="/affiliate"  className={isActive("/affiliate")}>Affiliate</Link>
+          <Link href="/affiliate"   className={isActive("/affiliate")}>Affiliate</Link>
         </nav>
 
         {/* Right actions */}
