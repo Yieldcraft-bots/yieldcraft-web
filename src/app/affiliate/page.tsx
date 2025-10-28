@@ -3,154 +3,220 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-function useHomepage() {
-  // Vercel preview/prod domains come from location at runtime
-  const [url, setUrl] = useState("");
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const { origin } = window.location;
-      setUrl(origin);
-    }
-  }, []);
-  return url;
-}
+const STRIPE = process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "";
+const COINBASE = process.env.NEXT_PUBLIC_COINBASE_REF_URL || "";
 
-function CopyRow({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  async function onCopy() {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    } catch {}
-  }
+function CopyButton({ text }: { text: string }) {
+  const [ok, setOk] = useState<null | string>(null);
   return (
-    <div className="card" style={{ gap: 10 }}>
-      <div className="card-head" style={{ gap: 4 }}>
-        <div className="card-icon">🔗</div>
-        <h3 style={{ margin: 0 }}>{label}</h3>
-        <p className="sub" style={{ marginTop: 2 }}>
-          Click copy and share.
-        </p>
-      </div>
-
-      <div className="flex items-center gap-2" style={{ display: "flex", gap: 8 }}>
-        <input
-          readOnly
-          value={value}
-          className="w-full bg-white/10 border border-white/10 rounded-xl px-3 py-2 text-sm"
-          style={{ width: "100%" }}
-        />
-        <button onClick={onCopy} className="yc-btn gold" disabled={!value}>
-          {copied ? "Copied ✓" : "Copy"}
-        </button>
-      </div>
-    </div>
+    <button
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setOk("Copied!");
+          setTimeout(() => setOk(null), 1200);
+        } catch {
+          setOk("Failed");
+          setTimeout(() => setOk(null), 1200);
+        }
+      }}
+      className="yc-btn gold"
+      style={{ height: 36, padding: "0 14px" }}
+      aria-label="Copy"
+    >
+      {ok ?? "Copy"}
+    </button>
   );
 }
 
 export default function AffiliatePage() {
-  const home = useHomepage();
   const [ref, setRef] = useState("");
+  const [origin, setOrigin] = useState("");
 
-  const links = useMemo(() => {
-    const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
-    return {
-      homepage: home ? `${home}/${qs ? qs : ""}` : "",
-      stripeAllAccess:
-        (process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#") +
-        (ref ? `?ref=${encodeURIComponent(ref)}` : ""),
-      coinbase:
-        (process.env.NEXT_PUBLIC_COINBASE_REF_URL || "#") +
-        (ref ? `?ref=${encodeURIComponent(ref)}` : ""),
-    };
-  }, [home, ref]);
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    // prefill from ?ref
+    const u = new URL(window.location.href);
+    const q = u.searchParams.get("ref");
+    if (q) setRef(q);
+  }, []);
+
+  const homepage = useMemo(() => {
+    const url = new URL(origin || "https://yieldcraft.co");
+    if (ref) url.searchParams.set("ref", ref);
+    return url.toString();
+  }, [origin, ref]);
+
+  const stripe = useMemo(() => {
+    if (!STRIPE) return "";
+    try {
+      const url = new URL(STRIPE);
+      if (ref) url.searchParams.set("ref", ref);
+      return url.toString();
+    } catch {
+      return STRIPE;
+    }
+  }, [ref]);
+
+  const coinbase = useMemo(() => {
+    if (!COINBASE) return "";
+    try {
+      const url = new URL(COINBASE);
+      if (ref) url.searchParams.set("ref", ref);
+      return url.toString();
+    } catch {
+      return COINBASE;
+    }
+  }, [ref]);
 
   return (
-    <>
-      {/* Top hero strip to match landing */}
-      <section className="yc-hero" style={{ paddingBottom: 24 }}>
+    <main className="yc-page">
+      {/* Hero */}
+      <section className="yc-hero">
         <div className="yc-hero__inner">
           <h1>Affiliate Hub</h1>
           <p>
             Earn by sharing YieldCraft. Your code tracks across the whole site and into{" "}
             <b>Stripe</b> & <b>Coinbase</b> links — with a one-year attribution window.
           </p>
-          <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 10 }}>
-            <a className="yc-btn ghost lg" href="/">
-              Back to Home
-            </a>
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
+            <a className="yc-btn ghost lg" href="/">Back to Home</a>
           </div>
         </div>
       </section>
 
+      {/* Content */}
       <section className="yc-section">
-        <div
-          className="pricing-grid"
-          style={{ gridTemplateColumns: "repeat(1, minmax(0,1fr))", maxWidth: 900 }}
-        >
-          {/* Your code */}
+        <div className="pricing-grid" style={{ gridTemplateColumns: "1fr" }}>
+          {/* referral code */}
           <article className="card">
             <div className="card-head">
               <div className="card-icon">🏷️</div>
               <h3>Your referral code</h3>
               <p className="sub">This will be appended as <code>?ref=yourcode</code>.</p>
             </div>
-
-            <div className="flex items-center gap-2" style={{ display: "flex", gap: 8 }}>
+            <div className="card-cta" style={{ gap: 12 }}>
               <input
                 value={ref}
-                onChange={(e) => setRef(e.target.value.trim())}
+                onChange={(e) => setRef(e.target.value.replace(/\s+/g, ""))}
                 placeholder="yourname"
-                className="w-full bg-white/10 border border-white/10 rounded-xl px-3 py-2 text-sm"
-                style={{ width: "100%" }}
+                className="yc-input"
+                style={{
+                  height: 44,
+                  borderRadius: 12,
+                  border: "1px solid var(--yc-stroke)",
+                  background: "var(--yc-card)",
+                  color: "var(--yc-text)",
+                  padding: "0 12px",
+                }}
               />
             </div>
           </article>
 
-          {/* Homepage */}
-          <CopyRow label="Homepage link" value={links.homepage} />
+          {/* homepage link */}
+          <article className="card">
+            <div className="card-head">
+              <div className="card-icon">🔗</div>
+              <h3>Homepage link</h3>
+              <p className="sub">Send traffic to your homepage — auto-tracks your code.</p>
+            </div>
+            <div className="card-cta" style={{ gap: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
+                <input
+                  readOnly
+                  value={homepage}
+                  className="yc-input"
+                  style={{
+                    height: 44,
+                    borderRadius: 12,
+                    border: "1px solid var(--yc-stroke)",
+                    background: "var(--yc-card)",
+                    color: "var(--yc-text)",
+                    padding: "0 12px",
+                  }}
+                />
+                <CopyButton text={homepage} />
+              </div>
+            </div>
+          </article>
 
-          {/* Stripe subscribe */}
-          <CopyRow label="Stripe subscribe link" value={links.stripeAllAccess} />
+          {/* stripe link */}
+          <article className="card">
+            <div className="card-head">
+              <div className="card-icon">💳</div>
+              <h3>Stripe subscribe link</h3>
+              <p className="sub">Goes straight to checkout; your code is attached.</p>
+            </div>
+            <div className="card-cta" style={{ gap: 12 }}>
+              {!STRIPE ? (
+                <p className="blurb">Set <code>NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS</code> in Vercel.</p>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
+                  <input
+                    readOnly
+                    value={stripe}
+                    className="yc-input"
+                    style={{
+                      height: 44,
+                      borderRadius: 12,
+                      border: "1px solid var(--yc-stroke)",
+                      background: "var(--yc-card)",
+                      color: "var(--yc-text)",
+                      padding: "0 12px",
+                    }}
+                  />
+                  <CopyButton text={stripe} />
+                </div>
+              )}
+            </div>
+          </article>
 
-          {/* Coinbase */}
-          <CopyRow label="Coinbase link (optional)" value={links.coinbase} />
+          {/* coinbase link */}
+          <article className="card">
+            <div className="card-head">
+              <div className="card-icon">🪙</div>
+              <h3>Coinbase link (optional)</h3>
+              <p className="sub">For new exchange signups.</p>
+            </div>
+            <div className="card-cta" style={{ gap: 12 }}>
+              {!COINBASE ? (
+                <p className="blurb">Set <code>NEXT_PUBLIC_COINBASE_REF_URL</code> in Vercel if you use it.</p>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
+                  <input
+                    readOnly
+                    value={coinbase}
+                    className="yc-input"
+                    style={{
+                      height: 44,
+                      borderRadius: 12,
+                      border: "1px solid var(--yc-stroke)",
+                      background: "var(--yc-card)",
+                      color: "var(--yc-text)",
+                      padding: "0 12px",
+                    }}
+                  />
+                  <CopyButton text={coinbase} />
+                </div>
+              )}
+            </div>
+          </article>
 
-          {/* Tips */}
+          {/* tips */}
           <article className="card">
             <div className="card-head">
               <div className="card-icon">💡</div>
               <h3>Best practices</h3>
             </div>
-            <ul className="blurb" style={{ margin: 0, paddingLeft: 18 }}>
-              <li>
-                Always share links that include your code (<code>?ref=you</code>).
-              </li>
-              <li>
-                Once a visitor hits the site, their code is saved for a year and auto-appends to
-                future links.
-              </li>
-              <li>
-                For email marketing, link both the homepage and the Subscribe button (checkout).
-              </li>
-              <li>
-                Payouts are handled in Stripe. Need help?{" "}
-                <a className="learn" href="mailto:support@yieldcraft.co">
-                  support@yieldcraft.co
-                </a>
-                .
-              </li>
+            <ul className="blurb" style={{ margin: 0, paddingLeft: 18, display: "grid", gap: 6 }}>
+              <li>Always share links that include your code (<code>?ref=you</code>).</li>
+              <li>After a first visit, attribution persists for 1 year across the site and checkout.</li>
+              <li>For email, link both the homepage and the Subscribe button.</li>
+              <li>Payouts are handled in Stripe. Contact support@yieldcraft.co if something looks off.</li>
             </ul>
           </article>
         </div>
       </section>
-    </>
+    </main>
   );
 }
