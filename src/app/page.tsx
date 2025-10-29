@@ -1,57 +1,59 @@
 // src/app/page.tsx
-"use client";
-import React from "react";
-
-const LINKS = {
-  pricing: "/pricing",
-  quickStart: "/quick-start",
-  affiliate: "/affiliate",
-  stripeAllAccess:
-    process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK_ALL_ACCESS || "#",
-};
-
 export default function Home() {
   return (
-    <main className="yc-page">
-      {/* Hero */}
+    <div className="yc-page">
+      {/* ===== Topbar ===== */}
+      <header className="yc-topbar">
+        <div className="yc-topbar__inner">
+          <a href="/" className="yc-brand">
+            <img
+              src="/yc-shield-gold.png"
+              alt="YieldCraft"
+              width={28}
+              height={28}
+              style={{ borderRadius: '6px' }}
+            />
+            <span className="yc-brand__text">YieldCraft</span>
+          </a>
+
+          <nav className="yc-nav">
+            <a href="/bots">Bots</a>
+            <a href="/why">Why YieldCraft</a>
+            <a href="/pricing">Pricing</a>
+            <a href="/quick-start">Quick Start</a>
+            <a href="/affiliate">Affiliate</a>
+          </nav>
+
+          <div className="yc-actions">
+            <a href="/login" className="yc-btn ghost">Log in</a>
+            <a href="/pricing" className="yc-btn gold">Subscribe</a>
+          </div>
+        </div>
+      </header>
+
+      {/* ===== Hero ===== */}
       <section className="yc-hero">
         <div className="yc-hero__inner">
-          <h1>
-            The first{" "}
-            <span className="glow">multi-platform direct-execution</span> AI
+          <h1 className="h1-gloss">
+            The first <span className="glow">multi-platform direct-execution AI</span><br />
             trading platform
           </h1>
-          <p>
-            Execute directly on <b>Coinbase, Kraken, and IBKR</b> — no middle
-            layers. Powered by our institutional predictive stack,{" "}
-            <b>Mile-Ahead AI</b>.
+          <p className="yc-underline" style={{ marginTop: 10 }}>
+            Execute directly on <strong>Coinbase, Kraken, and IBKR</strong> — no middle layers.
+            Powered by our institutional predictive stack, <strong>Mile-Ahead AI</strong>.
           </p>
 
-          {/* CTA buttons (internal routes) */}
-          <div
-            style={{
-              display: "flex",
-              gap: 12,
-              justifyContent: "center",
-              marginTop: 14,
-            }}
-          >
-            <a className="yc-btn gold lg" href={LINKS.quickStart}>
-              Subscribe Now
-            </a>
-            <a className="yc-btn ghost lg" href={LINKS.pricing}>
-              See Pricing
-            </a>
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: 18 }}>
+            <a href="/pricing" className="yc-btn gold lg">Subscribe Now</a>
+            <a href="/pricing" className="yc-btn primary lg">See Pricing</a>
           </div>
         </div>
       </section>
 
-      {/* Plans */}
+      {/* ===== Pricing / Bots ===== */}
       <section className="yc-section">
         <h2 className="yc-h2">Strategies tuned to your risk</h2>
-        <p className="yc-sub">
-          From conservative scalpers to momentum hunters, pick what fits you.
-        </p>
+        <p className="yc-sub">From conservative scalpers to momentum hunters, pick what fits you.</p>
 
         <div className="pricing-grid">
           {/* Pulse */}
@@ -60,77 +62,63 @@ export default function Home() {
               <div className="card-icon">⚡</div>
               <h3>YieldCraft Pulse</h3>
               <p className="sub">Low-Risk BTC Scalper</p>
+              <span className="risk low">Low Risk</span>
             </div>
-            <span className="risk low">Low Risk</span>
+
             <p className="blurb">
-              Conservative scalping targeting <b>2–4% monthly</b> with minimal
-              drawdown.
+              Conservative scalping targeting <strong>2–4% monthly</strong> with minimal drawdown.
             </p>
+
             <div className="metrics">
               <div>
                 <span>Monthly Return</span>
-                <b>2–4%</b>
+                <strong>2–4%</strong>
               </div>
               <div>
                 <span>Max Drawdown</span>
-                <b>&lt;2%</b>
+                <strong>&lt;2%</strong>
               </div>
             </div>
+
             <div className="card-cta">
-              <div className="price">
-                $9<span>/month</span>
+              <div className="price">$9<span>/month</span></div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <a href="/pricing#pulse" className="yc-btn gold">Subscribe</a>
+                <a href="/bots#pulse" className="yc-btn ghost">Learn more</a>
               </div>
-              <a
-                className="yc-btn gold stretch"
-                href={LINKS.stripeAllAccess}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Subscribe
-              </a>
-              <a className="learn" href="/bots/pulse">
-                Learn more
-              </a>
             </div>
           </article>
 
           {/* Recon */}
           <article className="card">
             <div className="card-head">
-              <div className="card-icon">🧭</div>
+              <div className="card-icon">🔎</div>
               <h3>YieldCraft Recon</h3>
               <p className="sub">AI Signal Scanner</p>
+              <span className="risk med">Medium Risk</span>
             </div>
-            <span className="risk med">Medium Risk</span>
+
             <p className="blurb">
-              Advanced signal layer that powers all other YieldCraft bots or can
-              run standalone.
+              Advanced signal layer that powers all other YieldCraft bots or can run standalone.
             </p>
+
             <div className="metrics">
               <div>
                 <span>Monthly Return</span>
-                <b>Signal Provider</b>
+                <strong>Signal Provider</strong>
               </div>
               <div>
                 <span>Max Drawdown</span>
-                <b>N/A</b>
+                <strong>N/A</strong>
               </div>
             </div>
+
             <div className="card-cta">
-              <div className="price">
-                $9<span>/month</span>
+              <div className="price">$9<span>/month</span></div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <a href="/pricing#recon" className="yc-btn gold">Subscribe</a>
+                <a href="/bots#recon" className="yc-btn ghost">Learn more</a>
               </div>
-              <a
-                className="yc-btn gold stretch"
-                href={LINKS.stripeAllAccess}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Subscribe
-              </a>
-              <a className="learn" href="/bots/recon">
-                Learn more
-              </a>
             </div>
           </article>
 
@@ -140,46 +128,40 @@ export default function Home() {
               <div className="card-icon">🚀</div>
               <h3>YieldCraft Ignition</h3>
               <p className="sub">Aggressive Altcoin Momentum</p>
+              <span className="risk high">High Risk</span>
             </div>
-            <span className="risk high">High Risk</span>
+
             <p className="blurb">
-              High-performance momentum bot targeting explosive altcoin moves.
-              For experienced traders.
+              High-performance momentum bot targeting explosive altcoin moves. For experienced traders.
             </p>
+
             <div className="metrics">
               <div>
                 <span>Monthly Return</span>
-                <b>10–18%</b>
+                <strong>10–18%</strong>
               </div>
               <div>
                 <span>Max Drawdown</span>
-                <b>&lt;8%</b>
+                <strong>&lt;8%</strong>
               </div>
             </div>
+
             <div className="card-cta">
-              <div className="price">
-                $19<span>/month</span>
+              <div className="price">$39<span>/month</span></div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <a href="/pricing#ignition" className="yc-btn gold">Subscribe</a>
+                <a href="/bots#ignition" className="yc-btn ghost">Learn more</a>
               </div>
-              <a
-                className="yc-btn gold stretch"
-                href={LINKS.stripeAllAccess}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Subscribe
-              </a>
-              <a className="learn" href="/bots/ignition">
-                Learn more
-              </a>
             </div>
           </article>
         </div>
       </section>
 
-      {/* Footer */}
+      {/* ===== Footer ===== */}
       <footer className="yc-footer">
         <div className="yc-footer__brand">
-          © 2025 YieldCraft. All rights reserved.
+          <img src="/yc-shield-gold.png" alt="YieldCraft" width={20} height={20} style={{ borderRadius: 6 }} />
+          <span>YieldCraft</span>
         </div>
         <div className="yc-footer__links">
           <a href="/terms">Terms</a>
@@ -187,6 +169,6 @@ export default function Home() {
           <a href="/contact">Contact</a>
         </div>
       </footer>
-    </main>
+    </div>
   );
 }
