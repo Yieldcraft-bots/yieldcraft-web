@@ -1,0 +1,327 @@
+// src/app/api/pulse-heartbeat/route.ts
+// Pulse bot heartbeat with Recon integration + maker-first order + smart fallback.
+
+import { NextResponse } from "next/server";
+import { SignJWT, importPKCS8 } from "jose";
+import { createPrivateKey } from "crypto";
+
+export const runtime = "nodejs";
+
+/**
+ * Turn "\n" sequences from the env var into real newlines.
+ */
+function normalizePem(pem: string | undefined): string {
+  if (!pem) {
+    throw new Error("COINBASE_PRIVATE_KEY is missing");
+  }
+  return pem.replace(/\\n/g, "\n").trim();
+}
+
+/**
+ * Build a Coinbase Advanced Trade JWT for a given HTTP method + path.
+ */
+async function buildJwt(method: string, path: string): Promise<string> {
+  const keyName = process.env.COINBASE_API_KEY_NAME;
+  const rawPrivate = process.env.COINBASE_PRIVATE_KEY;
+  const alg = (process.env.COINBASE_KEY_ALG as "ES256") || "ES256";
+
+  if (!keyName) throw new Error("COINBASE_API_KEY_NAME is missing");
+  if (!rawPrivate) throw new Error("COINBASE_PRIVATE_KEY is missing");
+
+  const normalizedPem = normalizePem(rawPrivate);
+
+  // Convert EC (SEC1) private key to PKCS#8 so jose.importPKCS8 can use it
+  const pkcs8Pem = createPrivateKey({
+    key: normalizedPem,
+    format: "pem",
+  })
+    .export({ type: "pkcs8", format: "pem" })
+    .toString();
+
+  const privateKey = await importPKCS8(pkcs8Pem, alg);
+
+  const now = Math.floor(Date.now() / 1000);
+  const uri = `${method} api.coinbase.com${path}`;
+
+  const jwt = await new SignJWT({
+    sub: keyName,
+    iss: "cdp",
+    nbf: now,
+    exp: now + 120,
+    uri,
+  })
+    .setProtectedHeader({
+      alg,
+      kid: keyName,
+      nonce: Math.random().toString(36).slice(2),
+    })
+    .sign(privateKey);
+
+  return jwt;
+}
+
+/**
+ * Generic Coinbase call helper.
+ */
+async function callCoinbase(
+  method: "GET" | "POST",
+  path: string,
+  body?: any
+) {
+  const jwt = await buildJwt(method, path);
+
+  const res = await fetch(`https://api.coinbase.com${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${jwt}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  const text = await res.text();
+  let json: any = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    // ignore parse error
+  }
+
+  return {
+    ok: res.ok,
+    status: res.status,
+    json,
+    rawPreview: text.slice(0, 400),
+  };
+}
+
+/**
+ * Recon signal structure.
+ */
+type ReconSide = "BUY" | "SELL" | "HOLD";
+
+interface ReconSignal {
+  side: ReconSide;
+  confidence: number;
+  regime?: string;
+  source: string;
+  raw?: any;
+}
+
+/**
+ * Get Recon signal from URL.
+ */
+async function getReconSignal(): Promise<ReconSignal> {
+  const url = process.env.RECON_SIGNAL_URL;
+  const minConf = Number(process.env.RECON_MIN_CONF ?? "0.6");
+
+  if (!url) {
+    return {
+      side: "HOLD",
+      confidence: 0,
+      regime: "none",
+      source: "missing_url",
+    };
+  }
+
+  try {
+    const res = await fetch(url, { method: "GET" });
+    const json = await res.json();
+
+    const sideRaw = String(json.side ?? "").toUpperCase();
+    const side: ReconSide =
+      sideRaw === "BUY" || sideRaw === "SELL" ? (sideRaw as ReconSide) : "HOLD";
+
+    const confidence = Number(json.confidence ?? 0);
+
+    if (confidence < minConf || side === "HOLD") {
+      return {
+        side: "HOLD",
+        confidence,
+        regime: json.regime ?? "unknown",
+        source: "low_conf_or_hold",
+        raw: json,
+      };
+    }
+
+    return {
+      side,
+      confidence,
+      regime: json.regime ?? "unknown",
+      source: "url",
+      raw: json,
+    };
+  } catch (err) {
+    return {
+      side: "HOLD",
+      confidence: 0,
+      regime: "error",
+      source: "url_error",
+      raw: String(err),
+    };
+  }
+}
+
+/**
+ * POST /api/pulse-heartbeat
+ * Pulse bot with Recon gate + maker-first order + smart fallback.
+ */
+export async function POST() {
+  try {
+    if (process.env.BOT_ENABLED !== "true") {
+      return NextResponse.json(
+        { ok: false, reason: "BOT_ENABLED is not true" },
+        { status: 403 }
+      );
+    }
+
+    if (process.env.COINBASE_TRADING_ENABLED !== "true") {
+      return NextResponse.json(
+        { ok: false, reason: "COINBASE_TRADING_ENABLED is not true" },
+        { status: 403 }
+      );
+    }
+
+    const productId = process.env.PULSE_PRODUCT || "BTC-USD";
+    const baseSize = process.env.PULSE_BASE_SIZE || "0.000020";
+    const makerOffsetBps = Number(process.env.MAKER_OFFSET_BPS ?? "1.0");
+
+    // 1) Get Recon signal
+    const recon = await getReconSignal();
+
+    if (recon.side === "HOLD") {
+      return NextResponse.json({
+        ok: true,
+        took_trade: false,
+        reason: "Recon HOLD / low confidence / no URL",
+        recon,
+      });
+    }
+
+    // 2) Get ticker for maker price
+    const tickerPath = `/api/v3/brokerage/products/${productId}/ticker`;
+    const ticker = await callCoinbase("GET", tickerPath);
+
+    if (!ticker.ok || !ticker.json) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "ticker_failed",
+          ticker_status: ticker.status,
+          ticker_preview: ticker.rawPreview,
+          recon,
+        },
+        { status: 502 }
+      );
+    }
+
+    const bestBid = Number(ticker.json.best_bid ?? ticker.json.price);
+    const bestAsk = Number(ticker.json.best_ask ?? ticker.json.price);
+
+    if (!bestBid || !bestAsk) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reason: "bad_ticker_prices",
+          ticker: ticker.json,
+          recon,
+        },
+        { status: 502 }
+      );
+    }
+
+    const offset = makerOffsetBps / 10_000; // bps to fraction
+
+    let limitPrice: number;
+
+    if (recon.side === "BUY") {
+      // Slightly below best bid to stay maker
+      limitPrice = bestBid * (1 - offset);
+    } else {
+      // SELL: slightly above best ask
+      limitPrice = bestAsk * (1 + offset);
+    }
+
+    const limitPriceStr = limitPrice.toFixed(2); // 2 decimal places for USD
+
+    const allowIocFallback =
+      String(process.env.MAKER_ALLOW_IOC_FALLBACK).toLowerCase() === "true";
+
+    // 3) Send maker-first limit order (post_only: true)
+    const orderPath = "/api/v3/brokerage/orders";
+
+    const orderBody = {
+      client_order_id: `pulse-${Date.now()}`,
+      product_id: productId,
+      side: recon.side,
+      order_configuration: {
+        limit_limit_gtc: {
+          base_size: baseSize,
+          limit_price: limitPriceStr,
+          post_only: true,
+        },
+      },
+    };
+
+    let orderRes = await callCoinbase("POST", orderPath, orderBody);
+    let usedFallback = false;
+    let primaryError: string | undefined;
+
+    // If Coinbase rejects because of post-only price, optionally re-send without post_only.
+    const errResp = orderRes.json?.error_response || {};
+    const errCodeRaw =
+      errResp.error ||
+      errResp.error_code ||
+      errResp.preview_failure_reason ||
+      errResp.error_details?.preview_failure_reason;
+
+    const errCode =
+      typeof errCodeRaw === "string" ? errCodeRaw.toUpperCase() : "";
+
+    if (
+      !orderRes.ok &&
+      allowIocFallback &&
+      errCode.includes("INVALID_LIMIT_PRICE_POST_ONLY")
+    ) {
+      primaryError = errCode;
+
+      const fallbackBody = {
+        client_order_id: `pulse-fb-${Date.now()}`,
+        product_id: productId,
+        side: recon.side,
+        order_configuration: {
+          limit_limit_gtc: {
+            base_size: baseSize,
+            limit_price: limitPriceStr,
+            post_only: false, // allow taker if needed
+          },
+        },
+      };
+
+      orderRes = await callCoinbase("POST", orderPath, fallbackBody);
+      usedFallback = true;
+    }
+
+    return NextResponse.json({
+      ok: orderRes.ok,
+      status: orderRes.status,
+      recon,
+      product_id: productId,
+      base_size: baseSize,
+      maker_offset_bps: makerOffsetBps,
+      limit_price: limitPriceStr,
+      used_fallback: usedFallback,
+      primary_error: primaryError,
+      order_preview: orderRes.rawPreview,
+    });
+  } catch (err: any) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: String(err?.message ?? err),
+      },
+      { status: 500 }
+    );
+  }
+}
