@@ -101,7 +101,8 @@ function computeAscendDecision(recon: ReconSignal) {
 
   // Default: flat, no scaling.
   let decision: ReconSide = "HOLD";
-  let modeTier: "off" | "conservative" | "normal" | "aggressive" = "off";
+  let modeTier: "off" | "conservative" | "normal" | "aggressive" | "runner" =
+    "off";
   let positionScale = 0; // multiplier on base size (0 = no trade, 1 = normal, >1 = larger)
 
   // No usable signal -> stay flat.
@@ -120,31 +121,28 @@ function computeAscendDecision(recon: ReconSignal) {
     (bias === "trend_down" && recon.side === "SELL");
 
   // --- Mode C tiers ---
-// Tiny TS helper: treat bias as a plain string for this comparison.
-// This does NOT change runtime behavior.
-const biasStr = bias as string;
+  // Tiny TS helper: treat bias as a plain string for this comparison.
+  // This does NOT change runtime behavior.
+  const biasStr = bias as string;
 
-if (!trendAgrees || biasStr === "chop" || biasStr === "unknown") {
   // Trend unclear or against us → stay small or flat.
-  if (conf >= 0.65) {
-    decision = recon.side;
-    modeTier = "conservative";
-    positionScale = 0.5; // half size in chop
+  if (!trendAgrees || biasStr === "chop" || biasStr === "unknown") {
+    if (conf >= 0.65) {
+      decision = recon.side;
+      modeTier = "conservative";
+      positionScale = 0.5; // half size in chop
+    } else {
+      decision = "HOLD";
+      modeTier = "off";
+      positionScale = 0;
+    }
   } else {
-    decision = "HOLD";
-    modeTier = "off";
-    positionScale = 0;
-  }
-} else {
-  // Trend agrees with direction.
-  if (conf >= 0.85) {
-    decision = recon.side;
-    modeTier = "runner";
-    positionScale = 1.0;
-  }
-}
-
-    } else if (conf >= 0.60) {
+    // Trend agrees with direction.
+    if (conf >= 0.85) {
+      decision = recon.side;
+      modeTier = "runner";
+      positionScale = 1.0;
+    } else if (conf >= 0.6) {
       decision = recon.side;
       modeTier = "conservative";
       positionScale = 0.75; // slightly reduced size
