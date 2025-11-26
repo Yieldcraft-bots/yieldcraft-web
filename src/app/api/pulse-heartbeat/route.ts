@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { SignJWT, importPKCS8 } from "jose";
 import { createPrivateKey } from "crypto";
+
 // --- YieldCraft Brain integration (small-account risk layer) ---
 
 type BrainBotConfig = {
@@ -226,40 +227,46 @@ async function getReconSignal(): Promise<ReconSignal> {
  */
 export async function POST() {
   // --- Small-account Brain gating (global risk filter) ---
-const brain = await fetchBrainConfig();
+  const brain = await fetchBrainConfig();
 
-if (!brain || !brain.ok) {
-  return NextResponse.json(
-    { ok: false, error: "brain_not_ok_or_missing" },
-    { status: 500 }
-  );
-}
+  // TS-safe guard: brain must exist, be ok, and have a bots array
+  if (!brain || !brain.ok || !Array.isArray(brain.bots)) {
+    return NextResponse.json(
+      { ok: false, error: "brain_not_ok_or_missing" },
+      { status: 500 }
+    );
+  }
 
-// 1) If Pulse is not enabled → safe exit
-const pulseBot = brain.bots.find((b) => b.name === "pulse");
-if (!pulseBot || !pulseBot.enabled) {
-  return NextResponse.json(
-    { ok: false, error: "pulse_not_enabled" },
-    { status: 200 }
-  );
-}
+  const bots = brain.bots;
 
-// 2) Enforce simultaneous-bot limit
-const MAX_SIM = brain.max_simultaneous_bots;
-// 3) Enforce Ascend & Ignition gating from Brain
-const ascendBot = brain.bots.find((b) => b.name === "ascend");
-const ignitionBot = brain.bots.find((b) => b.name === "ignition");
+  // 1) If Pulse is not enabled → safe exit
+  const pulseBot = bots.find((b) => b.name === "pulse");
+  if (!pulseBot || !pulseBot.enabled) {
+    return NextResponse.json(
+      { ok: false, error: "pulse_not_enabled" },
+      { status: 200 }
+    );
+  }
 
-const ASCEND_ENABLED = ascendBot?.enabled === true;
-const IGNITION_ENABLED = ignitionBot?.enabled === true;
+  // 2) Enforce simultaneous-bot limit (saved for future logic)
+  const MAX_SIM = brain.max_simultaneous_bots;
 
+  // 3) Enforce Ascend & Ignition gating from Brain
+  const ascendBot = bots.find((b) => b.name === "ascend");
+  const ignitionBot = bots.find((b) => b.name === "ignition");
 
-// Allow pulse to run only if it's within global small-account rules
-// Pulse stays as the main safe bot; Ascend/Ignition only add constraints
-if (!ASCEND_ENABLED || !IGNITION_ENABLED) {
-  console.log("Brain gating: Ascend or Ignition disabled — Pulse stays primary.");
-}
-try {
+  const ASCEND_ENABLED = ascendBot?.enabled === true;
+  const IGNITION_ENABLED = ignitionBot?.enabled === true;
+
+  // Allow pulse to run only if it's within global small-account rules
+  // Pulse stays as the main safe bot; Ascend/Ignition only add constraints
+  if (!ASCEND_ENABLED || !IGNITION_ENABLED) {
+    console.log(
+      "Brain gating: Ascend or Ignition disabled — Pulse stays primary."
+    );
+  }
+
+  try {
     if (process.env.BOT_ENABLED !== "true") {
       return NextResponse.json(
         { ok: false, reason: "BOT_ENABLED is not true" },
