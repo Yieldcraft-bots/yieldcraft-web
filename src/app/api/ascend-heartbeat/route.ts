@@ -120,27 +120,30 @@ function computeAscendDecision(recon: ReconSignal) {
     (bias === "trend_down" && recon.side === "SELL");
 
   // --- Mode C tiers ---
-  if (!trendAgrees || bias === "chop" || bias === "unknown") {
-    // Trend unclear or against us -> stay small or flat.
-    if (conf >= 0.65) {
-      decision = recon.side;
-      modeTier = "conservative";
-      positionScale = 0.5; // half size in chop
-    } else {
-      decision = "HOLD";
-      modeTier = "off";
-      positionScale = 0;
-    }
+// Tiny TS helper: treat bias as a plain string for this comparison.
+// This does NOT change runtime behavior.
+const biasStr = bias as string;
+
+if (!trendAgrees || biasStr === "chop" || biasStr === "unknown") {
+  // Trend unclear or against us → stay small or flat.
+  if (conf >= 0.65) {
+    decision = recon.side;
+    modeTier = "conservative";
+    positionScale = 0.5; // half size in chop
   } else {
-    // Trend agrees with direction.
-    if (conf >= 0.85) {
-      decision = recon.side;
-      modeTier = "aggressive";
-      positionScale = 1.5; // 1.5x base size in strong trend
-    } else if (conf >= 0.70) {
-      decision = recon.side;
-      modeTier = "normal";
-      positionScale = 1.0; // normal size
+    decision = "HOLD";
+    modeTier = "off";
+    positionScale = 0;
+  }
+} else {
+  // Trend agrees with direction.
+  if (conf >= 0.85) {
+    decision = recon.side;
+    modeTier = "runner";
+    positionScale = 1.0;
+  }
+}
+
     } else if (conf >= 0.60) {
       decision = recon.side;
       modeTier = "conservative";
