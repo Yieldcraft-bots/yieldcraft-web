@@ -31,9 +31,9 @@ export default function Home() {
                 Subscribe Now
               </a>
               <a
-                href="/why"
-                className="rounded-full border border-slate-600 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-400 hover:bg-slate-900/60"
-              >
+  href="/quick-start"
+  className="rounded-full border border-slate-600 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-400 hover:text-slate-50"
+>
                 See How It Works
               </a>
             </div>
