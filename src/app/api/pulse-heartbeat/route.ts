@@ -228,41 +228,32 @@ async function getReconSignal(): Promise<ReconSignal> {
 export async function POST() {
   // --- Small-account Brain gating (global risk filter) ---
   const brain = await fetchBrainConfig();
+  const gating = shouldAllowPulseTrade(brain);
 
-  // TS-safe guard: brain must exist, be ok, and have a bots array
-  if (!brain || !brain.ok || !Array.isArray(brain.bots)) {
+  // If the brain explicitly says "no Pulse", respect it.
+  // If the brain is missing / not OK, we fail open for now.
+  if (!gating.allow) {
     return NextResponse.json(
-      { ok: false, error: "brain_not_ok_or_missing" },
-      { status: 500 }
-    );
-  }
-
-  const bots = brain.bots;
-
-  // 1) If Pulse is not enabled → safe exit
-  const pulseBot = bots.find((b) => b.name === "pulse");
-  if (!pulseBot || !pulseBot.enabled) {
-    return NextResponse.json(
-      { ok: false, error: "pulse_not_enabled" },
+      { ok: false, reason: gating.reason, brain },
       { status: 200 }
     );
   }
 
-  // 2) Enforce simultaneous-bot limit (saved for future logic)
-  const MAX_SIM = brain.max_simultaneous_bots;
+  const bots = Array.isArray(brain?.bots) ? brain!.bots : [];
 
-  // 3) Enforce Ascend & Ignition gating from Brain
+  // These are for future multi-bot logic; right now they only influence logging.
+  const MAX_SIM = brain?.max_simultaneous_bots;
+
   const ascendBot = bots.find((b) => b.name === "ascend");
   const ignitionBot = bots.find((b) => b.name === "ignition");
 
   const ASCEND_ENABLED = ascendBot?.enabled === true;
   const IGNITION_ENABLED = ignitionBot?.enabled === true;
 
-  // Allow pulse to run only if it's within global small-account rules
-  // Pulse stays as the main safe bot; Ascend/Ignition only add constraints
   if (!ASCEND_ENABLED || !IGNITION_ENABLED) {
     console.log(
-      "Brain gating: Ascend or Ignition disabled — Pulse stays primary."
+      "Brain gating: Ascend or Ignition disabled — Pulse stays primary.",
+      { ASCEND_ENABLED, IGNITION_ENABLED, MAX_SIM }
     );
   }
 
