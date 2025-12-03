@@ -3,14 +3,14 @@
 
 import { NextResponse } from "next/server";
 import { SignJWT, importPKCS8 } from "jose";
-import { createPrivateKey } from "crypto";
+import fs from "fs";
+import path from "path";
 
 // --- YieldCraft Brain integration (small-account risk layer) ---
 
 type BrainBotConfig = {
   name: string;
   enabled?: boolean;
-  // we can add more fields later (edge_min_bps, etc.)
 };
 
 type BrainSnapshot = {
@@ -42,64 +42,57 @@ async function fetchBrainConfig(): Promise<BrainSnapshot | null> {
 }
 
 function shouldAllowPulseTrade(brain: BrainSnapshot | null) {
-  // If brain is down or not OK, **fail open** for now (let Pulse run)
   if (!brain?.ok) {
     return { allow: true, reason: "brain_unreachable_or_not_ok" };
   }
 
   const bot = brain.bots?.find((b) => b.name === "pulse");
 
-  // If Pulse is not listed in the brain, be conservative and block
   if (!bot) {
     return { allow: false, reason: "pulse_not_present_in_brain" };
   }
 
-  // Explicit kill-switch from the brain
   if (bot.enabled === false) {
     return { allow: false, reason: "pulse_disabled_by_brain" };
   }
 
-  // Later we’ll add concurrency / risk-tier checks here
   return { allow: true, reason: "brain_allows_trade" };
 }
 
 export const runtime = "nodejs";
 
-/**
- * Turn "\n" sequences from the env var into real newlines.
- */
-function normalizePem(pem: string | undefined): string {
-  if (!pem) {
-    throw new Error("COINBASE_PRIVATE_KEY is missing");
-  }
-  return pem.replace(/\\n/g, "\n").trim();
+// --- Private key loading (from file, not env) ---
+
+let cachedPkcs8: string | null = null;
+
+function getPkcs8Pem(): string {
+  if (cachedPkcs8) return cachedPkcs8;
+
+  // coinbase-pkcs8.pem lives in src/
+  const pemPath = path.join(process.cwd(), "src", "coinbase-pkcs8.pem");
+  const pem = fs.readFileSync(pemPath, "utf8").trim();
+  cachedPkcs8 = pem;
+  return pem;
 }
 
 /**
  * Build a Coinbase Advanced Trade JWT for a given HTTP method + path.
+ * Coinbase expects:
+ *   iss = "cdp"
+ *   sub = organizations/{org_id}/apiKeys/{key_id}
+ *   uri = "<METHOD> <PATH>"  e.g. "GET /api/v3/brokerage/products/BTC-USD/ticker"
  */
-async function buildJwt(method: string, path: string): Promise<string> {
+async function buildJwt(method: string, pathStr: string): Promise<string> {
   const keyName = process.env.COINBASE_API_KEY_NAME;
-  const rawPrivate = process.env.COINBASE_PRIVATE_KEY;
   const alg = (process.env.COINBASE_KEY_ALG as "ES256") || "ES256";
 
   if (!keyName) throw new Error("COINBASE_API_KEY_NAME is missing");
-  if (!rawPrivate) throw new Error("COINBASE_PRIVATE_KEY is missing");
 
-  const normalizedPem = normalizePem(rawPrivate);
-
-  // Convert EC (SEC1) private key to PKCS#8 so jose.importPKCS8 can use it
-  const pkcs8Pem = createPrivateKey({
-    key: normalizedPem,
-    format: "pem",
-  })
-    .export({ type: "pkcs8", format: "pem" })
-    .toString();
-
+  const pkcs8Pem = getPkcs8Pem();
   const privateKey = await importPKCS8(pkcs8Pem, alg);
 
   const now = Math.floor(Date.now() / 1000);
-  const uri = `${method} api.coinbase.com${path}`;
+  const uri = `${method.toUpperCase()} ${pathStr}`;
 
   const jwt = await new SignJWT({
     sub: keyName,
@@ -123,12 +116,12 @@ async function buildJwt(method: string, path: string): Promise<string> {
  */
 async function callCoinbase(
   method: "GET" | "POST",
-  path: string,
+  pathStr: string,
   body?: any
 ) {
-  const jwt = await buildJwt(method, path);
+  const jwt = await buildJwt(method, pathStr);
 
-  const res = await fetch(`https://api.coinbase.com${path}`, {
+  const res = await fetch(`https://api.coinbase.com${pathStr}`, {
     method,
     headers: {
       Authorization: `Bearer ${jwt}`,
@@ -226,12 +219,9 @@ async function getReconSignal(): Promise<ReconSignal> {
  * Pulse bot with Recon gate + maker-first order + smart fallback.
  */
 export async function POST() {
-  // --- Small-account Brain gating (global risk filter) ---
   const brain = await fetchBrainConfig();
   const gating = shouldAllowPulseTrade(brain);
 
-  // If the brain explicitly says "no Pulse", respect it.
-  // If the brain is missing / not OK, we fail open for now.
   if (!gating.allow) {
     return NextResponse.json(
       { ok: false, reason: gating.reason, brain },
@@ -240,8 +230,6 @@ export async function POST() {
   }
 
   const bots = Array.isArray(brain?.bots) ? brain!.bots : [];
-
-  // These are for future multi-bot logic; right now they only influence logging.
   const MAX_SIM = brain?.max_simultaneous_bots;
 
   const ascendBot = bots.find((b) => b.name === "ascend");
@@ -325,10 +313,8 @@ export async function POST() {
     let limitPrice: number;
 
     if (recon.side === "BUY") {
-      // Slightly below best bid to stay maker
       limitPrice = bestBid * (1 - offset);
     } else {
-      // SELL: slightly above best ask
       limitPrice = bestAsk * (1 + offset);
     }
 
@@ -357,7 +343,6 @@ export async function POST() {
     let usedFallback = false;
     let primaryError: string | undefined;
 
-    // If Coinbase rejects because of post-only price, optionally re-send without post_only.
     const errResp = orderRes.json?.error_response || {};
     const errCodeRaw =
       errResp.error ||
@@ -383,7 +368,7 @@ export async function POST() {
           limit_limit_gtc: {
             base_size: baseSize,
             limit_price: limitPriceStr,
-            post_only: false, // allow taker if needed
+            post_only: false,
           },
         },
       };
