@@ -61,7 +61,7 @@ function shouldAllowPulseTrade(brain: BrainSnapshot | null) {
 
 export const runtime = "nodejs";
 
-// --- Private key loading (from file, not env) ---
+// --- Private key loading (from PKCS#8 file, not env) ---
 
 let cachedPkcs8: string | null = null;
 
@@ -77,10 +77,12 @@ function getPkcs8Pem(): string {
 
 /**
  * Build a Coinbase Advanced Trade JWT for a given HTTP method + path.
- * Coinbase expects:
- *   iss = "cdp"
+ *
+ * Coinbase expectations (retail_rest_api_proxy):
+ *   iss = "coinbase-cloud"
  *   sub = organizations/{org_id}/apiKeys/{key_id}
- *   uri = "<METHOD> <PATH>"  e.g. "GET /api/v3/brokerage/products/BTC-USD/ticker"
+ *   aud = ["retail_rest_api_proxy"]
+ *   uri = "<METHOD> api.coinbase.com<PATH>"
  */
 async function buildJwt(method: string, pathStr: string): Promise<string> {
   const keyName = process.env.COINBASE_API_KEY_NAME;
@@ -92,13 +94,15 @@ async function buildJwt(method: string, pathStr: string): Promise<string> {
   const privateKey = await importPKCS8(pkcs8Pem, alg);
 
   const now = Math.floor(Date.now() / 1000);
-  const uri = `${method.toUpperCase()} ${pathStr}`;
+  const uri = `${method.toUpperCase()} api.coinbase.com${pathStr}`;
+  const audience = ["retail_rest_api_proxy"];
 
   const jwt = await new SignJWT({
     sub: keyName,
-    iss: "cdp",
+    iss: "coinbase-cloud",
     nbf: now,
     exp: now + 120,
+    aud: audience,
     uri,
   })
     .setProtectedHeader({
