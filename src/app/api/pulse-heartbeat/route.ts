@@ -42,26 +42,30 @@ async function fetchBrainConfig(): Promise<BrainSnapshot | null> {
 }
 
 function shouldAllowPulseTrade(brain: BrainSnapshot | null) {
+  // If brain is down or not OK, fail open for now (let Pulse run)
   if (!brain?.ok) {
     return { allow: true, reason: "brain_unreachable_or_not_ok" };
   }
 
   const bot = brain.bots?.find((b) => b.name === "pulse");
 
+  // If Pulse is not listed in the brain, be conservative and block
   if (!bot) {
     return { allow: false, reason: "pulse_not_present_in_brain" };
   }
 
+  // Explicit kill-switch from the brain
   if (bot.enabled === false) {
     return { allow: false, reason: "pulse_disabled_by_brain" };
   }
 
+  // Later we can add concurrency / risk-tier checks here
   return { allow: true, reason: "brain_allows_trade" };
 }
 
 export const runtime = "nodejs";
 
-// --- Private key loading (from PKCS#8 file, not env) ---
+// --- Private key loading (from PKCS8 file, not env) ---
 
 let cachedPkcs8: string | null = null;
 
@@ -78,10 +82,10 @@ function getPkcs8Pem(): string {
 /**
  * Build a Coinbase Advanced Trade JWT for a given HTTP method + path.
  *
- * Coinbase expectations (retail_rest_api_proxy):
+ * Retail Advanced Trade (AT-CDP) expects:
  *   iss = "coinbase-cloud"
  *   sub = organizations/{org_id}/apiKeys/{key_id}
- *   aud = ["retail_rest_api_proxy"]
+ *   aud = "retail_rest_api_proxy"
  *   uri = "<METHOD> api.coinbase.com<PATH>"
  */
 async function buildJwt(method: string, pathStr: string): Promise<string> {
@@ -94,16 +98,14 @@ async function buildJwt(method: string, pathStr: string): Promise<string> {
   const privateKey = await importPKCS8(pkcs8Pem, alg);
 
   const now = Math.floor(Date.now() / 1000);
-  const uri = `${method.toUpperCase()} api.coinbase.com${pathStr}`;
-  const audience = ["retail_rest_api_proxy"];
 
   const jwt = await new SignJWT({
-    sub: keyName,
     iss: "coinbase-cloud",
+    sub: keyName,
+    aud: "retail_rest_api_proxy",
     nbf: now,
     exp: now + 120,
-    aud: audience,
-    uri,
+    uri: `${method.toUpperCase()} api.coinbase.com${pathStr}`,
   })
     .setProtectedHeader({
       alg,
@@ -223,9 +225,12 @@ async function getReconSignal(): Promise<ReconSignal> {
  * Pulse bot with Recon gate + maker-first order + smart fallback.
  */
 export async function POST() {
+  // --- Small-account Brain gating (global risk filter) ---
   const brain = await fetchBrainConfig();
   const gating = shouldAllowPulseTrade(brain);
 
+  // If the brain explicitly says "no Pulse", respect it.
+  // If the brain is missing / not OK, we fail open for now.
   if (!gating.allow) {
     return NextResponse.json(
       { ok: false, reason: gating.reason, brain },
@@ -313,12 +318,13 @@ export async function POST() {
     }
 
     const offset = makerOffsetBps / 10_000; // bps to fraction
-
     let limitPrice: number;
 
     if (recon.side === "BUY") {
+      // Slightly below best bid to stay maker
       limitPrice = bestBid * (1 - offset);
     } else {
+      // SELL: slightly above best ask
       limitPrice = bestAsk * (1 + offset);
     }
 
@@ -347,6 +353,7 @@ export async function POST() {
     let usedFallback = false;
     let primaryError: string | undefined;
 
+    // If Coinbase rejects because of post-only price, optionally re-send without post_only.
     const errResp = orderRes.json?.error_response || {};
     const errCodeRaw =
       errResp.error ||
@@ -372,7 +379,7 @@ export async function POST() {
           limit_limit_gtc: {
             base_size: baseSize,
             limit_price: limitPriceStr,
-            post_only: false,
+            post_only: false, // allow taker if needed
           },
         },
       };
