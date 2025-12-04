@@ -82,11 +82,10 @@ function getPkcs8Pem(): string {
 /**
  * Build a Coinbase Advanced Trade JWT for a given HTTP method + path.
  *
- * Retail Advanced Trade (AT-CDP) expects:
- *   iss = "coinbase-cloud"
+ * CDP / Advanced Trade spec:
+ *   iss = "cdp"
  *   sub = organizations/{org_id}/apiKeys/{key_id}
- *   aud = "retail_rest_api_proxy"
- *   uri = "<METHOD> api.coinbase.com<PATH>"
+ *   uri = "<METHOD> <PATH>"  e.g. "GET /api/v3/brokerage/products/BTC-USD/ticker"
  */
 async function buildJwt(method: string, pathStr: string): Promise<string> {
   const keyName = process.env.COINBASE_API_KEY_NAME;
@@ -100,12 +99,11 @@ async function buildJwt(method: string, pathStr: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
   const jwt = await new SignJWT({
-    iss: "coinbase-cloud",
+    iss: "cdp",
     sub: keyName,
-    aud: "retail_rest_api_proxy",
     nbf: now,
     exp: now + 120,
-    uri: `${method.toUpperCase()} api.coinbase.com${pathStr}`,
+    uri: `${method.toUpperCase()} ${pathStr}`,
   })
     .setProtectedHeader({
       alg,
