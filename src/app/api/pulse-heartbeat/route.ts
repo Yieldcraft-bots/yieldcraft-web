@@ -37,8 +37,8 @@ async function fetchBrainConfig(): Promise<BrainSnapshot | null> {
     const json = (await res.json()) as BrainSnapshot;
     return json;
   } catch (err) {
-    console.error("brain_fetch_failed", err);
-    return null;
+      console.error("brain_fetch_failed", err);
+      return null;
   }
 }
 
@@ -111,13 +111,15 @@ function buildJwt(method: string, pathStr: string): string {
     uri,
   };
 
-  const token = jwt.sign(payload, privateKey, {
+  // Vercel/TypeScript-safe jsonwebtoken call
+  const token = jwt.sign(payload as any, privateKey as any, {
     algorithm: "ES256",
+    keyid: apiKeyName,
     header: {
       kid: apiKeyName,
-      nonce: crypto.randomBytes(16).toString("hex"),
+      alg: "ES256",
     },
-  });
+  } as any);
 
   return token;
 }
