@@ -2,9 +2,10 @@
 // Pulse bot heartbeat with Recon integration + maker-first order + smart fallback.
 
 import { NextResponse } from "next/server";
-import { SignJWT, importPKCS8 } from "jose";
 import fs from "fs";
 import path from "path";
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
 
 // --- YieldCraft Brain integration (small-account risk layer) ---
 
@@ -65,54 +66,59 @@ function shouldAllowPulseTrade(brain: BrainSnapshot | null) {
 
 export const runtime = "nodejs";
 
-// --- Private key loading (from PKCS8 file, not env) ---
+// --- Coinbase JWT pieces (match coinbase-jwt-test.js) ---
 
-let cachedPkcs8: string | null = null;
+const apiKeyName =
+  process.env.COINBASE_API_KEY_NAME ||
+  "organizations/76dbf189-7838-4cd3-919e-6b9e0df3bec1/apiKeys/d9cd5723-5473-4dbb-94e1-527f922ce999";
 
-function getPkcs8Pem(): string {
-  if (cachedPkcs8) return cachedPkcs8;
+let cachedPrivateKey: string | null = null;
 
-  // coinbase-pkcs8.pem lives in src/
-  const pemPath = path.join(process.cwd(), "src", "coinbase-pkcs8.pem");
-  const pem = fs.readFileSync(pemPath, "utf8").trim();
-  cachedPkcs8 = pem;
-  return pem;
+function getPrivateKey(): string {
+  if (cachedPrivateKey) return cachedPrivateKey;
+
+  let rawKey = process.env.COINBASE_PRIVATE_KEY;
+  if (!rawKey) {
+    const pkcs8Path = path.join(process.cwd(), "src", "coinbase-pkcs8.pem");
+    rawKey = fs.readFileSync(pkcs8Path, "utf8");
+  }
+
+  // Normalize \n sequences from env into real newlines
+  cachedPrivateKey = rawKey.replace(/\\n/g, "\n");
+  return cachedPrivateKey;
 }
 
-/**
- * Build a Coinbase Advanced Trade JWT for a given HTTP method + path.
- *
- * CDP / Advanced Trade spec:
- *   iss = "cdp"
- *   sub = organizations/{org_id}/apiKeys/{key_id}
- *   uri = "<METHOD> <PATH>"  e.g. "GET /api/v3/brokerage/products/BTC-USD/ticker"
- */
-async function buildJwt(method: string, pathStr: string): Promise<string> {
-  const keyName = process.env.COINBASE_API_KEY_NAME;
-  const alg = (process.env.COINBASE_KEY_ALG as "ES256") || "ES256";
+// "GET api.coinbase.com/api/v3/brokerage/accounts"
+function formatJwtUri(method: string, pathStr: string): string {
+  return `${method.toUpperCase()} api.coinbase.com${pathStr}`;
+}
 
-  if (!keyName) throw new Error("COINBASE_API_KEY_NAME is missing");
-
-  const pkcs8Pem = getPkcs8Pem();
-  const privateKey = await importPKCS8(pkcs8Pem, alg);
+function buildJwt(method: string, pathStr: string): string {
+  if (!apiKeyName) {
+    throw new Error("COINBASE_API_KEY_NAME is missing");
+  }
 
   const now = Math.floor(Date.now() / 1000);
+  const uri = formatJwtUri(method, pathStr);
+  const privateKey = getPrivateKey();
 
-  const jwt = await new SignJWT({
+  const payload = {
+    sub: apiKeyName,
     iss: "cdp",
-    sub: keyName,
     nbf: now,
     exp: now + 120,
-    uri: `${method.toUpperCase()} ${pathStr}`,
-  })
-    .setProtectedHeader({
-      alg,
-      kid: keyName,
-      nonce: Math.random().toString(36).slice(2),
-    })
-    .sign(privateKey);
+    uri,
+  };
 
-  return jwt;
+  const token = jwt.sign(payload, privateKey, {
+    algorithm: "ES256",
+    header: {
+      kid: apiKeyName,
+      nonce: crypto.randomBytes(16).toString("hex"),
+    },
+  });
+
+  return token;
 }
 
 /**
@@ -123,12 +129,12 @@ async function callCoinbase(
   pathStr: string,
   body?: any
 ) {
-  const jwt = await buildJwt(method, pathStr);
+  const jwtToken = buildJwt(method, pathStr);
 
   const res = await fetch(`https://api.coinbase.com${pathStr}`, {
     method,
     headers: {
-      Authorization: `Bearer ${jwt}`,
+      Authorization: `Bearer ${jwtToken}`,
       Accept: "application/json",
       "Content-Type": "application/json",
     },
