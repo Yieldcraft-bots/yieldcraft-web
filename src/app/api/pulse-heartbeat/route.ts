@@ -64,6 +64,7 @@ function shouldAllowPulseTrade(brain: BrainSnapshot | null) {
   return { allow: true, reason: "brain_allows_trade" };
 }
 
+// Force Node.js serverless runtime so Vercel Cron Jobs can call this
 export const runtime = "nodejs";
 
 // --- Coinbase JWT pieces (match coinbase-jwt-test.js) ---
@@ -413,4 +414,9 @@ export async function POST() {
       { status: 500 }
     );
   }
+}
+
+// Allow Vercel Cron (GET) to reuse the exact same trading logic as POST
+export async function GET() {
+  return POST();
 }
