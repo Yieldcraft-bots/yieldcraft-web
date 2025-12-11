@@ -37,8 +37,8 @@ async function fetchBrainConfig(): Promise<BrainSnapshot | null> {
     const json = (await res.json()) as BrainSnapshot;
     return json;
   } catch (err) {
-      console.error("brain_fetch_failed", err);
-      return null;
+    console.error("brain_fetch_failed", err);
+    return null;
   }
 }
 
@@ -89,9 +89,9 @@ function getPrivateKey(): string {
   return cachedPrivateKey;
 }
 
-// "GET api.coinbase.com/api/v3/brokerage/accounts"
+// Coinbase expects URI like "GET /api/v3/brokerage/accounts" (no hostname)
 function formatJwtUri(method: string, pathStr: string): string {
-  return `${method.toUpperCase()} api.coinbase.com${pathStr}`;
+  return `${method.toUpperCase()} ${pathStr}`;
 }
 
 function buildJwt(method: string, pathStr: string): string {
@@ -111,14 +111,17 @@ function buildJwt(method: string, pathStr: string): string {
     uri,
   };
 
-  // Vercel/TypeScript-safe jsonwebtoken call
+  // Include nonce in header (required by Coinbase),
+  // but cast as any so TypeScript/Vercel stop complaining.
+  const header: any = {
+    kid: apiKeyName,
+    alg: "ES256",
+    nonce: crypto.randomBytes(16).toString("hex"),
+  };
+
   const token = jwt.sign(payload as any, privateKey as any, {
     algorithm: "ES256",
-    keyid: apiKeyName,
-    header: {
-      kid: apiKeyName,
-      alg: "ES256",
-    },
+    header,
   } as any);
 
   return token;
