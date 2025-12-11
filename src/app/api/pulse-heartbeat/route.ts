@@ -89,7 +89,7 @@ function getPrivateKey(): string {
   return cachedPrivateKey;
 }
 
-// Coinbase expects URI like "GET /api/v3/brokerage/accounts" (no hostname)
+// Coinbase App expects URI like "GET /api/v3/brokerage/accounts" (no hostname)
 function formatJwtUri(method: string, pathStr: string): string {
   return `${method.toUpperCase()} ${pathStr}`;
 }
