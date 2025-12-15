@@ -5,10 +5,14 @@ export const runtime = "nodejs";
 /**
  * pulse-trade (SAFE)
  * - DRY RUN ONLY: builds an order payload but does NOT call Coinbase.
- * - No JWT duplication. No auth changes. No execution.
+ * - Hard execution gate exists, but we still do NOT execute in this file yet.
+ * - No JWT duplication. No auth changes.
  */
 
 type Side = "BUY" | "SELL";
+
+// HARD GATE (must be explicitly flipped in Vercel env to ever allow execution later)
+const EXECUTION_ENABLED = process.env.PULSE_TRADE_EXECUTION_ENABLED === "true";
 
 function jsonError(message: string, extra: Record<string, any> = {}, status = 400) {
   return NextResponse.json({ ok: false, error: message, ...extra }, { status });
@@ -24,13 +28,15 @@ export async function POST(req: Request) {
 
   const action = (body?.action ?? "status") as string;
 
-  // Simple status probe (what you already verified)
+  // Simple status probe
   if (action === "status") {
     return NextResponse.json({
       ok: true,
       status: "PULSE_TRADE_READY",
-      trading_enabled: false,
-      note: "DRY-RUN builder only. No execution.",
+      trading_enabled: EXECUTION_ENABLED,
+      note: EXECUTION_ENABLED
+        ? "Execution gate is ON, but this endpoint is still DRY-RUN only (no execution code present)."
+        : "Execution gate is OFF. DRY-RUN only. No execution.",
     });
   }
 
@@ -70,11 +76,15 @@ export async function POST(req: Request) {
     return NextResponse.json({
       ok: true,
       mode: "DRY_RUN",
-      trading_enabled: false,
+      trading_enabled: EXECUTION_ENABLED,
       endpoint: "POST /api/pulse-trade",
       would_call: "POST https://api.coinbase.com/api/v3/brokerage/orders",
       payload: orderPayload,
-      note: "This did NOT place an order. It only built the payload.",
+      note:
+        "This did NOT place an order. It only built the payload. " +
+        (EXECUTION_ENABLED
+          ? "Execution gate is ON (future-proof), but there is still NO execution code here."
+          : "Execution gate is OFF."),
     });
   }
 
