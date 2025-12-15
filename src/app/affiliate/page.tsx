@@ -1,0 +1,205 @@
+"use client";
+
+import { useMemo, useState } from "react";
+
+type ApplyState =
+  | { status: "idle" }
+  | { status: "submitting" }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+export default function AffiliatePage() {
+  const [state, setState] = useState<ApplyState>({ status: "idle" });
+
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [audience, setAudience] = useState("");
+  const [website, setWebsite] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const canSubmit = useMemo(
+    () => fullName.trim().length >= 2 && email.includes("@"),
+    [fullName, email]
+  );
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit || state.status === "submitting") return;
+
+    setState({ status: "submitting" });
+
+    try {
+      const res = await fetch("/api/affiliate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName,
+          email,
+          audience,
+          website,
+          notes,
+        }),
+      });
+
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Submission failed");
+
+      setState({
+        status: "success",
+        message: "Application received. We’ll email you shortly.",
+      });
+    } catch (err: any) {
+      setState({
+        status: "error",
+        message: err?.message || "Something went wrong",
+      });
+    }
+  }
+
+  return (
+    <main className="relative min-h-screen bg-[#050b1a] text-white overflow-hidden">
+      {/* Ambient glow */}
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute -top-40 left-1/2 h-[420px] w-[900px] -translate-x-1/2 rounded-full bg-cyan-500/10 blur-[120px]" />
+        <div className="absolute bottom-0 right-[-200px] h-[500px] w-[500px] rounded-full bg-yellow-400/10 blur-[140px]" />
+      </div>
+
+      <div className="relative mx-auto max-w-6xl px-6 py-20">
+        {/* HERO */}
+        <div className="mb-14 max-w-3xl">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-yellow-400/30 bg-yellow-400/10 px-4 py-1.5 text-xs text-yellow-300">
+            DIRECT EXECUTION · PARTNER PROGRAM
+          </div>
+
+          <h1 className="text-5xl md:text-6xl font-semibold leading-tight">
+            Affiliate{" "}
+            <span className="bg-gradient-to-r from-yellow-300 to-amber-400 bg-clip-text text-transparent">
+              Program
+            </span>
+          </h1>
+
+          <p className="mt-6 text-lg text-white/70">
+            Earn recurring commissions by referring serious traders to YieldCraft.
+          </p>
+        </div>
+
+        <div className="grid gap-10 md:grid-cols-2">
+          {/* LEFT */}
+          <div className="space-y-8">
+            <GlassCard title="How it works" accent="yellow">
+              <ol className="list-decimal pl-5 space-y-3 text-white/80">
+                <li>Apply (takes ~30 seconds)</li>
+                <li>Get your referral link</li>
+                <li>Earn monthly payouts</li>
+              </ol>
+            </GlassCard>
+
+            <GlassCard title="What you get" accent="cyan">
+              <ul className="list-disc pl-5 space-y-3 text-white/80">
+                <li>Tracked attribution</li>
+                <li>Stripe / ACH payouts</li>
+                <li>Promo assets</li>
+                <li>Priority support</li>
+              </ul>
+            </GlassCard>
+
+            <div className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-5 text-sm text-yellow-200">
+              <strong>Pro tip:</strong> Clear channels get approved fastest.
+            </div>
+          </div>
+
+          {/* FORM */}
+          <div className="rounded-3xl border border-white/10 bg-white/5 p-8 backdrop-blur-xl">
+            <div className="mb-6 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Apply now</h2>
+              <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs text-cyan-300">
+                Fast approval
+              </span>
+            </div>
+
+            <form onSubmit={onSubmit} className="space-y-5">
+              <Field label="Full name *">
+                <input value={fullName} onChange={(e) => setFullName(e.target.value)} className={inputClass} />
+              </Field>
+
+              <Field label="Email *">
+                <input value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} />
+              </Field>
+
+              <Field label="Audience / channel">
+                <input value={audience} onChange={(e) => setAudience(e.target.value)} className={inputClass} />
+              </Field>
+
+              <Field label="Website">
+                <input value={website} onChange={(e) => setWebsite(e.target.value)} className={inputClass} />
+              </Field>
+
+              <Field label="Notes">
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className={`${inputClass} min-h-[120px]`} />
+              </Field>
+
+              {/* 🔥 APPLY BUTTON — ALWAYS YELLOW */}
+              <button
+                type="submit"
+                className={`w-full rounded-xl py-3 font-semibold text-black transition
+                  ${
+                    canSubmit
+                      ? "bg-gradient-to-r from-yellow-400 to-amber-400 hover:brightness-110"
+                      : "bg-yellow-400 opacity-50 cursor-not-allowed"
+                  }`}
+              >
+                {state.status === "submitting" ? "Submitting…" : "Apply"}
+              </button>
+
+              {state.status === "success" && (
+                <div className="text-sm text-green-300">{state.message}</div>
+              )}
+              {state.status === "error" && (
+                <div className="text-sm text-red-300">{state.message}</div>
+              )}
+
+              <p className="pt-2 text-xs text-white/50">
+                No spam. No bots. Manual review only.
+              </p>
+            </form>
+          </div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function GlassCard({
+  title,
+  accent,
+  children,
+}: {
+  title: string;
+  accent: "yellow" | "cyan";
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+      <h3
+        className={`mb-4 text-lg font-semibold ${
+          accent === "yellow" ? "text-yellow-300" : "text-cyan-300"
+        }`}
+      >
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <div className="mb-2 text-xs text-white/70">{label}</div>
+      {children}
+    </label>
+  );
+}
+
+const inputClass =
+  "w-full rounded-xl border border-white/10 bg-black/30 px-4 py-2.5 text-sm text-white outline-none focus:border-yellow-400/50";
