@@ -1,6 +1,6 @@
 ﻿// src/app/api/pulse-trade/route.ts
 // SAFE: DRY-RUN order builder + hard execution gate (defaults OFF).
-// Adds GET so you can hit the endpoint in browser/Invoke-WebRequest without 405.
+// Adds GET so /api/pulse-trade won't 405.
 // NO execution code here.
 
 import { NextResponse } from "next/server";
