@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import Image from "next/image";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -68,16 +69,21 @@ export default function RootLayout({
         </div>
 
         {/* NAV */}
-        <header className="sticky top-0 z-50 border-b border-white/10 bg-[#040914]/65 backdrop-blur-xl">
+        <header className="sticky top-0 z-50 border-b border-white/10 bg-[#040914]/90 backdrop-blur-xl">
           <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4">
             {/* Brand */}
             <Link href="/" className="group flex items-center gap-3">
-              <span className="relative inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5">
-                <span className="absolute inset-0 rounded-xl bg-gradient-to-br from-cyan-400/25 to-yellow-400/20 blur-md opacity-0 transition group-hover:opacity-100" />
-                <span className="relative text-sm font-semibold text-white/90">
-                  Y
-                </span>
+              <span className="relative inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+                <Image
+                  src="/yc-logo.png"
+                  alt="YieldCraft"
+                  width={36}
+                  height={36}
+                  priority
+                  className="h-9 w-9 object-contain"
+                />
               </span>
+
               <div className="leading-tight">
                 <div className="text-[15px] font-semibold tracking-tight">
                   Yield<span className="text-cyan-300">Craft</span>
