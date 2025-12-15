@@ -1,80 +1,77 @@
+// src/app/api/pulse-heartbeat/route.ts
+// 🔒 LOCKED: Minimal, path-correct Coinbase heartbeat (NO EXTRA LOGIC)
+
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 
 export const runtime = "nodejs";
 
-/**
- * Coinbase AUTH PROBE — DO NOT MODIFY
- * Purpose: Prove ES256 JWT auth works.
- * This must stay stable once green.
- */
-
-const API_BASE = "https://api.coinbase.com";
+/* =========================
+   ENV
+========================= */
 const API_KEY_NAME = process.env.COINBASE_API_KEY_NAME!;
 const PRIVATE_KEY = process.env.COINBASE_PRIVATE_KEY!;
 
-function buildJWT(method: string, path: string) {
-  const uri = `${method} ${path}`;
-  const nonce = crypto.randomBytes(16).toString("hex");
+/* =========================
+   JWT (PER-REQUEST, PATH-LOCKED)
+========================= */
+function buildJwt(method: string, path: string) {
+  const now = Math.floor(Date.now() / 1000);
 
   return jwt.sign(
     {
       iss: "cdp",
       sub: API_KEY_NAME,
-      uri,
+      nbf: now,
+      exp: now + 120,
+      uri: `${method} ${path}`,
     },
-    PRIVATE_KEY,
+    PRIVATE_KEY.replace(/\\n/g, "\n"),
     {
       algorithm: "ES256",
       header: {
         kid: API_KEY_NAME,
-        nonce,
+        nonce: crypto.randomBytes(16).toString("hex"),
       },
-      expiresIn: 120,
     }
   );
 }
 
-async function callCoinbase(method: string, path: string) {
-  const token = buildJWT(method, path);
+/* =========================
+   COINBASE CALL
+========================= */
+async function callCoinbase(method: "GET", path: string) {
+  const token = buildJwt(method, path);
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`https://api.coinbase.com${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+      Accept: "application/json",
     },
   });
 
   const text = await res.text();
-  let json: any;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = text;
-  }
-
   return {
     ok: res.ok,
     status: res.status,
-    raw: json,
+    raw: text,
   };
 }
 
-/**
- * AUTH CHECK — SAFE ENDPOINT
- */
+/* =========================
+   HEARTBEAT
+========================= */
 export async function POST() {
   try {
-    const path = "/api/v3/brokerage/accounts";
+    const path = "/api/v3/brokerage/products/BTC-USD/ticker";
     const res = await callCoinbase("GET", path);
 
     return NextResponse.json({
       ok: res.ok,
       status: res.status,
-      auth: res.ok ? "AUTH_OK" : "AUTH_FAILED",
-      response: res.raw,
+      preview: res.raw.slice(0, 300),
     });
   } catch (err: any) {
     return NextResponse.json(
@@ -84,9 +81,7 @@ export async function POST() {
   }
 }
 
-/**
- * Allow GET (Vercel Cron)
- */
+// Allow Vercel Cron
 export async function GET() {
   return POST();
 }
