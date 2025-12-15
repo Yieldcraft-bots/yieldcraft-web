@@ -1,5 +1,5 @@
 // src/app/api/pulse-heartbeat/route.ts
-// Minimal Coinbase AUTH PROBE (ES256) — stable + TypeScript-safe for Vercel build.
+// Coinbase AUTH PROBE (ES256) — TypeScript-safe + host-style JWT uri.
 
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
@@ -13,25 +13,23 @@ function mustEnv(name: string): string {
   return v;
 }
 
-// Normalize private key from Vercel:
-// - If pasted as multi-line, keep it
-// - If pasted with \n escapes, convert to real newlines
 function normalizePrivateKey(raw: string): string {
   const s = raw.trim();
-  if (s.includes("\\n")) return s.replace(/\\n/g, "\n");
-  return s;
+  // If Vercel stored it with literal "\n", convert to real newlines
+  return s.includes("\\n") ? s.replace(/\\n/g, "\n") : s;
 }
 
-// Coinbase App requires uri like: "GET /api/v3/brokerage/accounts"
+// IMPORTANT: host-style uri (no scheme)
 function formatJwtUri(method: string, path: string) {
-  return `${method.toUpperCase()} ${path}`;
+  return `${method.toUpperCase()} api.coinbase.com${path}`;
 }
 
 function buildJwt(method: "GET" | "POST", path: string) {
-  const API_KEY_NAME = mustEnv("COINBASE_API_KEY_NAME"); // organizations/.../apiKeys/...
+  const API_KEY_NAME = mustEnv("COINBASE_API_KEY_NAME");
   const PRIVATE_KEY = normalizePrivateKey(mustEnv("COINBASE_PRIVATE_KEY"));
 
   const now = Math.floor(Date.now() / 1000);
+
   const payload: any = {
     iss: "cdp",
     sub: API_KEY_NAME,
@@ -40,14 +38,13 @@ function buildJwt(method: "GET" | "POST", path: string) {
     uri: formatJwtUri(method, path),
   };
 
-  // IMPORTANT: nonce is required by Coinbase, but jsonwebtoken TS types don't know it.
+  // Coinbase requires nonce, TS types don’t know it -> cast to any
   const header: any = {
     kid: API_KEY_NAME,
     alg: "ES256",
     nonce: crypto.randomBytes(16).toString("hex"),
   };
 
-  // Cast options to any to avoid TS overload issues in Vercel build
   const options: any = {
     algorithm: "ES256",
     header,
@@ -69,7 +66,7 @@ async function callCoinbase(method: "GET" | "POST", path: string) {
   });
 
   const text = await res.text();
-  return { ok: res.ok, status: res.status, raw: text.slice(0, 600) };
+  return { ok: res.ok, status: res.status, raw: text.slice(0, 800) };
 }
 
 // AUTH CHECK — SAFE ENDPOINT (no trading)
