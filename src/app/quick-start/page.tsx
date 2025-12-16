@@ -4,91 +4,218 @@ import Link from "next/link";
 export default function QuickStartPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
-      <div className="max-w-4xl mx-auto px-4 py-16">
-        <p className="text-xs font-semibold tracking-[0.2em] text-sky-400 uppercase">
-          Quick start guide
-        </p>
-        <h1 className="mt-3 text-3xl md:text-4xl font-bold text-slate-50">
-          Go from zero to live Pulse + Recon in a few steps.
-        </h1>
-        <p className="mt-4 text-slate-400 max-w-2xl">
-          This is the high-level map. We&apos;ll keep refining it, but this is
-          enough to go from &quot;curious&quot; to watching real trades execute
-          through the engine.
-        </p>
+      <div className="mx-auto max-w-6xl px-4 py-20">
+        {/* HERO */}
+        <div className="mb-12 max-w-3xl">
+          <p className="text-xs font-semibold tracking-[0.32em] text-sky-400 uppercase">
+            Quick Start Guide
+          </p>
 
-        <ol className="mt-8 space-y-6 text-sm text-slate-200">
-          <li className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-            <h2 className="text-sm font-semibold text-slate-50">
-              1. Create / connect your Coinbase Advanced Trade account
-            </h2>
-            <p className="mt-2 text-slate-400">
-              Enable Advanced Trade, generate an API key with View + Trade
-              permissions, and store it somewhere safe. YieldCraft never shares
-              or sells keys.
+          <h1 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
+            Get{" "}
+            <span className="text-amber-400">connected</span>, get{" "}
+            <span className="text-amber-400">confirmed</span>, then let the engine{" "}
+            <span className="text-amber-400">wait for the right moment</span>.
+          </h1>
+
+          <p className="mt-6 text-lg text-slate-300">
+            YieldCraft connects directly to your exchange using signed requests.
+            <br />
+            No third-party bridges. No “fund transfers.” No confusion.
+          </p>
+
+          <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+            <p className="text-sm text-slate-300">
+              <span className="font-semibold text-slate-50">Important:</span> it’s normal
+              to see <span className="text-amber-300 font-semibold">no trade</span> right away.
+              Waiting is part of the strategy.
             </p>
-          </li>
-
-          <li className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-            <h2 className="text-sm font-semibold text-slate-50">
-              2. Subscribe to YieldCraft (Starter is enough)
-            </h2>
-            <p className="mt-2 text-slate-400">
-              Starter unlocks the Pulse + Recon BTC engine for small accounts.
-              Pro / Elite will bring in more bots and cross-asset logic over
-              time.
+            <p className="mt-2 text-xs text-slate-400">
+              Your “proof” is the green lights + heartbeat confirmation — not an immediate order.
             </p>
-          </li>
+          </div>
+        </div>
 
-          <li className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-            <h2 className="text-sm font-semibold text-slate-50">
-              3. Wire your keys into the engine
-            </h2>
-            <p className="mt-2 text-slate-400">
-              Inside the secure onboarding flow, you&apos;ll paste your Coinbase
-              key name and private key. The engine uses signed JWTs to talk to
-              Coinbase directly — no third-party bridges.
-            </p>
-          </li>
+        {/* STATUS PANEL */}
+        <div className="mb-14 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Live status lights</h2>
+              <p className="mt-1 text-sm text-slate-400">
+                This is what “live” looks like even when there’s no signal yet.
+              </p>
+            </div>
 
-          <li className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-            <h2 className="text-sm font-semibold text-slate-50">
-              4. Start in small-account guardrail mode
-            </h2>
-            <p className="mt-2 text-slate-400">
-              We start with tiny BTC position sizes and strict daily drawdown
-              caps. The goal is clean execution and survival first, growth
-              second.
-            </p>
-          </li>
+            <div className="flex flex-wrap gap-2">
+              <Pill>Direct execution</Pill>
+              <Pill>Risk guardrails</Pill>
+              <Pill>Maker-first behavior</Pill>
+            </div>
+          </div>
 
-          <li className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-            <h2 className="text-sm font-semibold text-slate-50">
-              5. Review live trades and logs
-            </h2>
-            <p className="mt-2 text-slate-400">
-              You&apos;ll be able to see which bot fired, what Recon saw
-              (regime + confidence), and exactly how each order hit Coinbase
-              (maker or fallback).
-            </p>
-          </li>
-        </ol>
+          <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <StatusItem
+              color="green"
+              title="Connected"
+              description="Exchange auth is valid and responding."
+            />
+            <StatusItem
+              color="green"
+              title="Engine Armed"
+              description="Your plan is active and bots are enabled."
+            />
+            <StatusItem
+              color="yellow"
+              title="Waiting for Signal"
+              description="No trade yet — conditions not met (normal)."
+            />
+          </div>
 
-        <div className="mt-10 flex flex-wrap gap-3">
-          <Link
-            href="/pricing"
-            className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
-          >
-            View pricing
-          </Link>
-          <Link
-            href="/"
-            className="rounded-full border border-slate-700 px-4 py-2 text-sm font-medium text-slate-200 hover:border-slate-500 hover:text-slate-50"
-          >
-            ← Back to homepage
-          </Link>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <InfoCard
+              title="What happens next"
+              text="The engine checks conditions on a schedule. When the market meets your bot’s rules and risk limits, it executes automatically."
+            />
+            <InfoCard
+              title="What you should NOT do"
+              text="Don’t keep toggling settings trying to force trades. Most losses come from forcing action. YieldCraft is designed to wait."
+            />
+          </div>
+
+          <p className="mt-4 text-xs text-slate-500">
+            Performance targets are design goals, not promises. Markets are risky and results vary.
+          </p>
+        </div>
+
+        {/* STEPS */}
+        <div className="space-y-6">
+          <Step
+            number={1}
+            title="Create / enable your Coinbase Advanced Trade account"
+            text="Enable Advanced Trade, then create an API key with View + Trade permissions. Keep it private."
+          />
+          <Step
+            number={2}
+            title="Pick a plan (Starter → Pro → Atlas)"
+            text="Starter is perfect to begin. Pro unlocks the full bot suite. Atlas is a buy-only long-term allocator you can bundle anytime."
+          />
+          <Step
+            number={3}
+            title="Connect your exchange keys in YieldCraft"
+            text="You’ll paste your key name + private key into the secure onboarding flow. YieldCraft uses signed requests — it never holds your funds."
+          />
+          <Step
+            number={4}
+            title="Turn the engine on (then watch the green lights)"
+            text="Once enabled, the bot may wait. That’s normal. Your confirmation is: Connected + Engine Armed + Heartbeat OK."
+          />
+        </div>
+
+        {/* CTA STRIP */}
+        <div className="mt-14 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
+          <h3 className="text-xl font-semibold">Ready to activate?</h3>
+          <p className="mt-2 text-sm text-slate-400 max-w-3xl">
+            Start simple. Get connected. Confirm the lights. Then let YieldCraft do what it’s built to do:
+            wait for high-quality conditions and execute with guardrails.
+          </p>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link
+              href="/pricing"
+              className="inline-flex items-center justify-center rounded-full bg-amber-400 px-6 py-3 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
+            >
+              Choose a Plan
+            </Link>
+
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-500"
+            >
+              Go to Dashboard
+            </Link>
+
+            <Link
+              href="/atlas"
+              className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-500"
+            >
+              Learn Atlas (Long-Term)
+            </Link>
+          </div>
         </div>
       </div>
     </main>
+  );
+}
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-slate-800 bg-slate-950/50 px-3 py-1 text-xs font-semibold text-slate-200">
+      {children}
+    </span>
+  );
+}
+
+function InfoCard({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+      <p className="text-sm font-semibold text-slate-50">{title}</p>
+      <p className="mt-1 text-xs text-slate-400">{text}</p>
+    </div>
+  );
+}
+
+function StatusItem({
+  color,
+  title,
+  description,
+}: {
+  color: "green" | "yellow" | "red";
+  title: string;
+  description: string;
+}) {
+  const colorMap: Record<"green" | "yellow" | "red", string> = {
+    green: "bg-emerald-400",
+    yellow: "bg-amber-400",
+    red: "bg-red-500",
+  };
+
+  const ringMap: Record<"green" | "yellow" | "red", string> = {
+    green: "shadow-[0_0_0_4px_rgba(52,211,153,0.12)]",
+    yellow: "shadow-[0_0_0_4px_rgba(251,191,36,0.12)]",
+    red: "shadow-[0_0_0_4px_rgba(239,68,68,0.12)]",
+  };
+
+  return (
+    <div className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+      <span
+        className={`mt-1 h-3 w-3 rounded-full ${colorMap[color]} ${ringMap[color]}`}
+      />
+      <div>
+        <p className="text-sm font-semibold">{title}</p>
+        <p className="text-xs text-slate-400">{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function Step({
+  number,
+  title,
+  text,
+}: {
+  number: number;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="group relative flex gap-4 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 transition hover:border-amber-500/40 hover:shadow-[0_0_60px_rgba(251,191,36,0.10)]">
+      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-400 text-sm font-bold text-slate-950">
+        {number}
+      </div>
+      <div>
+        <h4 className="font-semibold">{title}</h4>
+        <p className="mt-1 text-sm text-slate-400">{text}</p>
+      </div>
+    </div>
   );
 }
