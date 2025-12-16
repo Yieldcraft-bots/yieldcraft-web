@@ -1,70 +1,77 @@
-﻿import { NextResponse } from "next/server";
-import jwt, { SignOptions } from "jsonwebtoken";
+﻿// src/app/api/pulse-trade/route.ts
+// Pulse Trade: Coinbase Advanced Trade order router
+// Actions: status | dry_run_order | place_order
+// SAFETY GATES (BOTH must be true to place live orders):
+//   1) COINBASE_TRADING_ENABLED=true
+//   2) PULSE_TRADE_ARMED=true
+//
+// NOTE: This route NEVER runs automatically. It only runs when you call it.
+
+import { NextResponse } from "next/server";
+import jwt from "jsonwebtoken";
 import crypto from "crypto";
+
+// Optional: log to Supabase if you have service-role wiring in env.
+// If not present, logging is skipped (never blocks).
+// Uses REST endpoint so we don't depend on your local supabase client code.
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 export const runtime = "nodejs";
 
-/* =========================================================
-   Helpers
-   ========================================================= */
+type Side = "BUY" | "SELL";
+type Action = "status" | "dry_run_order" | "place_order";
 
-function jsonOk(data: any, status = 200) {
-  return NextResponse.json({ ok: true, ...data }, { status });
+function truthy(v?: string) {
+  return ["1", "true", "yes", "on"].includes((v || "").toLowerCase());
 }
 
-function jsonError(message: string, extra: any = {}, status = 400) {
+function jsonError(message: string, status = 400, extra: any = {}) {
   return NextResponse.json({ ok: false, error: message, ...extra }, { status });
 }
 
-function normalizeBool(v: any): boolean {
-  const s = String(v ?? "").trim().toLowerCase();
-  return s === "true" || s === "1" || s === "yes" || s === "on";
-}
-
-function normalizePem(raw: string): string {
-  let s = (raw ?? "").trim();
-
-  if (
-    (s.startsWith('"') && s.endsWith('"')) ||
-    (s.startsWith("'") && s.endsWith("'"))
-  ) {
-    s = s.slice(1, -1);
-  }
-
-  s = s.replace(/\\n/g, "\n");
-  s = s.replace(/\r\n/g, "\n");
-
-  return s.trim();
-}
-
-async function safeReadJson(
-  req: Request
-): Promise<{ ok: true; data: any } | { ok: false; raw: string }> {
-  const raw = await req.text();
-
-  // Allow empty body (we default to action=status)
-  if (!raw || raw.trim() === "") return { ok: true, data: {} };
-
+function safeJsonParse(text: string) {
   try {
-    return { ok: true, data: JSON.parse(raw) };
+    return JSON.parse(text);
   } catch {
-    return { ok: false, raw };
+    return null;
   }
 }
 
-function buildCoinbaseJwt(method: string, path: string) {
-  const apiKeyName = process.env.COINBASE_API_KEY_NAME || "";
-  const privateKeyRaw = process.env.COINBASE_PRIVATE_KEY || "";
-  const algRaw = (process.env.COINBASE_KEY_ALG || "ES256").toUpperCase();
+function requireEnv(name: string) {
+  const v = process.env[name];
+  if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
+  return v.trim();
+}
 
-  if (!apiKeyName) throw new Error("Missing COINBASE_API_KEY_NAME");
-  if (!privateKeyRaw) throw new Error("Missing COINBASE_PRIVATE_KEY");
+function normalizePem(pem: string) {
+  let p = pem.trim();
 
+  // strip surrounding quotes if present
+  if (
+    (p.startsWith('"') && p.endsWith('"')) ||
+    (p.startsWith("'") && p.endsWith("'"))
+  ) {
+    p = p.slice(1, -1);
+  }
+
+  // convert literal \n into real newlines
+  p = p.replace(/\\n/g, "\n");
+  // normalize newlines
+  p = p.replace(/\r\n/g, "\n");
+  return p;
+}
+
+function buildCdpJwt(method: "GET" | "POST", path: string) {
+  const apiKeyName = requireEnv("COINBASE_API_KEY_NAME");
+  const privateKeyRaw = requireEnv("COINBASE_PRIVATE_KEY");
   const privateKey = normalizePem(privateKeyRaw);
 
   const now = Math.floor(Date.now() / 1000);
-  const uri = `${method.toUpperCase()} api.coinbase.com${path}`;
   const nonce = crypto.randomBytes(16).toString("hex");
+
+  // IMPORTANT: host-style uri (no scheme)
+  const uri = `${method} api.coinbase.com${path}`;
 
   const payload = {
     iss: "cdp",
@@ -74,132 +81,248 @@ function buildCoinbaseJwt(method: string, path: string) {
     uri,
   };
 
-  // IMPORTANT: TypeScript typings for jsonwebtoken don't include `nonce` in JwtHeader.
-  // We keep runtime behavior but attach nonce via `as any` so Vercel build passes.
-  const signOptions: SignOptions = {
-    algorithm: algRaw as any,
-    header: { kid: apiKeyName } as any,
-  };
-  (signOptions.header as any).nonce = nonce;
-
-  return jwt.sign(payload as any, privateKey as any, signOptions as any);
+  return jwt.sign(payload, privateKey as any, {
+    algorithm: "ES256",
+    header: { kid: apiKeyName, nonce } as any,
+  });
 }
 
-/* =========================================================
-   Route
-   ========================================================= */
+async function logToSupabase(row: {
+  bot: string;
+  symbol?: string | null;
+  side?: Side | null;
+  base_size?: string | null;
+  quote_size?: string | null;
+  price?: string | null;
+  maker_taker?: string | null;
+  regime?: string | null;
+  confidence?: number | null;
+  order_id?: string | null;
+  raw?: any;
+}) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
 
+    // Use PostgREST (service role required). Never blocks.
+    const url = `${SUPABASE_URL.replace(/\/$/, "")}/rest/v1/trade_logs`;
+
+    const payload = {
+      bot: row.bot,
+      symbol: row.symbol ?? null,
+      side: row.side ?? null, // make sure your DB allows NULL side for non-trade logs
+      base_size: row.base_size ?? null,
+      quote_size: row.quote_size ?? null,
+      price: row.price ?? null,
+      maker_taker: row.maker_taker ?? null,
+      regime: row.regime ?? null,
+      confidence: row.confidence ?? null,
+      order_id: row.order_id ?? null,
+      raw: row.raw ?? {},
+    };
+
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // swallow
+  }
+}
+
+// GET helper so you can hit it in browser without 405
 export async function GET() {
-  const EXECUTION_ENABLED = normalizeBool(process.env.EXECUTION_ENABLED);
+  const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
+  const armed = truthy(process.env.PULSE_TRADE_ARMED);
 
-  return jsonOk({
+  return NextResponse.json({
+    ok: true,
     status: "PULSE_TRADE_READY",
-    trading_enabled: EXECUTION_ENABLED,
-    note: "Use POST. Empty body defaults to action=status.",
-    actions: ["status", "dry_run_order", "place_order"],
+    gates: {
+      COINBASE_TRADING_ENABLED: tradingEnabled,
+      PULSE_TRADE_ARMED: armed,
+      LIVE_ALLOWED: tradingEnabled && armed,
+    },
   });
 }
 
 export async function POST(req: Request) {
-  const EXECUTION_ENABLED = normalizeBool(process.env.EXECUTION_ENABLED);
-
-  const parsed = await safeReadJson(req);
-  if (!parsed.ok) {
-    return jsonError(
-      "Invalid JSON body.",
-      { raw_preview: parsed.raw.slice(0, 300) },
-      400
-    );
+  let body: any = null;
+  try {
+    body = await req.json();
+  } catch {
+    return jsonError("Invalid JSON body.", 400);
   }
 
-  const body = parsed.data ?? {};
-  const action = String(body.action ?? "status");
+  const action = (body?.action || "status") as Action;
+
+  const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
+  const armed = truthy(process.env.PULSE_TRADE_ARMED);
+  const liveAllowed = tradingEnabled && armed;
 
   if (action === "status") {
-    return jsonOk({
+    return NextResponse.json({
+      ok: true,
       status: "PULSE_TRADE_READY",
-      trading_enabled: EXECUTION_ENABLED,
-      env_seen: { EXECUTION_ENABLED: String(process.env.EXECUTION_ENABLED ?? "") },
+      gates: {
+        COINBASE_TRADING_ENABLED: tradingEnabled,
+        PULSE_TRADE_ARMED: armed,
+        LIVE_ALLOWED: liveAllowed,
+      },
     });
   }
 
-  const product_id = String(body.product_id ?? "BTC-USD");
-  const side = String(body.side ?? "BUY").toUpperCase();
-  const quote_size = body.quote_size != null ? String(body.quote_size) : "1.00";
-  const base_size = body.base_size != null ? String(body.base_size) : "0.00002";
+  // Inputs
+  const product_id = String(body?.product_id || "BTC-USD");
+  const side = String(body?.side || "BUY").toUpperCase() as Side;
 
-  const client_order_id = body.client_order_id
-    ? String(body.client_order_id)
-    : `yc_${action}_${Date.now()}`;
+  const quote_size = body?.quote_size != null ? String(body.quote_size) : null;
+  const base_size = body?.base_size != null ? String(body.base_size) : null;
 
-  const orderPayload: any = {
+  if (side !== "BUY" && side !== "SELL") {
+    return jsonError("side must be BUY or SELL.", 400, { side });
+  }
+
+  // Build Coinbase order payload
+  const client_order_id = `yc_${action}_${Date.now()}`;
+
+  let order_configuration: any = null;
+
+  if (side === "BUY") {
+    if (!quote_size) return jsonError('BUY requires quote_size (e.g. "1.00").', 400);
+    order_configuration = { market_market_ioc: { quote_size } };
+  } else {
+    if (!base_size) return jsonError('SELL requires base_size (e.g. "0.00001").', 400);
+    order_configuration = { market_market_ioc: { base_size } };
+  }
+
+  const orderPayload = {
     client_order_id,
     product_id,
     side,
-    order_configuration: {
-      market_market_ioc: side === "BUY" ? { quote_size } : { base_size },
-    },
+    order_configuration,
   };
 
+  // Dry run (always safe)
   if (action === "dry_run_order") {
-    return jsonOk({
+    await logToSupabase({
+      bot: "pulse",
+      symbol: product_id,
+      side,
+      base_size: base_size ?? null,
+      quote_size: quote_size ?? null,
+      raw: {
+        kind: "dry_run",
+        action,
+        gates: { COINBASE_TRADING_ENABLED: tradingEnabled, PULSE_TRADE_ARMED: armed },
+        payload: orderPayload,
+      },
+    });
+
+    return NextResponse.json({
+      ok: true,
       mode: "DRY_RUN",
-      trading_enabled: EXECUTION_ENABLED,
+      gates: {
+        COINBASE_TRADING_ENABLED: tradingEnabled,
+        PULSE_TRADE_ARMED: armed,
+        LIVE_ALLOWED: liveAllowed,
+      },
       would_call: "POST https://api.coinbase.com/api/v3/brokerage/orders",
       payload: orderPayload,
-      note: "Dry-run only. Use action=place_order to execute (requires EXECUTION_ENABLED=true).",
+      note: liveAllowed
+        ? "Dry-run only. If you call action=place_order, it WILL execute."
+        : "Dry-run only. LIVE is blocked until BOTH gates are true.",
     });
   }
 
-  if (action === "place_order") {
-    if (!EXECUTION_ENABLED) {
-      return jsonError(
-        "Execution gate is OFF. Set EXECUTION_ENABLED=true in Vercel and redeploy.",
-        { trading_enabled: EXECUTION_ENABLED },
-        403
-      );
-    }
-
-    try {
-      const path = "/api/v3/brokerage/orders";
-      const token = buildCoinbaseJwt("POST", path);
-
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-
-      const res = await fetch(`https://api.coinbase.com${path}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(orderPayload),
-        signal: controller.signal,
-      }).finally(() => clearTimeout(timeout));
-
-      const text = await res.text();
-      let coinbase: any = text;
-      try {
-        coinbase = JSON.parse(text);
-      } catch {
-        // keep as text
-      }
-
-      return NextResponse.json(
-        {
-          ok: res.ok,
-          mode: "LIVE",
-          trading_enabled: true,
-          status: res.status,
-          payload: orderPayload,
-          coinbase,
-        },
-        { status: res.ok ? 200 : res.status }
-      );
-    } catch (e: any) {
-      return jsonError(e?.message || "Live execution failed.", { action }, 500);
-    }
+  // place_order requires BOTH gates true
+  if (action !== "place_order") {
+    return jsonError("Unknown action.", 400, { action });
+  }
+  if (!liveAllowed) {
+    return jsonError(
+      "LIVE blocked. Set COINBASE_TRADING_ENABLED=true AND PULSE_TRADE_ARMED=true.",
+      403,
+      { gates: { COINBASE_TRADING_ENABLED: tradingEnabled, PULSE_TRADE_ARMED: armed } }
+    );
   }
 
-  return jsonError("Unknown action.", { action }, 400);
+  // Live call
+  const path = "/api/v3/brokerage/orders";
+  const token = buildCdpJwt("POST", path);
+
+  try {
+    const res = await fetch(`https://api.coinbase.com${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(orderPayload),
+    });
+
+    const text = await res.text();
+    const parsed = safeJsonParse(text);
+
+    // Try to grab an order id if present
+    const orderId =
+      parsed?.order_id ||
+      parsed?.order?.order_id ||
+      parsed?.success_response?.order_id ||
+      null;
+
+    await logToSupabase({
+      bot: "pulse",
+      symbol: product_id,
+      side,
+      base_size: base_size ?? null,
+      quote_size: quote_size ?? null,
+      order_id: orderId,
+      raw: {
+        kind: "live_order",
+        action,
+        gates: { COINBASE_TRADING_ENABLED: tradingEnabled, PULSE_TRADE_ARMED: armed },
+        request: orderPayload,
+        response_status: res.status,
+        response: parsed ?? text,
+      },
+    });
+
+    return NextResponse.json(
+      {
+        ok: res.ok,
+        mode: "LIVE",
+        gates: {
+          COINBASE_TRADING_ENABLED: tradingEnabled,
+          PULSE_TRADE_ARMED: armed,
+          LIVE_ALLOWED: liveAllowed,
+        },
+        status: res.status,
+        payload: orderPayload,
+        coinbase: parsed ?? text,
+      },
+      { status: res.ok ? 200 : res.status }
+    );
+  } catch (e: any) {
+    await logToSupabase({
+      bot: "pulse",
+      symbol: product_id,
+      side,
+      base_size: base_size ?? null,
+      quote_size: quote_size ?? null,
+      raw: {
+        kind: "live_order_error",
+        action,
+        error: e?.message || String(e),
+        payload: orderPayload,
+      },
+    });
+
+    return jsonError(e?.message || "Live execution failed.", 500, { action });
+  }
 }
