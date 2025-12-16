@@ -1,6 +1,9 @@
 // src/app/atlas/page.tsx
 import Link from "next/link";
 
+const ATLAS_STRIPE_LINK =
+  process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS || "/pricing";
+
 export default function AtlasPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -13,12 +16,23 @@ export default function AtlasPage() {
           >
             ← Back to pricing
           </Link>
+
           <Link
             href="/quick-start"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
             View Quick Start guide
           </Link>
+
+          {/* Atlas Subscribe (Stripe) */}
+          <a
+            href={ATLAS_STRIPE_LINK}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
+          >
+            Subscribe to Atlas
+          </a>
         </div>
 
         {/* HERO */}
@@ -152,12 +166,23 @@ export default function AtlasPage() {
                 </p>
               </div>
 
-              <Link
-                href="/pricing"
-                className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
-              >
-                See all plans
-              </Link>
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  href="/pricing"
+                  className="inline-flex items-center justify-center rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500"
+                >
+                  See all plans
+                </Link>
+
+                <a
+                  href={ATLAS_STRIPE_LINK}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
+                >
+                  Subscribe to Atlas
+                </a>
+              </div>
             </div>
           </Section>
 
