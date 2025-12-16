@@ -1,5 +1,6 @@
 // src/app/api/pulse-heartbeat/route.ts
-// Coinbase AUTH PROBE (ES256) — TypeScript-safe + host-style JWT uri.
+// HEARTBEAT (SAFE): Auth + connectivity + status payload
+// NO trading. Cron-safe. Proof-of-life endpoint.
 
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
@@ -11,6 +12,10 @@ function mustEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
+}
+
+function truthy(v?: string) {
+  return ["1", "true", "yes", "on"].includes((v || "").toLowerCase());
 }
 
 function normalizePrivateKey(raw: string): string {
@@ -66,11 +71,13 @@ async function callCoinbase(method: "GET" | "POST", path: string) {
   });
 
   const text = await res.text();
-  return { ok: res.ok, status: res.status, raw: text.slice(0, 800) };
+  return { ok: res.ok, status: res.status, raw: text.slice(0, 400) };
 }
 
-// AUTH CHECK — SAFE ENDPOINT (no trading)
-export async function POST() {
+async function heartbeat() {
+  const product = process.env.PULSE_PRODUCT || "BTC-USD";
+  const executionEnabled = truthy(process.env.EXECUTION_ENABLED);
+
   try {
     const path = "/api/v3/brokerage/accounts";
     const r = await callCoinbase("GET", path);
@@ -78,18 +85,30 @@ export async function POST() {
     return NextResponse.json({
       ok: r.ok,
       status: r.status,
+      mode: "HEARTBEAT_ONLY",
       auth: r.ok ? "AUTH_OK" : "AUTH_FAILED",
-      preview: r.raw,
+      product,
+      trading_enabled: executionEnabled,
+      timestamp: new Date().toISOString(),
+      note: "Non-trading heartbeat. Proof-of-life + auth check only.",
     });
   } catch (err: any) {
     return NextResponse.json(
-      { ok: false, error: err?.message ?? String(err) },
+      {
+        ok: false,
+        mode: "HEARTBEAT_ONLY",
+        error: err?.message ?? String(err),
+        timestamp: new Date().toISOString(),
+      },
       { status: 500 }
     );
   }
 }
 
-// Allow GET (Vercel Cron)
+// Cron uses GET, but POST works too
 export async function GET() {
-  return POST();
+  return heartbeat();
+}
+export async function POST() {
+  return heartbeat();
 }
