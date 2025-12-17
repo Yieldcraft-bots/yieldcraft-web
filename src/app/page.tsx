@@ -8,7 +8,7 @@ export default function Home() {
         <div className="mx-auto flex max-w-6xl flex-col gap-10 px-6 pb-20 pt-24 lg:flex-row lg:items-center lg:justify-between">
           <div className="max-w-xl">
             <p className="mb-4 inline-flex items-center rounded-full bg-slate-900/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-300">
-              Direct execution · risk-first automation
+              Direct execution · rules-based workflows
             </p>
 
             <h1 className="text-4xl font-bold leading-tight sm:text-5xl lg:text-6xl">
@@ -122,11 +122,11 @@ export default function Home() {
               </p>
               <h3 className="mt-2 text-sm font-semibold">No middle layers</h3>
               <p className="mt-2 text-xs text-slate-300">
-                Orders go straight to Coinbase — no pooled funds, fewer moving
-                parts.
+                Orders can route directly to Coinbase — no pooled funds, fewer
+                moving parts.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
-                <li>• Maker-first routing to help reduce fees</li>
+                <li>• Maker-first routing designed to prioritize fee efficiency</li>
                 <li>• Clean, auditable logs per trade</li>
                 <li>• No withdrawal permissions on API keys</li>
               </ul>
@@ -141,7 +141,7 @@ export default function Home() {
               </h3>
               <p className="mt-2 text-xs text-slate-300">
                 Recon and Ascend classify trend, volatility, and structure to
-                adapt risk behavior over time.
+                inform risk settings over time.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
                 <li>• Confidence-scored BUY / SELL / HOLD signals</li>
@@ -316,7 +316,7 @@ export default function Home() {
             Ready to run a rules-based system with real guardrails?
           </h2>
           <p className="mt-3 text-sm text-slate-300 sm:text-base">
-            Start with a plan that matches your comfort level. Cancel anytime.
+            Start with a plan that matches your comfort level.
           </p>
           <div className="mt-8 flex justify-center gap-4">
             <a
