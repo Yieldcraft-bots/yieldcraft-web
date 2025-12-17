@@ -57,9 +57,12 @@ export default function Home() {
             <h2 className="mt-2 text-lg font-semibold text-slate-50">
               Pulse + Recon · BTC Engine
             </h2>
+
+            {/* Tightened (no implied performance / no implied execution guarantee) */}
             <p className="mt-2 text-xs text-slate-400">
-              Orders route directly to Coinbase using maker-first logic, with
-              Recon controlling BUY / SELL / HOLD based on regime and confidence.
+              Example configuration view. When enabled, orders may route to
+              Coinbase using rules-based execution, with signal logic informing
+              BUY / SELL / HOLD. The system may also choose to take no action.
             </p>
 
             <div className="mt-4 grid grid-cols-2 gap-4 text-xs">
@@ -92,9 +95,10 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Stronger disclaimer */}
             <p className="mt-4 text-[11px] text-slate-500">
-              Snapshot is illustrative of system configuration and does not imply
-              performance or results.
+              Snapshot is illustrative only and does not represent performance,
+              expected returns, or likelihood of profit.
             </p>
           </div>
         </div>
