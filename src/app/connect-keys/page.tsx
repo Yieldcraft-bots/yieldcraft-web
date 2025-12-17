@@ -42,7 +42,7 @@ export default function ConnectKeysPage() {
               rel="noopener noreferrer"
               className="inline-flex rounded-full bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300"
             >
-              Create Coinbase account (referral) →
+              Create Coinbase account →
             </a>
 
             <p className="text-xs text-slate-500 self-center">
@@ -53,9 +53,7 @@ export default function ConnectKeysPage() {
 
         {/* STEP 1 */}
         <div className="mb-6 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <h3 className="text-lg font-semibold mb-2">
-            1. Create a Coinbase API key
-          </h3>
+          <h3 className="text-lg font-semibold mb-2">1. Create a Coinbase API key</h3>
 
           <p className="text-sm text-slate-400 mb-4">
             Open Coinbase API settings and create a key with:
@@ -100,9 +98,7 @@ export default function ConnectKeysPage() {
 
         {/* STEP 2 */}
         <div className="mb-6 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <h3 className="text-lg font-semibold mb-2">
-            2. Paste your keys into YieldCraft
-          </h3>
+          <h3 className="text-lg font-semibold mb-2">2. Paste your keys into YieldCraft</h3>
 
           <p className="text-sm text-slate-400">You’ll paste:</p>
 
@@ -118,9 +114,7 @@ export default function ConnectKeysPage() {
 
         {/* STEP 3 */}
         <div className="mb-10 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <h3 className="text-lg font-semibold mb-2">
-            3. Confirm green lights
-          </h3>
+          <h3 className="text-lg font-semibold mb-2">3. Confirm green lights</h3>
 
           <p className="text-sm text-slate-400">
             Once connected, your dashboard will show:
