@@ -8,19 +8,25 @@ export default function Home() {
         <div className="mx-auto flex max-w-6xl flex-col gap-10 px-6 pb-20 pt-24 lg:flex-row lg:items-center lg:justify-between">
           <div className="max-w-xl">
             <p className="mb-4 inline-flex items-center rounded-full bg-slate-900/70 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-sky-300">
-              Direct execution · AI risk engine
+              Direct execution · risk-first automation
             </p>
+
             <h1 className="text-4xl font-bold leading-tight sm:text-5xl lg:text-6xl">
-              The first{" "}
-              <span className="text-sky-300">
-                multi-platform direct-execution AI
-              </span>{" "}
-              trading platform.
+              A system that waits —{" "}
+              <span className="text-sky-300">so you don’t have to react.</span>
             </h1>
+
             <p className="mt-5 max-w-xl text-sm text-slate-300 sm:text-base">
-              Designed to navigate any market regime with a coordinated bot
-              fleet, Mile-Ahead AI, and institutional-grade risk controls — built
-              so real users can compound steadily over full market cycles.
+              Built to support disciplined decision-making, not prediction — with
+              clear rules, patient execution, and risk-first guardrails designed
+              to reduce emotional trading.
+            </p>
+
+            {/* Above-the-fold disclosure (highest value liability shield) */}
+            <p className="mt-4 text-xs text-slate-400">
+              YieldCraft provides software tools and systems — not financial
+              advice. Trading involves risk, including possible loss of capital.
+              No guarantees of performance.
             </p>
 
             <div className="mt-8 flex flex-wrap items-center gap-4">
@@ -28,19 +34,19 @@ export default function Home() {
                 href="/pricing"
                 className="rounded-full bg-amber-400 px-6 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/40 hover:bg-amber-300"
               >
-                Subscribe Now
+                See Plans
               </a>
               <a
-  href="/quick-start"
-  className="rounded-full border border-slate-600 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-400 hover:text-slate-50"
->
+                href="/quick-start"
+                className="rounded-full border border-slate-600 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-400 hover:text-slate-50"
+              >
                 See How It Works
               </a>
             </div>
 
             <p className="mt-4 text-xs text-slate-400">
-              Targets steady growth over full market cycles. Past performance is
-              not a guarantee of future results. Trading involves risk of loss.
+              Not an investment advisor. Nothing here is a recommendation to buy
+              or sell. You are responsible for your own decisions and risk.
             </p>
           </div>
 
@@ -56,6 +62,7 @@ export default function Home() {
               Recon controlling BUY / SELL / HOLD based on regime and
               confidence.
             </p>
+
             <div className="mt-4 grid grid-cols-2 gap-4 text-xs">
               <div className="rounded-2xl bg-slate-950/60 p-3">
                 <p className="text-slate-400">Current Regime</p>
@@ -63,25 +70,33 @@ export default function Home() {
                   Trending / BTC
                 </p>
               </div>
+
               <div className="rounded-2xl bg-slate-950/60 p-3">
                 <p className="text-slate-400">Bots Active</p>
                 <p className="mt-1 text-sm font-semibold">
                   Pulse · Recon · Ascend
                 </p>
               </div>
+
               <div className="rounded-2xl bg-slate-950/60 p-3">
                 <p className="text-slate-400">Risk Mode</p>
                 <p className="mt-1 text-sm font-semibold text-emerald-300">
                   Small Account / Guardrails On
                 </p>
               </div>
+
               <div className="rounded-2xl bg-slate-950/60 p-3">
-                <p className="text-slate-400">Max Drawdown Target</p>
-                <p className="mt-1 text-sm font-semibold text-rose-300">
-                  &lt; 2–4% (design target)
+                <p className="text-slate-400">Execution</p>
+                <p className="mt-1 text-sm font-semibold text-slate-100">
+                  Rules-Based / Conditional
                 </p>
               </div>
             </div>
+
+            <p className="mt-4 text-[11px] text-slate-500">
+              Snapshot is illustrative of system configuration and does not
+              imply performance or results.
+            </p>
           </div>
         </div>
       </section>
@@ -90,11 +105,11 @@ export default function Home() {
       <section className="border-b border-slate-800 bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-16">
           <h2 className="text-center text-2xl font-semibold sm:text-3xl">
-            Why YieldCraft works in real markets
+            Why YieldCraft is built for real markets
           </h2>
           <p className="mt-3 text-center text-sm text-slate-300 sm:text-base">
             Direct exchange access, a coordinated bot fleet, and a risk-first
-            architecture — built for people who actually trade.
+            architecture — built to reduce reaction-based trading.
           </p>
 
           <div className="mt-10 grid gap-6 md:grid-cols-3">
@@ -104,11 +119,11 @@ export default function Home() {
               </p>
               <h3 className="mt-2 text-sm font-semibold">No middle layers</h3>
               <p className="mt-2 text-xs text-slate-300">
-                Orders go straight to Coinbase — no copy trading, no pooled
-                funds, fewer moving parts.
+                Orders go straight to Coinbase — no pooled funds, fewer moving
+                parts.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
-                <li>• Maker-first routing to minimize fees</li>
+                <li>• Maker-first routing to help reduce fees</li>
                 <li>• Clean, auditable logs per trade</li>
                 <li>• No withdrawal permissions on API keys</li>
               </ul>
@@ -122,13 +137,13 @@ export default function Home() {
                 Regime-aware intelligence
               </h3>
               <p className="mt-2 text-xs text-slate-300">
-                Recon and Ascend read trend, volatility, and market structure to
-                adapt your risk in real time.
+                Recon and Ascend classify trend, volatility, and structure to
+                adapt risk behavior over time.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
                 <li>• Confidence-scored BUY / SELL / HOLD signals</li>
                 <li>• Dynamic modes from conservative to aggressive</li>
-                <li>• Designed to seek upside while protecting downside</li>
+                <li>• Designed to prioritize survivability first</li>
               </ul>
             </div>
 
@@ -138,13 +153,13 @@ export default function Home() {
               </p>
               <h3 className="mt-2 text-sm font-semibold">Guardrails baked in</h3>
               <p className="mt-2 text-xs text-slate-300">
-                Position sizing, max daily loss, and cooldown logic are built
-                into every strategy.
+                Position sizing, cooldown logic, and risk limits are built into
+                every strategy configuration.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
-                <li>• Small, frequent trades with tight risk</li>
-                <li>• Account-level daily guardrails</li>
-                <li>• Configurable bot mix by risk level</li>
+                <li>• Small, structured sizing options</li>
+                <li>• Account-level guardrails</li>
+                <li>• Configurable bot mix by risk preference</li>
               </ul>
             </div>
           </div>
@@ -158,24 +173,24 @@ export default function Home() {
             Strategies tuned to your risk
           </h2>
           <p className="mt-3 text-center text-sm text-slate-300 sm:text-base">
-            From conservative scalping to intelligent momentum overlays, combine
-            bots to match your goals and comfort level.
+            Combine bots to match your goals and comfort level — with risk-first
+            defaults and configurable guardrails.
           </p>
 
           <div className="mt-10 grid gap-6 md:grid-cols-2">
             <div className="rounded-3xl border border-slate-800 bg-slate-900/70 p-6">
               <p className="text-xs font-semibold uppercase tracking-wide text-emerald-300">
-                Low Risk · Core Engine
+                Core Engine
               </p>
               <h3 className="mt-2 text-lg font-semibold">YieldCraft Pulse</h3>
               <p className="mt-2 text-xs text-slate-300">
-                Conservative BTC engine designed to compound small edges with
-                tight risk and minimal drawdown.
+                Conservative BTC execution engine designed for small, structured
+                decisions with tight risk controls.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
-                <li>• Maker-first scalping with micro position sizes</li>
-                <li>• Strict daily loss caps and cooldowns</li>
-                <li>• Target: 2–4% monthly over a cycle (not guaranteed)</li>
+                <li>• Maker-first logic with micro sizing options</li>
+                <li>• Cooldowns and guardrails to reduce overtrading</li>
+                <li>• Designed for consistency of process (not guaranteed)</li>
               </ul>
             </div>
 
@@ -185,13 +200,13 @@ export default function Home() {
               </p>
               <h3 className="mt-2 text-lg font-semibold">YieldCraft Recon</h3>
               <p className="mt-2 text-xs text-slate-300">
-                AI market intelligence layer that continuously classifies market
-                regimes and feeds signals to every bot.
+                Market intelligence layer that classifies regimes and provides
+                confidence-scored signals to inform bot behavior.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
                 <li>• Confidence-scored BUY / SELL / HOLD</li>
                 <li>• Regime tags: trending, mean-reverting, chop</li>
-                <li>• Shared brain for Pulse, Ascend, Horizon, Ignition</li>
+                <li>• Shared brain for multiple engines</li>
               </ul>
             </div>
 
@@ -201,13 +216,13 @@ export default function Home() {
               </p>
               <h3 className="mt-2 text-lg font-semibold">YieldCraft Ascend</h3>
               <p className="mt-2 text-xs text-slate-300">
-                Dynamic “Mode C” engine that scales risk up or down based on
-                signal confidence and trend strength.
+                Adaptive risk overlay that can scale behavior up or down based
+                on signal confidence and trend conditions.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
-                <li>• Conservative in chop, aggressive in strong trends</li>
+                <li>• More conservative in chop, more active in trends</li>
                 <li>• Uses Recon&apos;s confidence and bias</li>
-                <li>• Designed to seek 10–30%+ months in strong markets (not guaranteed)</li>
+                <li>• Intended for qualified accounts (not guaranteed)</li>
               </ul>
             </div>
 
@@ -220,19 +235,19 @@ export default function Home() {
               </h3>
               <p className="mt-2 text-xs text-slate-300">
                 Horizon focuses on sustained swings; Ignition looks for
-                high-conviction breakouts with tight risk caps.
+                higher-conviction breakouts with risk limits.
               </p>
               <ul className="mt-3 space-y-1 text-xs text-slate-300">
-                <li>• Fewer, higher-impact trades</li>
+                <li>• Fewer, higher-intent trades</li>
                 <li>• Built on top of the same Recon brain</li>
-                <li>• Intended as add-ons for qualified accounts</li>
+                <li>• Add-ons for qualified configurations</li>
               </ul>
             </div>
           </div>
 
           <p className="mt-10 text-center text-xs text-slate-400">
-            Performance targets are design goals, not promises. Actual results
-            vary with market conditions, account size, and configuration.
+            YieldCraft does not guarantee results. Actual outcomes vary with
+            market conditions, configuration, fees, and user decisions.
           </p>
         </div>
       </section>
@@ -241,11 +256,10 @@ export default function Home() {
       <section className="bg-slate-950">
         <div className="mx-auto max-w-4xl px-6 py-16 text-center">
           <h2 className="text-2xl font-semibold sm:text-3xl">
-            Ready to put your capital behind an AI engine with real guardrails?
+            Ready to run a rules-based system with real guardrails?
           </h2>
           <p className="mt-3 text-sm text-slate-300 sm:text-base">
-            Start with Pulse Starter for $9, or unlock the full multi-bot stack
-            with Pro and Elite plans. Cancel anytime.
+            Start with a plan that matches your comfort level. Cancel anytime.
           </p>
           <div className="mt-8 flex justify-center gap-4">
             <a
@@ -261,6 +275,11 @@ export default function Home() {
               Quick Start Guide
             </a>
           </div>
+
+          <p className="mt-6 text-[11px] text-slate-500">
+            Educational and informational only. Not investment advice. Trading
+            involves risk, including possible loss of capital.
+          </p>
         </div>
       </section>
     </main>
