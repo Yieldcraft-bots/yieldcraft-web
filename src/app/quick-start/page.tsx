@@ -93,21 +93,32 @@ export default function QuickStartPage() {
             number={1}
             title="Create / enable your Coinbase Advanced Trade account"
             text="Enable Advanced Trade, then create an API key with View + Trade permissions. Keep it private."
+            href="https://www.coinbase.com/settings/api"
+            cta="Open Coinbase API settings"
           />
+
           <Step
             number={2}
             title="Pick a plan (Starter → Pro → Atlas)"
             text="Starter is perfect to begin. Pro unlocks the full bot suite. Atlas is a buy-only long-term allocator you can bundle anytime."
+            internalHref="/pricing"
+            cta="Go to Pricing"
           />
+
           <Step
             number={3}
             title="Connect your exchange keys in YieldCraft"
             text="You’ll paste your key name + private key into the secure onboarding flow. YieldCraft uses signed requests — it never holds your funds."
+            internalHref="/dashboard"
+            cta="Open Dashboard"
           />
+
           <Step
             number={4}
             title="Turn the engine on (then watch the green lights)"
             text="Once enabled, the bot may wait. That’s normal. Your confirmation is: Connected + Engine Armed + Heartbeat OK."
+            internalHref="/dashboard"
+            cta="Enable the engine in Dashboard"
           />
         </div>
 
@@ -187,9 +198,7 @@ function StatusItem({
 
   return (
     <div className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-      <span
-        className={`mt-1 h-3 w-3 rounded-full ${colorMap[color]} ${ringMap[color]}`}
-      />
+      <span className={`mt-1 h-3 w-3 rounded-full ${colorMap[color]} ${ringMap[color]}`} />
       <div>
         <p className="text-sm font-semibold">{title}</p>
         <p className="text-xs text-slate-400">{description}</p>
@@ -202,20 +211,56 @@ function Step({
   number,
   title,
   text,
+  href,
+  internalHref,
+  cta,
 }: {
   number: number;
   title: string;
   text: string;
+  href?: string; // external link (Coinbase)
+  internalHref?: string; // internal link (YieldCraft)
+  cta?: string;
 }) {
-  return (
-    <div className="group relative flex gap-4 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 transition hover:border-amber-500/40 hover:shadow-[0_0_60px_rgba(251,191,36,0.10)]">
-      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-400 text-sm font-bold text-slate-950">
+  const clickable = Boolean(href || internalHref);
+
+  const CardInner = (
+    <div className="flex gap-4">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-400 text-sm font-bold text-slate-950">
         {number}
       </div>
-      <div>
+      <div className="min-w-0">
         <h4 className="font-semibold">{title}</h4>
         <p className="mt-1 text-sm text-slate-400">{text}</p>
+
+        {clickable && (
+          <p className="mt-2 text-xs font-semibold text-amber-300">
+            → {cta ?? "Open"}
+          </p>
+        )}
       </div>
     </div>
   );
+
+  const className =
+    "group relative block rounded-3xl border border-slate-800 bg-slate-900/40 p-6 transition " +
+    "hover:border-amber-500/40 hover:shadow-[0_0_60px_rgba(251,191,36,0.10)]";
+
+  if (internalHref) {
+    return (
+      <Link href={internalHref} className={className}>
+        {CardInner}
+      </Link>
+    );
+  }
+
+  if (href) {
+    return (
+      <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+        {CardInner}
+      </a>
+    );
+  }
+
+  return <div className={className}>{CardInner}</div>;
 }
