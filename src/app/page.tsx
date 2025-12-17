@@ -58,7 +58,6 @@ export default function Home() {
               Pulse + Recon · BTC Engine
             </h2>
 
-            {/* Tightened (no implied performance / no implied execution guarantee) */}
             <p className="mt-2 text-xs text-slate-400">
               Example configuration view. When enabled, orders may route to
               Coinbase using rules-based execution, with signal logic informing
@@ -95,7 +94,6 @@ export default function Home() {
               </div>
             </div>
 
-            {/* Stronger disclaimer */}
             <p className="mt-4 text-[11px] text-slate-500">
               Snapshot is illustrative only and does not represent performance,
               expected returns, or likelihood of profit.
@@ -340,12 +338,31 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer micro-disclaimer */}
+      {/* Footer with Terms/Privacy links */}
       <footer className="border-t border-slate-800 bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-8 text-center text-[11px] text-slate-500">
-          YieldCraft provides software tools for structured workflows. Not
-          investment advice. Trading involves risk, including possible loss of
-          capital. No guarantees of performance.
+          <div className="flex flex-col items-center justify-center gap-2">
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+              <a
+                href="/terms"
+                className="underline underline-offset-4 hover:text-slate-300"
+              >
+                Terms
+              </a>
+              <a
+                href="/privacy"
+                className="underline underline-offset-4 hover:text-slate-300"
+              >
+                Privacy
+              </a>
+            </div>
+
+            <div>
+              YieldCraft provides software tools for structured workflows. Not
+              investment advice. Trading involves risk, including possible loss
+              of capital. No guarantees of performance.
+            </div>
+          </div>
         </div>
       </footer>
     </main>
