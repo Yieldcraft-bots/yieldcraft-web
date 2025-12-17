@@ -109,8 +109,8 @@ export default function QuickStartPage() {
             number={3}
             title="Connect your exchange keys in YieldCraft"
             text="You’ll paste your key name + private key into the secure onboarding flow. YieldCraft uses signed requests — it never holds your funds."
-            internalHref="/dashboard"
-            cta="Open Dashboard"
+            internalHref="/connect-keys"
+            cta="Open Secure Onboarding"
           />
 
           <Step
@@ -118,7 +118,7 @@ export default function QuickStartPage() {
             title="Turn the engine on (then watch the green lights)"
             text="Once enabled, the bot may wait. That’s normal. Your confirmation is: Connected + Engine Armed + Heartbeat OK."
             internalHref="/dashboard"
-            cta="Enable the engine in Dashboard"
+            cta="Go to Dashboard"
           />
         </div>
 
