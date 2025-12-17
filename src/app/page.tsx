@@ -59,8 +59,7 @@ export default function Home() {
             </h2>
             <p className="mt-2 text-xs text-slate-400">
               Orders route directly to Coinbase using maker-first logic, with
-              Recon controlling BUY / SELL / HOLD based on regime and
-              confidence.
+              Recon controlling BUY / SELL / HOLD based on regime and confidence.
             </p>
 
             <div className="mt-4 grid grid-cols-2 gap-4 text-xs">
@@ -94,8 +93,8 @@ export default function Home() {
             </div>
 
             <p className="mt-4 text-[11px] text-slate-500">
-              Snapshot is illustrative of system configuration and does not
-              imply performance or results.
+              Snapshot is illustrative of system configuration and does not imply
+              performance or results.
             </p>
           </div>
         </div>
@@ -252,6 +251,60 @@ export default function Home() {
         </div>
       </section>
 
+      {/* Important Disclosures */}
+      <section className="border-t border-slate-800 bg-slate-950">
+        <div className="mx-auto max-w-6xl px-6 py-14">
+          <h2 className="text-center text-xl font-semibold sm:text-2xl">
+            Important Disclosures
+          </h2>
+
+          <div className="mx-auto mt-6 max-w-3xl rounded-3xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-200">
+            <ul className="space-y-3 text-slate-300">
+              <li>
+                <span className="font-semibold text-slate-100">
+                  Not investment advice:
+                </span>{" "}
+                YieldCraft provides software tools and systems for structured
+                trading workflows. Nothing on this site is financial, investment,
+                tax, or legal advice.
+              </li>
+              <li>
+                <span className="font-semibold text-slate-100">Risk of loss:</span>{" "}
+                Trading involves risk, and losses are possible, including loss of
+                principal.
+              </li>
+              <li>
+                <span className="font-semibold text-slate-100">No guarantees:</span>{" "}
+                YieldCraft does not guarantee performance, profits, or protection
+                from losses. Any examples, targets, or design goals are
+                illustrative and may not reflect real results.
+              </li>
+              <li>
+                <span className="font-semibold text-slate-100">
+                  User responsibility:
+                </span>{" "}
+                You are solely responsible for your decisions, configuration, and
+                risk management. Only use capital you can afford to risk.
+              </li>
+              <li>
+                <span className="font-semibold text-slate-100">
+                  Third-party platforms:
+                </span>{" "}
+                Execution relies on third-party exchanges and infrastructure that
+                may experience outages, slippage, fees, latency, or other
+                limitations.
+              </li>
+            </ul>
+
+            <p className="mt-5 text-xs text-slate-400">
+              By using YieldCraft, you acknowledge these risks and that outcomes
+              vary with market conditions, fees, configuration, and user
+              decisions.
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Final CTA */}
       <section className="bg-slate-950">
         <div className="mx-auto max-w-4xl px-6 py-16 text-center">
@@ -282,6 +335,15 @@ export default function Home() {
           </p>
         </div>
       </section>
+
+      {/* Footer micro-disclaimer */}
+      <footer className="border-t border-slate-800 bg-slate-950">
+        <div className="mx-auto max-w-6xl px-6 py-8 text-center text-[11px] text-slate-500">
+          YieldCraft provides software tools for structured workflows. Not
+          investment advice. Trading involves risk, including possible loss of
+          capital. No guarantees of performance.
+        </div>
+      </footer>
     </main>
   );
 }
