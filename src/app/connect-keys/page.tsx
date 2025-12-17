@@ -1,6 +1,8 @@
 // src/app/connect-keys/page.tsx
 import Link from "next/link";
 
+const COINBASE_REF_PATH = "/go/coinbase"; // server-side redirect you already created
+
 export default function ConnectKeysPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -18,8 +20,35 @@ export default function ConnectKeysPage() {
           <p className="mt-4 text-lg text-slate-300">
             YieldCraft connects directly to Coinbase using signed requests.
             <br />
-            We never move funds. We never store balances.
+            We never withdraw. Funds stay on Coinbase.
           </p>
+        </div>
+
+        {/* STEP 0 (Affiliate / attribution helper) */}
+        <div className="mb-6 rounded-3xl border border-emerald-900/40 bg-emerald-950/25 p-6">
+          <h3 className="text-lg font-semibold mb-2">
+            0. New to Coinbase? Start here first (one time)
+          </h3>
+
+          <p className="text-sm text-slate-300 mb-4">
+            If you don’t have a Coinbase account yet, click this first so Coinbase can attribute
+            your signup to YieldCraft.
+          </p>
+
+          <div className="flex flex-wrap gap-3">
+            <a
+              href={COINBASE_REF_PATH}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex rounded-full bg-emerald-400 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-300"
+            >
+              Create Coinbase account (referral) →
+            </a>
+
+            <p className="text-xs text-slate-500 self-center">
+              Attribution is handled by Coinbase; this step helps ensure the referral click happens first.
+            </p>
+          </div>
         </div>
 
         {/* STEP 1 */}
@@ -29,23 +58,44 @@ export default function ConnectKeysPage() {
           </h3>
 
           <p className="text-sm text-slate-400 mb-4">
-            Open Coinbase Advanced Trade API settings and create a key with:
+            Open Coinbase API settings and create a key with:
           </p>
 
           <ul className="mb-4 list-disc pl-5 text-sm text-slate-300 space-y-1">
-            <li><strong>Permissions:</strong> View + Trade</li>
-            <li><strong>Trading:</strong> Enabled</li>
-            <li><strong>Withdrawals:</strong> ❌ Disabled</li>
+            <li>
+              <strong>Permissions:</strong> View + Trade
+            </li>
+            <li>
+              <strong>Trading:</strong> Enabled
+            </li>
+            <li>
+              <strong>Withdrawals:</strong> ❌ Disabled
+            </li>
           </ul>
 
-          <a
-            href="https://www.coinbase.com/settings/api"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex rounded-full bg-amber-400 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300"
-          >
-            Open Coinbase API Settings →
-          </a>
+          <div className="flex flex-wrap gap-3">
+            <a
+              href="https://www.coinbase.com/settings/api"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex rounded-full bg-amber-400 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300"
+            >
+              Open Coinbase API Settings →
+            </a>
+
+            <a
+              href={COINBASE_REF_PATH}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex rounded-full border border-slate-700 px-5 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500"
+            >
+              New to Coinbase? Start here →
+            </a>
+          </div>
+
+          <p className="mt-3 text-xs text-slate-500">
+            Tip: If you’re brand new, click “Start here” first, then come back and create the API key.
+          </p>
         </div>
 
         {/* STEP 2 */}
@@ -54,9 +104,7 @@ export default function ConnectKeysPage() {
             2. Paste your keys into YieldCraft
           </h3>
 
-          <p className="text-sm text-slate-400">
-            You’ll paste:
-          </p>
+          <p className="text-sm text-slate-400">You’ll paste:</p>
 
           <ul className="mt-2 list-disc pl-5 text-sm text-slate-300 space-y-1">
             <li>API Key Name</li>
@@ -86,7 +134,7 @@ export default function ConnectKeysPage() {
         </div>
 
         {/* CTA */}
-        <div className="flex gap-4">
+        <div className="flex flex-wrap gap-4">
           <Link
             href="/dashboard"
             className="rounded-full bg-amber-400 px-6 py-3 text-sm font-semibold text-slate-950 hover:bg-amber-300"
@@ -101,6 +149,10 @@ export default function ConnectKeysPage() {
             Back to Quick Start
           </Link>
         </div>
+
+        <p className="mt-10 text-xs text-slate-500">
+          Note: Coinbase referral eligibility and commissions are determined by Coinbase’s program terms and the user’s region.
+        </p>
       </div>
     </main>
   );
