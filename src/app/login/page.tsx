@@ -3,7 +3,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 type Mode = "signup" | "login";
 
@@ -111,7 +111,9 @@ function LoginInner() {
             onClick={() => setMode((m) => (m === "login" ? "signup" : "login"))}
             className="w-full text-sm text-white/70 hover:text-white"
           >
-            {mode === "login" ? "Need an account? Sign up" : "Already have an account? Log in"}
+            {mode === "login"
+              ? "Need an account? Sign up"
+              : "Already have an account? Log in"}
           </button>
         </form>
       </div>
@@ -120,7 +122,6 @@ function LoginInner() {
 }
 
 export default function LoginPage() {
-  // Suspense boundary fixes Next.js build/prerender error with useSearchParams()
   return (
     <Suspense
       fallback={
