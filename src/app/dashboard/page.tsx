@@ -2,11 +2,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-// IMPORTANT: Use RELATIVE import to avoid Vercel/Linux alias/casing issues.
+// IMPORTANT: keep this relative + match the actual filename exactly
 import { supabase } from "../../lib/supabaseclient";
+
+type Conn = "ok" | "no" | "checking";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -14,42 +16,62 @@ export default function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
+  // Real meanings:
+  // - accountConn: "SIGNED IN" status (auth/session)
+  // - exchangeConn: placeholder until /api/health is wired
+  const [accountConn, setAccountConn] = useState<Conn>("checking");
+  const [exchangeConn, setExchangeConn] = useState<Conn>("no"); // stays red until wired
+  const [lastCheck, setLastCheck] = useState<Date | null>(null);
+
+  const runCheck = useCallback(async () => {
+    setChecking(true);
+    setAccountConn("checking");
+    setLastCheck(new Date());
+
+    try {
+      // If env isn't set, supabase may still exist but auth won't work.
+      // We treat that as not authed and redirect to login.
+      const { data } = await supabase.auth.getSession();
+      const ok = !!data?.session;
+
+      setAuthed(ok);
+      setAccountConn(ok ? "ok" : "no");
+      setChecking(false);
+
+      if (!ok) router.replace("/login");
+
+      // Exchange check intentionally NOT wired yet (read-only safe placeholder)
+      setExchangeConn("no");
+    } catch {
+      setAuthed(false);
+      setAccountConn("no");
+      setExchangeConn("no");
+      setChecking(false);
+      router.replace("/login");
+    }
+  }, [router]);
+
   useEffect(() => {
     let mounted = true;
 
-    async function check() {
-      try {
-        if (!supabase) {
-          // If Supabase env vars aren't set, treat as not authed.
-          if (mounted) {
-            setAuthed(false);
-            setChecking(false);
-          }
-          router.replace("/login");
-          return;
-        }
+    (async () => {
+      if (!mounted) return;
+      await runCheck();
+    })();
 
-        const { data } = await supabase.auth.getSession();
-        const ok = !!data?.session;
-
-        if (!mounted) return;
-        setAuthed(ok);
-        setChecking(false);
-
-        if (!ok) router.replace("/login");
-      } catch {
-        if (!mounted) return;
-        setAuthed(false);
-        setChecking(false);
-        router.replace("/login");
-      }
-    }
-
-    check();
     return () => {
       mounted = false;
     };
-  }, [router]);
+  }, [runCheck]);
+
+  const fmt = (d: Date) =>
+    d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+    });
 
   // Simple guard UI
   if (checking) {
@@ -69,19 +91,30 @@ export default function DashboardPage() {
     );
   }
 
-  // NOTE: read-only UI. This is NOT tied to trading.
-  // For now we treat "Connected" as "site reachable / dashboard online".
-  const connected = true; // later: wire to /api/health
-  const lastCheck = new Date();
+  const pill = (state: Conn) => {
+    if (state === "checking") {
+      return {
+        wrap: "bg-slate-800/60 text-slate-200 ring-1 ring-slate-700",
+        dot: "bg-slate-300",
+        label: "CHECKING",
+      };
+    }
+    if (state === "ok") {
+      return {
+        wrap: "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30",
+        dot: "bg-emerald-400",
+        label: "GREEN",
+      };
+    }
+    return {
+      wrap: "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
+      dot: "bg-rose-400",
+      label: "RED",
+    };
+  };
 
-  const fmt = (d: Date) =>
-    d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+  const accP = pill(accountConn);
+  const exP = pill(exchangeConn);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -94,32 +127,42 @@ export default function DashboardPage() {
                 Dashboard · Control Panel (Read-Only)
               </span>
 
+              {/* Signed-in status (real) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  connected
-                    ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30"
-                    : "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
+                  accP.wrap,
                 ].join(" ")}
+                title="This reflects whether you are signed in (Supabase session)."
               >
-                <span
-                  className={[
-                    "h-2 w-2 rounded-full",
-                    connected ? "bg-emerald-400" : "bg-rose-400",
-                  ].join(" ")}
-                />
-                {connected ? "CONNECTED" : "NOT CONNECTED"}
+                <span className={["h-2 w-2 rounded-full", accP.dot].join(" ")} />
+                SIGNED IN: {accP.label}
+              </span>
+
+              {/* Exchange status (placeholder) */}
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  exP.wrap,
+                ].join(" ")}
+                title="This will turn green only after we wire a read-only /api/health exchange probe."
+              >
+                <span className={["h-2 w-2 rounded-full", exP.dot].join(" ")} />
+                EXCHANGE: {exP.label}
               </span>
 
               <span className="text-xs text-slate-400">
                 Last check:{" "}
-                <span className="text-slate-200">{fmt(lastCheck)}</span>
+                <span className="text-slate-200">
+                  {lastCheck ? fmt(lastCheck) : "—"}
+                </span>
               </span>
 
               <button
                 type="button"
+                onClick={runCheck}
                 className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/70"
-                title="This is a UI button for now (no trading). We'll wire it later."
+                title="Re-check signed-in state (read-only)."
               >
                 Re-check
               </button>
@@ -172,7 +215,7 @@ export default function DashboardPage() {
                       ✓
                     </span>
                     <span>
-                      <span className="font-semibold text-slate-50">Green</span> = dashboard is reachable
+                      <span className="font-semibold text-slate-50">SIGNED IN green</span> = user session is valid
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
@@ -180,7 +223,7 @@ export default function DashboardPage() {
                       ✕
                     </span>
                     <span>
-                      <span className="font-semibold text-slate-50">Red</span> = not reachable / failing
+                      <span className="font-semibold text-slate-50">EXCHANGE red</span> = not verified yet (until health probe is wired)
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
@@ -194,7 +237,7 @@ export default function DashboardPage() {
                 </ul>
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-400">
-                  Next upgrade: this check will also confirm exchange connection — still read-only.
+                  Next upgrade: add a read-only /api/health probe so EXCHANGE can turn green only when verified.
                 </div>
               </aside>
             </div>
@@ -215,137 +258,78 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-6 grid gap-4 lg:grid-cols-3">
-            {/* Connection */}
+            {/* Account */}
             <div
               className={[
                 "rounded-3xl border bg-slate-900/40 p-5",
-                connected
+                accountConn === "ok"
                   ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
                   : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
               ].join(" ")}
             >
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Account
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Account</p>
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    connected ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
+                    accountConn === "ok"
+                      ? "bg-emerald-500/15 text-emerald-200"
+                      : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
-                  {connected ? "GREEN" : "RED"}
+                  {accountConn === "ok" ? "GREEN" : "RED"}
                 </span>
               </div>
-              <p className="mt-2 text-lg font-semibold">Connection</p>
+              <p className="mt-2 text-lg font-semibold">Signed In</p>
               <p className="mt-1 text-sm text-slate-300">
-                {connected
-                  ? "Site reachable. You can proceed to connect exchange keys."
-                  : "Not reachable yet. Try again shortly."}
+                {accountConn === "ok"
+                  ? "Session verified. You can continue setup."
+                  : "Not signed in. You’ll be redirected to login."}
               </p>
             </div>
 
             {/* Engine */}
             <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Engine
-                </p>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">
-                  —
-                </span>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Engine</p>
+                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">—</span>
               </div>
               <p className="mt-2 text-lg font-semibold">Armed State</p>
               <p className="mt-1 text-sm text-slate-300">
-                Disarmed (default). We keep defaults safe. Enabling execution is a separate step.
+                Disarmed (default). Enabling execution is a separate, gated step.
               </p>
             </div>
 
-            {/* Setup Path */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Setup Path
-              </p>
-              <p className="mt-2 text-sm text-slate-300">
-                Do this once. Then let the system run.
-              </p>
-
-              <div className="mt-4 space-y-3">
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    Step 1
-                  </p>
-                  <p className="mt-1 font-semibold">Pick a plan</p>
-                  <Link
-                    href="/pricing"
-                    className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200"
-                  >
-                    Go to Pricing →
-                  </Link>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    Step 2
-                  </p>
-                  <p className="mt-1 font-semibold">Connect exchange keys</p>
-                  <Link
-                    href="/connect-keys"
-                    className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200"
-                  >
-                    Open Connect Keys →
-                  </Link>
-                </div>
-
-                <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    Step 3
-                  </p>
-                  <p className="mt-1 font-semibold">Confirm setup</p>
-                  <Link
-                    href="/quick-start"
-                    className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200"
-                  >
-                    View Quick Start →
-                  </Link>
-                </div>
-              </div>
-            </div>
-
-            {/* Pulse */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5 lg:col-span-1">
+            {/* Exchange */}
+            <div
+              className={[
+                "rounded-3xl border bg-slate-900/40 p-5",
+                exchangeConn === "ok"
+                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
+                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
+              ].join(" ")}
+            >
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Pulse · BTC
-                </p>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">
-                  —
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Exchange</p>
+                <span
+                  className={[
+                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    exchangeConn === "ok"
+                      ? "bg-emerald-500/15 text-emerald-200"
+                      : "bg-rose-500/15 text-rose-200",
+                  ].join(" ")}
+                >
+                  {exchangeConn === "ok" ? "GREEN" : "RED"}
                 </span>
               </div>
-              <p className="mt-2 text-lg font-semibold">Strategy Mode</p>
+              <p className="mt-2 text-lg font-semibold">Connection</p>
               <p className="mt-1 text-sm text-slate-300">
-                Rules-based / conditional. Built to wait for conditions — not force trades.
-              </p>
-            </div>
-
-            {/* Recon */}
-            <div className="rounded-3xl border border-rose-500/20 bg-slate-900/40 p-5 lg:col-span-1">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Recon
-                </p>
-                <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-200">
-                  RED
-                </span>
-              </div>
-              <p className="mt-2 text-lg font-semibold">Signal Feed</p>
-              <p className="mt-1 text-sm text-slate-300">
-                Not connected yet. Once connected, this will show BUY / SELL / HOLD with confidence.
+                Not verified yet. This turns green only after we wire a read-only health probe.
               </p>
             </div>
 
             {/* Principle */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5 lg:col-span-1">
+            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5 lg:col-span-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                 The YieldCraft principle
               </p>
@@ -356,7 +340,7 @@ export default function DashboardPage() {
                 Small inputs. Strict rules. Patient execution.
               </p>
 
-              <div className="mt-4">
+              <div className="mt-4 flex flex-wrap gap-3">
                 <Link
                   href="/"
                   className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/20 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
