@@ -3,7 +3,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../lib/supabaseclient"; // ✅ no @ alias, no .ts extension
+import { supabase } from "../../lib/supabaseClient"; // ✅ no @ alias, no .ts extension
 
 type Mode = "signup" | "login";
 

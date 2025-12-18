@@ -5,8 +5,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-// IMPORTANT: keep this relative + match the actual filename exactly
-import { supabase } from "../../lib/supabaseclient";
+// ✅ IMPORTANT: match the filename exactly
+import { supabase } from "../../lib/supabaseClient";
 
 type Conn = "ok" | "no" | "checking";
 
@@ -252,9 +252,7 @@ export default function DashboardPage() {
                     <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-800 text-slate-200 ring-1 ring-slate-700">
                       🛡️
                     </span>
-                    <span>
-                      Exchange-key connection is a separate status (we’ll add it next).
-                    </span>
+                    <span>Exchange-key connection is a separate status (we’ll add it next).</span>
                   </li>
                 </ul>
 
@@ -294,18 +292,14 @@ export default function DashboardPage() {
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    accountConn === "ok"
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-rose-500/15 text-rose-200",
+                    accountConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
                   {accountConn === "ok" ? "GREEN" : "RED"}
                 </span>
               </div>
               <p className="mt-2 text-lg font-semibold">Signed In</p>
-              <p className="mt-1 text-sm text-slate-300">
-                Session verified. You can continue setup.
-              </p>
+              <p className="mt-1 text-sm text-slate-300">Session verified. You can continue setup.</p>
             </div>
 
             {/* Engine */}
@@ -336,9 +330,7 @@ export default function DashboardPage() {
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    healthConn === "ok"
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-rose-500/15 text-rose-200",
+                    healthConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
                   {healthConn === "ok" ? "GREEN" : "RED"}
@@ -346,23 +338,17 @@ export default function DashboardPage() {
               </div>
               <p className="mt-2 text-lg font-semibold">/api/health</p>
               <p className="mt-1 text-sm text-slate-300">
-                {healthConn === "ok"
-                  ? "Health probe verified (ok:true)."
-                  : "Health probe failed or not reachable."}
+                {healthConn === "ok" ? "Health probe verified (ok:true)." : "Health probe failed or not reachable."}
               </p>
             </div>
 
             {/* Principle */}
             <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5 lg:col-span-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                The YieldCraft principle
-              </p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">The YieldCraft principle</p>
               <p className="mt-3 text-sm text-slate-200">
                 Long-term wins come from showing up with a system — not trying to be right every day.
               </p>
-              <p className="mt-2 text-xs text-slate-400">
-                Small inputs. Strict rules. Patient execution.
-              </p>
+              <p className="mt-2 text-xs text-slate-400">Small inputs. Strict rules. Patient execution.</p>
 
               <div className="mt-4 flex flex-wrap gap-3">
                 <Link
@@ -383,17 +369,15 @@ export default function DashboardPage() {
               <li>• Trade log viewer + daily rollups</li>
               <li>• Risk settings with safe defaults</li>
             </ul>
-            <p className="mt-3 text-xs text-slate-500">
-              Built to protect stability: website updates first, execution isolated.
-            </p>
+            <p className="mt-3 text-xs text-slate-500">Built to protect stability: website updates first, execution isolated.</p>
           </div>
         </div>
       </section>
 
       <footer className="border-t border-slate-800 bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-8 text-center text-[11px] text-slate-500">
-          YieldCraft provides software tools for structured workflows. Not investment advice.
-          Trading involves risk, including possible loss of capital. No guarantees of performance.
+          YieldCraft provides software tools for structured workflows. Not investment advice. Trading involves risk,
+          including possible loss of capital. No guarantees of performance.
         </div>
       </footer>
     </main>
