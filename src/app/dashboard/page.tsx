@@ -1,6 +1,74 @@
+// src/app/dashboard/page.tsx
+"use client";
+
 import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
+// IMPORTANT: Use RELATIVE import to avoid Vercel/Linux alias/casing issues.
+import { supabase } from "../../lib/supabaseclient";
 
 export default function DashboardPage() {
+  const router = useRouter();
+
+  const [checking, setChecking] = useState(true);
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function check() {
+      try {
+        if (!supabase) {
+          // If Supabase env vars aren't set, treat as not authed.
+          if (mounted) {
+            setAuthed(false);
+            setChecking(false);
+          }
+          router.replace("/login");
+          return;
+        }
+
+        const { data } = await supabase.auth.getSession();
+        const ok = !!data?.session;
+
+        if (!mounted) return;
+        setAuthed(ok);
+        setChecking(false);
+
+        if (!ok) router.replace("/login");
+      } catch {
+        if (!mounted) return;
+        setAuthed(false);
+        setChecking(false);
+        router.replace("/login");
+      }
+    }
+
+    check();
+    return () => {
+      mounted = false;
+    };
+  }, [router]);
+
+  // Simple guard UI
+  if (checking) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-300">Checking session…</div>
+      </main>
+    );
+  }
+
+  // If not authed, we already redirected — this prevents a flash.
+  if (!authed) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-300">Redirecting to login…</div>
+      </main>
+    );
+  }
+
   // NOTE: read-only UI. This is NOT tied to trading.
   // For now we treat "Connected" as "site reachable / dashboard online".
   const connected = true; // later: wire to /api/health
@@ -44,7 +112,8 @@ export default function DashboardPage() {
               </span>
 
               <span className="text-xs text-slate-400">
-                Last check: <span className="text-slate-200">{fmt(lastCheck)}</span>
+                Last check:{" "}
+                <span className="text-slate-200">{fmt(lastCheck)}</span>
               </span>
 
               <button
@@ -63,8 +132,7 @@ export default function DashboardPage() {
                   <span className="text-sky-300">simple, clear, and safe.</span>
                 </h1>
                 <p className="mt-3 max-w-2xl text-sm text-slate-300 sm:text-base">
-                  Follow the setup path once. After that, the system runs on rules —
-                  not emotions.
+                  Follow the setup path once. After that, the system runs on rules — not emotions.
                 </p>
 
                 <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -163,9 +231,7 @@ export default function DashboardPage() {
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    connected
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-rose-500/15 text-rose-200",
+                    connected ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
                   {connected ? "GREEN" : "RED"}
@@ -210,7 +276,10 @@ export default function DashboardPage() {
                     Step 1
                   </p>
                   <p className="mt-1 font-semibold">Pick a plan</p>
-                  <Link href="/pricing" className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200">
+                  <Link
+                    href="/pricing"
+                    className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200"
+                  >
                     Go to Pricing →
                   </Link>
                 </div>
@@ -220,7 +289,10 @@ export default function DashboardPage() {
                     Step 2
                   </p>
                   <p className="mt-1 font-semibold">Connect exchange keys</p>
-                  <Link href="/connect-keys" className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200">
+                  <Link
+                    href="/connect-keys"
+                    className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200"
+                  >
                     Open Connect Keys →
                   </Link>
                 </div>
@@ -230,7 +302,10 @@ export default function DashboardPage() {
                     Step 3
                   </p>
                   <p className="mt-1 font-semibold">Confirm setup</p>
-                  <Link href="/quick-start" className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200">
+                  <Link
+                    href="/quick-start"
+                    className="mt-2 inline-flex text-sm font-semibold text-sky-300 hover:text-sky-200"
+                  >
                     View Quick Start →
                   </Link>
                 </div>
