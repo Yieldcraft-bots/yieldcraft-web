@@ -3,7 +3,7 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+import { supabase } from "../../lib/supabaseClient";
 
 type Mode = "signup" | "login";
 
@@ -120,9 +120,15 @@ function LoginInner() {
 }
 
 export default function LoginPage() {
-  // This Suspense boundary fixes the Next.js build/prerender error with useSearchParams().
+  // Suspense boundary fixes Next.js build/prerender error with useSearchParams()
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-white/70">Loading…</div>}>
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center text-white/70">
+          Loading…
+        </div>
+      }
+    >
       <LoginInner />
     </Suspense>
   );
