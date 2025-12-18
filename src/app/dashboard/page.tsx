@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // IMPORTANT: keep this relative + match the actual filename exactly
@@ -12,55 +12,74 @@ type Conn = "ok" | "no" | "checking";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const mountedRef = useRef(true);
 
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
   // Real meanings:
-  // - accountConn: "SIGNED IN" status (auth/session)
-  // - exchangeConn: placeholder until /api/health is wired
+  // - accountConn: SIGNED IN status (auth/session)
+  // - exchangeConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
-  const [exchangeConn, setExchangeConn] = useState<Conn>("no"); // stays red until wired
+  const [exchangeConn, setExchangeConn] = useState<Conn>("checking");
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const runCheck = useCallback(async () => {
     setChecking(true);
     setAccountConn("checking");
+    setExchangeConn("checking");
     setLastCheck(new Date());
 
+    // 1) Check auth session (Supabase)
     try {
-      // If env isn't set, supabase may still exist but auth won't work.
-      // We treat that as not authed and redirect to login.
       const { data } = await supabase.auth.getSession();
       const ok = !!data?.session;
 
+      if (!mountedRef.current) return;
+
       setAuthed(ok);
       setAccountConn(ok ? "ok" : "no");
-      setChecking(false);
 
-      if (!ok) router.replace("/login");
-
-      // Exchange check intentionally NOT wired yet (read-only safe placeholder)
-      setExchangeConn("no");
+      if (!ok) {
+        setExchangeConn("no");
+        setChecking(false);
+        router.replace("/login");
+        return;
+      }
     } catch {
+      if (!mountedRef.current) return;
       setAuthed(false);
       setAccountConn("no");
       setExchangeConn("no");
       setChecking(false);
       router.replace("/login");
+      return;
+    }
+
+    // 2) Read-only health probe (does NOT mean “keys connected”)
+    try {
+      const res = await fetch("/api/health", { cache: "no-store" });
+      const json = (await res.json().catch(() => null)) as
+        | { ok?: boolean }
+        | null;
+
+      const healthy = !!(res.ok && json && json.ok === true);
+
+      if (!mountedRef.current) return;
+      setExchangeConn(healthy ? "ok" : "no");
+      setChecking(false);
+    } catch {
+      if (!mountedRef.current) return;
+      setExchangeConn("no");
+      setChecking(false);
     }
   }, [router]);
 
   useEffect(() => {
-    let mounted = true;
-
-    (async () => {
-      if (!mounted) return;
-      await runCheck();
-    })();
-
+    mountedRef.current = true;
+    runCheck();
     return () => {
-      mounted = false;
+      mountedRef.current = false;
     };
   }, [runCheck]);
 
@@ -139,16 +158,16 @@ export default function DashboardPage() {
                 SIGNED IN: {accP.label}
               </span>
 
-              {/* Exchange status (placeholder) */}
+              {/* Health probe (read-only) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   exP.wrap,
                 ].join(" ")}
-                title="This will turn green only after we wire a read-only /api/health exchange probe."
+                title="This is a read-only /api/health probe (site/backend reachable). It does NOT mean exchange keys are connected."
               >
                 <span className={["h-2 w-2 rounded-full", exP.dot].join(" ")} />
-                EXCHANGE: {exP.label}
+                HEALTH: {exP.label}
               </span>
 
               <span className="text-xs text-slate-400">
@@ -162,7 +181,7 @@ export default function DashboardPage() {
                 type="button"
                 onClick={runCheck}
                 className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/70"
-                title="Re-check signed-in state (read-only)."
+                title="Re-check (read-only)."
               >
                 Re-check
               </button>
@@ -219,11 +238,11 @@ export default function DashboardPage() {
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30">
-                      ✕
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30">
+                      ✓
                     </span>
                     <span>
-                      <span className="font-semibold text-slate-50">EXCHANGE red</span> = not verified yet (until health probe is wired)
+                      <span className="font-semibold text-slate-50">HEALTH green</span> = /api/health returned ok:true (site/backend reachable)
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
@@ -231,13 +250,13 @@ export default function DashboardPage() {
                       🛡️
                     </span>
                     <span>
-                      Trading stays <span className="font-semibold">OFF</span> from this page (safe)
+                      Exchange-key connection is a separate status (we’ll add it next).
                     </span>
                   </li>
                 </ul>
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-400">
-                  Next upgrade: add a read-only /api/health probe so EXCHANGE can turn green only when verified.
+                  Next upgrade: show “EXCHANGE KEYS” status only after we add a safe, read-only key check.
                 </div>
               </aside>
             </div>
@@ -245,7 +264,7 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Status Grid (tight) */}
+      {/* Status Grid */}
       <section className="bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-10">
           <div className="flex items-end justify-between gap-4">
@@ -272,9 +291,7 @@ export default function DashboardPage() {
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    accountConn === "ok"
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-rose-500/15 text-rose-200",
+                    accountConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
                   {accountConn === "ok" ? "GREEN" : "RED"}
@@ -282,9 +299,7 @@ export default function DashboardPage() {
               </div>
               <p className="mt-2 text-lg font-semibold">Signed In</p>
               <p className="mt-1 text-sm text-slate-300">
-                {accountConn === "ok"
-                  ? "Session verified. You can continue setup."
-                  : "Not signed in. You’ll be redirected to login."}
+                Session verified. You can continue setup.
               </p>
             </div>
 
@@ -300,7 +315,7 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            {/* Exchange */}
+            {/* Health */}
             <div
               className={[
                 "rounded-3xl border bg-slate-900/40 p-5",
@@ -310,21 +325,21 @@ export default function DashboardPage() {
               ].join(" ")}
             >
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Exchange</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Health</p>
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    exchangeConn === "ok"
-                      ? "bg-emerald-500/15 text-emerald-200"
-                      : "bg-rose-500/15 text-rose-200",
+                    exchangeConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
                   {exchangeConn === "ok" ? "GREEN" : "RED"}
                 </span>
               </div>
-              <p className="mt-2 text-lg font-semibold">Connection</p>
+              <p className="mt-2 text-lg font-semibold">/api/health</p>
               <p className="mt-1 text-sm text-slate-300">
-                Not verified yet. This turns green only after we wire a read-only health probe.
+                {exchangeConn === "ok"
+                  ? "Health probe verified (ok:true)."
+                  : "Health probe failed or not reachable."}
               </p>
             </div>
 
