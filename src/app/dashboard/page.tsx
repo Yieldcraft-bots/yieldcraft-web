@@ -19,15 +19,15 @@ export default function DashboardPage() {
 
   // Real meanings:
   // - accountConn: SIGNED IN status (auth/session)
-  // - exchangeConn: read-only /api/health probe (site/backend reachable)
+  // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
-  const [exchangeConn, setExchangeConn] = useState<Conn>("checking");
+  const [healthConn, setHealthConn] = useState<Conn>("checking");
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const runCheck = useCallback(async () => {
     setChecking(true);
     setAccountConn("checking");
-    setExchangeConn("checking");
+    setHealthConn("checking");
     setLastCheck(new Date());
 
     // 1) Check auth session (Supabase)
@@ -41,7 +41,7 @@ export default function DashboardPage() {
       setAccountConn(ok ? "ok" : "no");
 
       if (!ok) {
-        setExchangeConn("no");
+        setHealthConn("no");
         setChecking(false);
         router.replace("/login");
         return;
@@ -50,7 +50,7 @@ export default function DashboardPage() {
       if (!mountedRef.current) return;
       setAuthed(false);
       setAccountConn("no");
-      setExchangeConn("no");
+      setHealthConn("no");
       setChecking(false);
       router.replace("/login");
       return;
@@ -59,18 +59,22 @@ export default function DashboardPage() {
     // 2) Read-only health probe (does NOT mean “keys connected”)
     try {
       const res = await fetch("/api/health", { cache: "no-store" });
-      const json = (await res.json().catch(() => null)) as
-        | { ok?: boolean }
-        | null;
+
+      let json: any = null;
+      try {
+        json = await res.json();
+      } catch {
+        json = null;
+      }
 
       const healthy = !!(res.ok && json && json.ok === true);
 
       if (!mountedRef.current) return;
-      setExchangeConn(healthy ? "ok" : "no");
+      setHealthConn(healthy ? "ok" : "no");
       setChecking(false);
     } catch {
       if (!mountedRef.current) return;
-      setExchangeConn("no");
+      setHealthConn("no");
       setChecking(false);
     }
   }, [router]);
@@ -133,7 +137,7 @@ export default function DashboardPage() {
   };
 
   const accP = pill(accountConn);
-  const exP = pill(exchangeConn);
+  const healthP = pill(healthConn);
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -162,12 +166,12 @@ export default function DashboardPage() {
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  exP.wrap,
+                  healthP.wrap,
                 ].join(" ")}
                 title="This is a read-only /api/health probe (site/backend reachable). It does NOT mean exchange keys are connected."
               >
-                <span className={["h-2 w-2 rounded-full", exP.dot].join(" ")} />
-                HEALTH: {exP.label}
+                <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
+                HEALTH: {healthP.label}
               </span>
 
               <span className="text-xs text-slate-400">
@@ -223,7 +227,6 @@ export default function DashboardPage() {
                 </p>
               </div>
 
-              {/* What this means */}
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
                 <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">
                   What the colors mean
@@ -242,7 +245,7 @@ export default function DashboardPage() {
                       ✓
                     </span>
                     <span>
-                      <span className="font-semibold text-slate-50">HEALTH green</span> = /api/health returned ok:true (site/backend reachable)
+                      <span className="font-semibold text-slate-50">HEALTH green</span> = /api/health returned ok:true
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
@@ -256,7 +259,7 @@ export default function DashboardPage() {
                 </ul>
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-400">
-                  Next upgrade: show “EXCHANGE KEYS” status only after we add a safe, read-only key check.
+                  Next upgrade: add “EXCHANGE KEYS” status only after a safe, read-only key check.
                 </div>
               </aside>
             </div>
@@ -291,7 +294,9 @@ export default function DashboardPage() {
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    accountConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
+                    accountConn === "ok"
+                      ? "bg-emerald-500/15 text-emerald-200"
+                      : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
                   {accountConn === "ok" ? "GREEN" : "RED"}
@@ -307,7 +312,9 @@ export default function DashboardPage() {
             <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Engine</p>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">—</span>
+                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">
+                  —
+                </span>
               </div>
               <p className="mt-2 text-lg font-semibold">Armed State</p>
               <p className="mt-1 text-sm text-slate-300">
@@ -319,7 +326,7 @@ export default function DashboardPage() {
             <div
               className={[
                 "rounded-3xl border bg-slate-900/40 p-5",
-                exchangeConn === "ok"
+                healthConn === "ok"
                   ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
                   : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
               ].join(" ")}
@@ -329,15 +336,17 @@ export default function DashboardPage() {
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    exchangeConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
+                    healthConn === "ok"
+                      ? "bg-emerald-500/15 text-emerald-200"
+                      : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
-                  {exchangeConn === "ok" ? "GREEN" : "RED"}
+                  {healthConn === "ok" ? "GREEN" : "RED"}
                 </span>
               </div>
               <p className="mt-2 text-lg font-semibold">/api/health</p>
               <p className="mt-1 text-sm text-slate-300">
-                {exchangeConn === "ok"
+                {healthConn === "ok"
                   ? "Health probe verified (ok:true)."
                   : "Health probe failed or not reachable."}
               </p>
@@ -366,7 +375,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Future */}
           <div className="mt-6 rounded-3xl border border-slate-800 bg-slate-900/30 p-5">
             <p className="text-sm font-semibold">What this dashboard will become</p>
             <ul className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
@@ -382,7 +390,6 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-8 text-center text-[11px] text-slate-500">
           YieldCraft provides software tools for structured workflows. Not investment advice.
