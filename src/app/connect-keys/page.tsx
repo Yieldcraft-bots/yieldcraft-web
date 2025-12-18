@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 // Server-side referral redirect you already created
 const COINBASE_REF_PATH = "/go/coinbase";
@@ -65,7 +65,7 @@ function ExternalButton({
   variant = "primary",
 }: {
   href: string;
-  children: React.ReactNode;
+  children: ReactNode;
   onClick?: () => void;
   variant?: "primary" | "secondary";
 }) {
@@ -97,6 +97,7 @@ export default function ConnectKeysPage() {
   const [keyName, setKeyName] = useState("");
   const [keyId, setKeyId] = useState("");
   const [keySecret, setKeySecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
 
   // Status lights
   const [coinbaseStep, setCoinbaseStep] = useState<Status>("idle"); // Step 1
@@ -123,7 +124,6 @@ export default function ConnectKeysPage() {
   async function onVerify() {
     setMessage(null);
 
-    // Minimal preflight (keeps UX moving, prevents false “broken” feelings)
     if (!keyName.trim() || !keyId.trim() || !keySecret.trim()) {
       setVerifyStep("warn");
       setMessage("Please paste all three fields (Key Name, Key ID, and Secret).");
@@ -141,7 +141,6 @@ export default function ConnectKeysPage() {
       return;
     }
 
-    // Local verify success (server-side verify comes next step: /api/coinbase/verify)
     setVerifyStep("ok");
     setMessage(
       "Looks good ✅ Next: we’ll add a safe server-side verification (read-only) so the dashboard can show “EXCHANGE KEYS: GREEN”."
@@ -159,11 +158,15 @@ export default function ConnectKeysPage() {
             </span>
 
             <h1 className="text-3xl font-bold leading-tight sm:text-4xl">
-              Connect Coinbase in <span className="text-sky-300">under 5 minutes</span>.
+              Connect Coinbase in{" "}
+              <span className="text-sky-300">under 5 minutes</span>.
             </h1>
 
             <p className="max-w-2xl text-sm text-slate-300 sm:text-base">
-              Follow the steps below. <span className="font-semibold text-slate-100">Green lights mean you’re done.</span>
+              Follow the steps below.{" "}
+              <span className="font-semibold text-slate-100">
+                Green lights mean you’re done.
+              </span>
             </p>
 
             <div className="mt-2 flex flex-wrap gap-2">
@@ -182,7 +185,11 @@ export default function ConnectKeysPage() {
           <div className="rounded-3xl border border-slate-800 bg-slate-900/35 p-6">
             <h2 className="text-lg font-semibold">🔒 Your funds stay on Coinbase</h2>
             <p className="mt-2 text-sm text-slate-300">
-              YieldCraft connects using <span className="font-semibold text-slate-100">read + trade permissions only</span>.
+              YieldCraft connects using{" "}
+              <span className="font-semibold text-slate-100">
+                read + trade permissions only
+              </span>
+              .
             </p>
             <ul className="mt-4 space-y-2 text-sm text-slate-200">
               <li>• ❌ We cannot withdraw funds</li>
@@ -216,7 +223,7 @@ export default function ConnectKeysPage() {
                 <p className="mt-1 text-base font-semibold">Separate account for bots</p>
                 <ul className="mt-3 space-y-1 text-sm text-slate-300">
                   <li>• Cleaner reporting & taxes</li>
-                  <li>• No manual interference</li>
+                  <li>• No accidental interference</li>
                   <li>• Easier performance tracking</li>
                 </ul>
 
@@ -247,7 +254,8 @@ export default function ConnectKeysPage() {
                 <p className="text-sm font-semibold text-slate-50">Already use Coinbase?</p>
                 <p className="mt-1 text-base font-semibold">Use existing account</p>
                 <p className="mt-3 text-sm text-slate-300">
-                  Works great if you mainly hold long-term. If you actively trade, a separate account is usually simpler.
+                  Works great if you mainly hold long-term. If you actively trade, a
+                  separate account is usually simpler.
                 </p>
 
                 <div className="mt-4">
@@ -270,12 +278,22 @@ export default function ConnectKeysPage() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
-              <p className="text-sm font-semibold text-slate-100">Create ONE new API key with:</p>
+              <p className="text-sm font-semibold text-slate-100">
+                Create ONE new API key with:
+              </p>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                <li>• ✅ Permissions: <span className="font-semibold">View + Trade</span></li>
-                <li>• ❌ Withdrawals: <span className="font-semibold">Disabled</span></li>
-                <li>• 📁 Portfolio: <span className="font-semibold">Primary</span></li>
-                <li>• 🌐 IP restrictions: <span className="font-semibold">None</span></li>
+                <li>
+                  • ✅ Permissions: <span className="font-semibold">View + Trade</span>
+                </li>
+                <li>
+                  • ❌ Withdrawals: <span className="font-semibold">Disabled</span>
+                </li>
+                <li>
+                  • 📁 Portfolio: <span className="font-semibold">Primary</span>
+                </li>
+                <li>
+                  • 🌐 IP restrictions: <span className="font-semibold">None</span>
+                </li>
               </ul>
 
               <div className="mt-5">
@@ -325,10 +343,20 @@ export default function ConnectKeysPage() {
               </div>
 
               <div>
-                <label className="block text-sm text-slate-200 mb-1">API Secret</label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-sm text-slate-200 mb-1">API Secret</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    className="text-xs font-semibold text-slate-300 hover:text-slate-100"
+                  >
+                    {showSecret ? "Hide" : "Show"}
+                  </button>
+                </div>
                 <input
                   value={keySecret}
                   onChange={(e) => setKeySecret(e.target.value)}
+                  type={showSecret ? "text" : "password"}
                   className="w-full rounded-2xl bg-slate-950/40 border border-slate-800 px-4 py-3 text-slate-50 outline-none focus:border-slate-500"
                   placeholder="Paste Secret"
                   autoComplete="off"
@@ -353,7 +381,8 @@ export default function ConnectKeysPage() {
               </button>
 
               <p className="text-xs text-slate-400">
-                Next upgrade: add a safe server-side verification (read-only) so your dashboard can show “EXCHANGE KEYS: GREEN”.
+                Next upgrade: add a safe server-side verification (read-only) so your dashboard can
+                show “EXCHANGE KEYS: GREEN”.
               </p>
             </div>
           </div>
@@ -366,14 +395,16 @@ export default function ConnectKeysPage() {
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
                 <p className="text-sm font-semibold text-slate-100">Pulse (Active)</p>
                 <p className="mt-1 text-sm text-slate-300">
-                  Starts <span className="font-semibold">disarmed</span> by default. Rules-based execution.
+                  Starts <span className="font-semibold">disarmed</span> by default. Rules-based
+                  execution.
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
                 <p className="text-sm font-semibold text-slate-100">Atlas (Long-Term / DCA)</p>
                 <p className="mt-1 text-sm text-slate-300">
-                  Uses the <span className="font-semibold">same connection</span>. No extra setup later.
+                  Uses the <span className="font-semibold">same connection</span>. No extra setup
+                  later.
                 </p>
               </div>
             </div>
@@ -395,7 +426,8 @@ export default function ConnectKeysPage() {
             </div>
 
             <p className="mt-4 text-xs text-slate-500">
-              YieldCraft provides software tools for structured workflows. Not investment advice. Trading involves risk, including possible loss of capital.
+              YieldCraft provides software tools for structured workflows. Not investment advice.
+              Trading involves risk, including possible loss of capital.
             </p>
           </div>
         </div>
