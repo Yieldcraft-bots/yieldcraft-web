@@ -1,23 +1,10 @@
 // src/app/api/entitlements/route.ts
-// Returns the signed-in user's entitlements (pulse/recon/atlas, etc.)
-// Safe: only returns the caller's own row.
-
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-type EntitlementsRow = {
-  user_id: string;
-  pulse: boolean;
-  recon: boolean;
-  atlas: boolean;
-  max_trade_size: number | null;
-  risk_mode: string | null;
-  created_at: string;
-};
-
-function mustEnv(name: string): string {
+function mustEnv(name: string) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
   return v;
@@ -25,62 +12,55 @@ function mustEnv(name: string): string {
 
 export async function GET(req: Request) {
   try {
-    // Server-side Supabase (service role) so we can read public.entitlements reliably
-    const supabaseUrl = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
-    const serviceRole = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
+    const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-    const supabaseAdmin = createClient(supabaseUrl, serviceRole, {
-      auth: { persistSession: false },
+    // IMPORTANT:
+    // Browser login lives in localStorage, so the server won't see it.
+    // We require the client to pass the access token in:
+    // Authorization: Bearer <supabase_access_token>
+    const auth = req.headers.get("authorization") || "";
+    const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+
+    if (!token) {
+      return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
+    }
+
+    // Create a supabase client that uses the user's JWT for RLS-scoped reads
+    const supabase = createClient(url, anon, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Read the user's access token from the request cookies (supabase-js stores it there)
-    const cookieHeader = req.headers.get("cookie") || "";
+    const { data: userRes, error: userErr } = await supabase.auth.getUser();
+    const user = userRes?.user;
 
-    // Ask Supabase who the user is, using the cookie session
-    const supabaseAuth = createClient(
-      supabaseUrl,
-      mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
-      {
-        auth: { persistSession: false },
-        global: { headers: { cookie: cookieHeader } },
-      }
-    );
-
-    const { data: userData, error: userErr } = await supabaseAuth.auth.getUser();
-    if (userErr || !userData?.user?.id) {
-      return NextResponse.json(
-        { ok: false, error: "not_authenticated" },
-        { status: 401 }
-      );
+    if (userErr || !user) {
+      return NextResponse.json({ ok: false, error: "not_authenticated" }, { status: 401 });
     }
 
-    const userId = userData.user.id;
-
-    const { data, error } = await supabaseAdmin
+    const { data: ent, error: entErr } = await supabase
       .from("entitlements")
-      .select("user_id,pulse,recon,atlas,max_trade_size,risk_mode,created_at")
-      .eq("user_id", userId)
-      .maybeSingle<EntitlementsRow>();
+      .select("pulse,recon,atlas,max_trade_size,risk_mode,created_at")
+      .eq("user_id", user.id)
+      .maybeSingle();
 
-    if (error) {
-      return NextResponse.json(
-        { ok: false, error: "db_error", detail: error.message },
-        { status: 500 }
-      );
+    if (entErr) {
+      return NextResponse.json({ ok: false, error: "entitlements_query_failed" }, { status: 500 });
     }
 
-    // If the row doesn't exist yet, return safe defaults (shouldn't happen after your triggers/backfill)
-    const ent = data || {
-      user_id: userId,
-      pulse: false,
-      recon: false,
-      atlas: false,
-      max_trade_size: 0,
-      risk_mode: "safe",
-      created_at: new Date().toISOString(),
-    };
-
-    return NextResponse.json({ ok: true, entitlements: ent }, { status: 200 });
+    return NextResponse.json({
+      ok: true,
+      user_id: user.id,
+      entitlements: ent ?? {
+        pulse: false,
+        recon: false,
+        atlas: false,
+        max_trade_size: 0,
+        risk_mode: "safe",
+        created_at: null,
+      },
+    });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: "server_error", detail: String(e?.message || e) },
