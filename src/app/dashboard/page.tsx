@@ -33,7 +33,7 @@ export default function DashboardPage() {
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
 
-  // NEW: Trading status (read-only from /api/pulse-trade GET)
+  // Trading status (read-only from /api/pulse-trade GET)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -101,6 +101,7 @@ export default function DashboardPage() {
     // 3) Read-only trading gates (does NOT place orders)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
+
       let j: any = null;
       try {
         j = await r.json();
@@ -194,8 +195,16 @@ export default function DashboardPage() {
   const tradeP = pill(tradeConn);
 
   const armedLabel = tradeGates.LIVE_ALLOWED
-    ? { title: "HOT (Live Allowed)", tone: "text-rose-200", badge: "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/25" }
-    : { title: "LOCKED (Safe)", tone: "text-emerald-200", badge: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/25" };
+    ? {
+        title: "HOT (Live Allowed)",
+        tone: "text-rose-200",
+        badge: "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/25",
+      }
+    : {
+        title: "LOCKED (Safe)",
+        tone: "text-emerald-200",
+        badge: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/25",
+      };
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -246,9 +255,7 @@ export default function DashboardPage() {
 
               <span className="text-xs text-slate-400">
                 Last check:{" "}
-                <span className="text-slate-200">
-                  {lastCheck ? fmt(lastCheck) : "—"}
-                </span>
+                <span className="text-slate-200">{lastCheck ? fmt(lastCheck) : "—"}</span>
               </span>
 
               <button
@@ -264,8 +271,7 @@ export default function DashboardPage() {
             <div className="grid gap-6 lg:grid-cols-[1.3fr_0.7fr] lg:items-start">
               <div>
                 <h1 className="text-3xl font-bold leading-tight sm:text-4xl">
-                  Your system hub —{" "}
-                  <span className="text-sky-300">simple, clear, and safe.</span>
+                  Your system hub — <span className="text-sky-300">simple, clear, and safe.</span>
                 </h1>
                 <p className="mt-3 max-w-2xl text-sm text-slate-300 sm:text-base">
                   Follow the setup path once. After that, the system runs on rules — not emotions.
@@ -298,9 +304,7 @@ export default function DashboardPage() {
               </div>
 
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">
-                  What the colors mean
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">What the colors mean</p>
                 <ul className="mt-3 space-y-2 text-sm text-slate-200">
                   <li className="flex items-center gap-2">
                     <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30">
@@ -323,7 +327,8 @@ export default function DashboardPage() {
                       🛡️
                     </span>
                     <span>
-                      <span className="font-semibold text-slate-50">TRADING STATUS green</span> = gate state readable (still can be locked)
+                      <span className="font-semibold text-slate-50">TRADING STATUS green</span> = gate state readable
+                      (still can be locked)
                     </span>
                   </li>
                 </ul>
@@ -418,7 +423,8 @@ export default function DashboardPage() {
                   </span>
                 </div>
                 <p className="mt-2 text-[11px] text-slate-400">
-                  This is read-only status from <code className="text-slate-200">/api/pulse-trade</code>. No trades are placed here.
+                  Read-only status from <code className="text-slate-200">/api/pulse-trade</code>. No trades are placed
+                  here.
                 </p>
               </div>
             </div>
@@ -476,7 +482,9 @@ export default function DashboardPage() {
               <li>• Trade log viewer + daily rollups</li>
               <li>• Risk settings with safe defaults</li>
             </ul>
-            <p className="mt-3 text-xs text-slate-500">Built to protect stability: website updates first, execution isolated.</p>
+            <p className="mt-3 text-xs text-slate-500">
+              Built to protect stability: website updates first, execution isolated.
+            </p>
           </div>
         </div>
       </section>
