@@ -10,6 +10,16 @@ import { supabase } from "../../lib/supabaseClient";
 
 type Conn = "ok" | "no" | "checking";
 
+type TradeGates = {
+  COINBASE_TRADING_ENABLED: boolean;
+  PULSE_TRADE_ARMED: boolean;
+  LIVE_ALLOWED: boolean;
+};
+
+function truthy(v: any) {
+  return v === true || v === "true" || v === 1 || v === "1";
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
@@ -22,12 +32,22 @@ export default function DashboardPage() {
   // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
+
+  // NEW: Trading status (read-only from /api/pulse-trade GET)
+  const [tradeConn, setTradeConn] = useState<Conn>("checking");
+  const [tradeGates, setTradeGates] = useState<TradeGates>({
+    COINBASE_TRADING_ENABLED: false,
+    PULSE_TRADE_ARMED: false,
+    LIVE_ALLOWED: false,
+  });
+
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const runCheck = useCallback(async () => {
     setChecking(true);
     setAccountConn("checking");
     setHealthConn("checking");
+    setTradeConn("checking");
     setLastCheck(new Date());
 
     // 1) Check auth session (Supabase)
@@ -42,6 +62,7 @@ export default function DashboardPage() {
 
       if (!ok) {
         setHealthConn("no");
+        setTradeConn("no");
         setChecking(false);
         router.replace("/login");
         return;
@@ -51,6 +72,7 @@ export default function DashboardPage() {
       setAuthed(false);
       setAccountConn("no");
       setHealthConn("no");
+      setTradeConn("no");
       setChecking(false);
       router.replace("/login");
       return;
@@ -71,12 +93,43 @@ export default function DashboardPage() {
 
       if (!mountedRef.current) return;
       setHealthConn(healthy ? "ok" : "no");
-      setChecking(false);
     } catch {
       if (!mountedRef.current) return;
       setHealthConn("no");
-      setChecking(false);
     }
+
+    // 3) Read-only trading gates (does NOT place orders)
+    try {
+      const r = await fetch("/api/pulse-trade", { cache: "no-store" });
+      let j: any = null;
+      try {
+        j = await r.json();
+      } catch {
+        j = null;
+      }
+
+      const gates = j?.gates || {};
+      const parsed: TradeGates = {
+        COINBASE_TRADING_ENABLED: truthy(gates.COINBASE_TRADING_ENABLED),
+        PULSE_TRADE_ARMED: truthy(gates.PULSE_TRADE_ARMED),
+        LIVE_ALLOWED: truthy(gates.LIVE_ALLOWED),
+      };
+
+      if (!mountedRef.current) return;
+
+      setTradeGates(parsed);
+
+      // "ok" means we can read the gate state successfully
+      // even if LIVE_ALLOWED is false (locked is expected).
+      const ok = !!(r.ok && j && j.ok === true);
+      setTradeConn(ok ? "ok" : "no");
+    } catch {
+      if (!mountedRef.current) return;
+      setTradeConn("no");
+    }
+
+    if (!mountedRef.current) return;
+    setChecking(false);
   }, [router]);
 
   useEffect(() => {
@@ -138,6 +191,11 @@ export default function DashboardPage() {
 
   const accP = pill(accountConn);
   const healthP = pill(healthConn);
+  const tradeP = pill(tradeConn);
+
+  const armedLabel = tradeGates.LIVE_ALLOWED
+    ? { title: "HOT (Live Allowed)", tone: "text-rose-200", badge: "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/25" }
+    : { title: "LOCKED (Safe)", tone: "text-emerald-200", badge: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/25" };
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -172,6 +230,18 @@ export default function DashboardPage() {
               >
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
+              </span>
+
+              {/* Trading status (read-only gates probe) */}
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  tradeP.wrap,
+                ].join(" ")}
+                title="Read-only check of /api/pulse-trade gates. This does NOT place trades."
+              >
+                <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
+                TRADING STATUS: {tradeP.label}
               </span>
 
               <span className="text-xs text-slate-400">
@@ -252,12 +322,14 @@ export default function DashboardPage() {
                     <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-800 text-slate-200 ring-1 ring-slate-700">
                       🛡️
                     </span>
-                    <span>Exchange-key connection is a separate status (we’ll add it next).</span>
+                    <span>
+                      <span className="font-semibold text-slate-50">TRADING STATUS green</span> = gate state readable (still can be locked)
+                    </span>
                   </li>
                 </ul>
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-400">
-                  Next upgrade: add “EXCHANGE KEYS” status only after a safe, read-only key check.
+                  Trading is <span className={armedLabel.tone}>{armedLabel.title}</span> unless you explicitly arm it.
                 </div>
               </aside>
             </div>
@@ -303,17 +375,52 @@ export default function DashboardPage() {
             </div>
 
             {/* Engine */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5">
+            <div
+              className={[
+                "rounded-3xl border bg-slate-900/40 p-5",
+                tradeGates.LIVE_ALLOWED
+                  ? "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]"
+                  : "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]",
+              ].join(" ")}
+            >
               <div className="flex items-center justify-between">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Engine</p>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-semibold text-slate-200">
-                  —
+                <span className={["rounded-full px-2 py-0.5 text-[11px] font-semibold", armedLabel.badge].join(" ")}>
+                  {armedLabel.title}
                 </span>
               </div>
               <p className="mt-2 text-lg font-semibold">Armed State</p>
               <p className="mt-1 text-sm text-slate-300">
-                Disarmed (default). Enabling execution is a separate, gated step.
+                {tradeGates.LIVE_ALLOWED
+                  ? "Armed (hot). Live execution is allowed if called."
+                  : "Locked (safe). Live execution is blocked until explicitly armed."}
               </p>
+
+              <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/35 p-3 text-xs text-slate-300">
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  <span>
+                    COINBASE_TRADING_ENABLED:{" "}
+                    <span className={tradeGates.COINBASE_TRADING_ENABLED ? "text-emerald-200" : "text-rose-200"}>
+                      {tradeGates.COINBASE_TRADING_ENABLED ? "true" : "false"}
+                    </span>
+                  </span>
+                  <span>
+                    PULSE_TRADE_ARMED:{" "}
+                    <span className={tradeGates.PULSE_TRADE_ARMED ? "text-emerald-200" : "text-rose-200"}>
+                      {tradeGates.PULSE_TRADE_ARMED ? "true" : "false"}
+                    </span>
+                  </span>
+                  <span>
+                    LIVE_ALLOWED:{" "}
+                    <span className={tradeGates.LIVE_ALLOWED ? "text-rose-200" : "text-emerald-200"}>
+                      {tradeGates.LIVE_ALLOWED ? "true" : "false"}
+                    </span>
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] text-slate-400">
+                  This is read-only status from <code className="text-slate-200">/api/pulse-trade</code>. No trades are placed here.
+                </p>
+              </div>
             </div>
 
             {/* Health */}
