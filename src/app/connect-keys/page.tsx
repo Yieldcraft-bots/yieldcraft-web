@@ -2,7 +2,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient"; // ✅ match exact filename + correct path
 
 // Server-side referral redirect you already created
 const COINBASE_REF_PATH = "/go/coinbase";
@@ -88,6 +90,56 @@ function ExternalButton({
 }
 
 export default function ConnectKeysPage() {
+  const router = useRouter();
+  const mountedRef = useRef(true);
+
+  const [checking, setChecking] = useState(true);
+  const [authed, setAuthed] = useState(false);
+
+  // 🔒 Auth guard — same pattern as dashboard, prevents non-logged users from seeing key fields
+  useEffect(() => {
+    mountedRef.current = true;
+
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const ok = !!data?.session;
+
+        if (!mountedRef.current) return;
+
+        setAuthed(ok);
+        setChecking(false);
+
+        if (!ok) router.replace("/login");
+      } catch {
+        if (!mountedRef.current) return;
+        setAuthed(false);
+        setChecking(false);
+        router.replace("/login");
+      }
+    })();
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [router]);
+
+  if (checking) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-300">Checking session…</div>
+      </main>
+    );
+  }
+
+  if (!authed) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-300">Redirecting to login…</div>
+      </main>
+    );
+  }
+
   // Step tracking (for “guided page” success rate)
   const [accountChoice, setAccountChoice] = useState<"none" | "new" | "existing">(
     "none"

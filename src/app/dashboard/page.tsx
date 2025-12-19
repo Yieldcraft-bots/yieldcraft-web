@@ -16,6 +16,17 @@ type TradeGates = {
   LIVE_ALLOWED: boolean;
 };
 
+type ExchangeProbe = {
+  ok?: boolean;
+  status?: number;
+  mode?: string;
+  coinbase_auth?: {
+    ok?: boolean;
+    status?: number;
+    auth?: string;
+  };
+};
+
 function truthy(v: any) {
   return v === true || v === "true" || v === 1 || v === "1";
 }
@@ -33,6 +44,14 @@ export default function DashboardPage() {
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
 
+  // NEW: Exchange keys (read-only probe via /api/pulse-heartbeat)
+  const [exchangeConn, setExchangeConn] = useState<Conn>("checking");
+  const [exchangeMeta, setExchangeMeta] = useState<{
+    authOk: boolean;
+    authStatus?: number;
+    mode?: string;
+  }>({ authOk: false });
+
   // Trading status (read-only from /api/pulse-trade GET)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
@@ -47,6 +66,7 @@ export default function DashboardPage() {
     setChecking(true);
     setAccountConn("checking");
     setHealthConn("checking");
+    setExchangeConn("checking");
     setTradeConn("checking");
     setLastCheck(new Date());
 
@@ -62,6 +82,7 @@ export default function DashboardPage() {
 
       if (!ok) {
         setHealthConn("no");
+        setExchangeConn("no");
         setTradeConn("no");
         setChecking(false);
         router.replace("/login");
@@ -72,6 +93,7 @@ export default function DashboardPage() {
       setAuthed(false);
       setAccountConn("no");
       setHealthConn("no");
+      setExchangeConn("no");
       setTradeConn("no");
       setChecking(false);
       router.replace("/login");
@@ -98,7 +120,37 @@ export default function DashboardPage() {
       setHealthConn("no");
     }
 
-    // 3) Read-only trading gates (does NOT place orders)
+    // 3) Exchange keys probe (read-only) — verifies Coinbase auth only
+    try {
+      const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
+
+      let j: ExchangeProbe | null = null;
+      try {
+        j = (await r.json()) as ExchangeProbe;
+      } catch {
+        j = null;
+      }
+
+      const authOk = !!(j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200);
+      const ok = !!(r.ok && j && j.ok === true && authOk);
+
+      if (!mountedRef.current) return;
+
+      setExchangeMeta({
+        authOk,
+        authStatus: j?.coinbase_auth?.status ?? j?.status,
+        mode: j?.mode,
+      });
+
+      // "ok" means: read-only auth verified (not just reachable)
+      setExchangeConn(ok ? "ok" : "no");
+    } catch {
+      if (!mountedRef.current) return;
+      setExchangeConn("no");
+      setExchangeMeta({ authOk: false });
+    }
+
+    // 4) Read-only trading gates (does NOT place orders)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
 
@@ -192,6 +244,7 @@ export default function DashboardPage() {
 
   const accP = pill(accountConn);
   const healthP = pill(healthConn);
+  const exP = pill(exchangeConn);
   const tradeP = pill(tradeConn);
 
   const armedLabel = tradeGates.LIVE_ALLOWED
@@ -235,10 +288,22 @@ export default function DashboardPage() {
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   healthP.wrap,
                 ].join(" ")}
-                title="This is a read-only /api/health probe (site/backend reachable). It does NOT mean exchange keys are connected."
+                title="This is a read-only /api/health probe (site/backend reachable)."
               >
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
+              </span>
+
+              {/* Exchange keys (read-only auth verification) */}
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  exP.wrap,
+                ].join(" ")}
+                title="Read-only Coinbase auth verification via /api/pulse-heartbeat. Does NOT place trades."
+              >
+                <span className={["h-2 w-2 rounded-full", exP.dot].join(" ")} />
+                EXCHANGE KEYS: {exP.label}
               </span>
 
               {/* Trading status (read-only gates probe) */}
@@ -254,8 +319,7 @@ export default function DashboardPage() {
               </span>
 
               <span className="text-xs text-slate-400">
-                Last check:{" "}
-                <span className="text-slate-200">{lastCheck ? fmt(lastCheck) : "—"}</span>
+                Last check: <span className="text-slate-200">{lastCheck ? fmt(lastCheck) : "—"}</span>
               </span>
 
               <button
@@ -323,12 +387,19 @@ export default function DashboardPage() {
                     </span>
                   </li>
                   <li className="flex items-center gap-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30">
+                      ✓
+                    </span>
+                    <span>
+                      <span className="font-semibold text-slate-50">EXCHANGE KEYS green</span> = Coinbase auth verified (read-only)
+                    </span>
+                  </li>
+                  <li className="flex items-center gap-2">
                     <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-800 text-slate-200 ring-1 ring-slate-700">
                       🛡️
                     </span>
                     <span>
-                      <span className="font-semibold text-slate-50">TRADING STATUS green</span> = gate state readable
-                      (still can be locked)
+                      <span className="font-semibold text-slate-50">TRADING STATUS green</span> = gate state readable (still can be locked)
                     </span>
                   </li>
                 </ul>
@@ -423,8 +494,7 @@ export default function DashboardPage() {
                   </span>
                 </div>
                 <p className="mt-2 text-[11px] text-slate-400">
-                  Read-only status from <code className="text-slate-200">/api/pulse-trade</code>. No trades are placed
-                  here.
+                  Read-only status from <code className="text-slate-200">/api/pulse-trade</code>. No trades are placed here.
                 </p>
               </div>
             </div>
@@ -453,6 +523,54 @@ export default function DashboardPage() {
               <p className="mt-1 text-sm text-slate-300">
                 {healthConn === "ok" ? "Health probe verified (ok:true)." : "Health probe failed or not reachable."}
               </p>
+            </div>
+
+            {/* Exchange Keys */}
+            <div
+              className={[
+                "rounded-3xl border bg-slate-900/40 p-5 lg:col-span-3",
+                exchangeConn === "ok"
+                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
+                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
+              ].join(" ")}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Exchange</p>
+                <span
+                  className={[
+                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    exchangeConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
+                  ].join(" ")}
+                >
+                  {exchangeConn === "ok" ? "VERIFIED" : "NOT VERIFIED"}
+                </span>
+              </div>
+              <p className="mt-2 text-lg font-semibold">Coinbase Keys (Read-Only)</p>
+              <p className="mt-1 text-sm text-slate-300">
+                {exchangeConn === "ok"
+                  ? "Authentication verified (status 200). Safe mode confirmed."
+                  : "Auth probe failed or not reachable. Re-check or review env keys."}
+              </p>
+
+              <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/35 p-3 text-xs text-slate-300">
+                <div className="flex flex-wrap gap-x-4 gap-y-1">
+                  <span>
+                    auth_ok:{" "}
+                    <span className={exchangeMeta.authOk ? "text-emerald-200" : "text-rose-200"}>
+                      {exchangeMeta.authOk ? "true" : "false"}
+                    </span>
+                  </span>
+                  <span>
+                    status: <span className="text-slate-200">{exchangeMeta.authStatus ?? "—"}</span>
+                  </span>
+                  <span>
+                    mode: <span className="text-slate-200">{exchangeMeta.mode ?? "—"}</span>
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] text-slate-400">
+                  Data comes from <code className="text-slate-200">/api/pulse-heartbeat</code>. This is a read-only verification, not execution.
+                </p>
+              </div>
             </div>
 
             {/* Principle */}
