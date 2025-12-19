@@ -4,6 +4,8 @@ import Image from "next/image";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
+import AuthNav from "@/components/AuthNav";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -40,7 +42,7 @@ const navLinks = [
   { href: "/quick-start", label: "Quick Start" },
   { href: "/atlas", label: "Atlas" },
   { href: "/affiliate", label: "Affiliate" },
-  { href: "/dashboard", label: "Dashboard" },
+  // Dashboard handled by <AuthNav /> (only shows when signed in)
 ];
 
 export default function RootLayout({
@@ -105,6 +107,9 @@ export default function RootLayout({
                   {l.label}
                 </Link>
               ))}
+
+              {/* Login (logged out) OR Dashboard+Logout (logged in) */}
+              <AuthNav />
             </nav>
 
             {/* CTA */}
@@ -127,7 +132,7 @@ export default function RootLayout({
 
           {/* Mobile nav */}
           <div className="mx-auto max-w-7xl px-5 pb-4 md:hidden">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {navLinks.map((l) => (
                 <Link
                   key={l.href}
@@ -137,6 +142,10 @@ export default function RootLayout({
                   {l.label}
                 </Link>
               ))}
+
+              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80">
+                <AuthNav />
+              </span>
             </div>
           </div>
         </header>
