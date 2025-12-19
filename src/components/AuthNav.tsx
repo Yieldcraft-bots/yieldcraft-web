@@ -14,57 +14,73 @@ export default function AuthNav() {
   const [signedIn, setSignedIn] = useState(false);
 
   useEffect(() => {
-    let alive = true;
+    let mounted = true;
 
-    async function boot() {
+    async function init() {
       try {
         const { data } = await supabase.auth.getSession();
-        if (!alive) return;
+        if (!mounted) return;
         setSignedIn(!!data?.session);
       } catch {
-        if (!alive) return;
+        if (!mounted) return;
         setSignedIn(false);
       } finally {
-        if (alive) setLoading(false);
+        if (!mounted) return;
+        setLoading(false);
       }
     }
 
-    boot();
+    init();
 
+    // Keep nav in sync if session changes (login/logout in another tab)
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
       setSignedIn(!!session);
+      setLoading(false);
     });
 
     return () => {
-      alive = false;
+      mounted = false;
       sub?.subscription?.unsubscribe();
     };
   }, []);
 
-  async function onLogout() {
+  const handleLogout = async () => {
     try {
       await supabase.auth.signOut();
     } finally {
-      router.push("/login");
-      router.refresh();
+      // If you're on an authed page, get them out cleanly.
+      if (pathname?.startsWith("/dashboard")) router.replace("/login");
+      else router.refresh();
     }
+  };
+
+  // Prevent layout jump while checking
+  if (loading) {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full bg-white/30" />
+        <span className="text-sm text-white/60">…</span>
+      </span>
+    );
   }
 
-  // Don’t flash the wrong buttons while loading
-  if (loading) return null;
-
+  // Logged OUT
   if (!signedIn) {
     return (
       <div className="flex items-center gap-2">
+        {/* Login = calm secondary */}
         <Link
           href="/login"
-          className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
+          className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10 hover:border-white/25"
         >
           Login
         </Link>
+
+        {/* Join = primary */}
         <Link
-          href="/login?mode=signup"
-          className="rounded-xl bg-white px-4 py-2 text-sm font-semibold text-black transition hover:brightness-95"
+          href="/pricing"
+          className="inline-flex items-center justify-center rounded-xl bg-yellow-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_12px_40px_rgba(250,204,21,0.22)] transition hover:brightness-110"
         >
           Join
         </Link>
@@ -72,20 +88,21 @@ export default function AuthNav() {
     );
   }
 
+  // Logged IN
   return (
     <div className="flex items-center gap-2">
-      {pathname !== "/dashboard" && (
-        <Link
-          href="/dashboard"
-          className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
-        >
-          Dashboard
-        </Link>
-      )}
+      <Link
+        href="/dashboard"
+        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
+      >
+        Dashboard
+      </Link>
+
       <button
         type="button"
-        onClick={onLogout}
-        className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
+        onClick={handleLogout}
+        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
+        title="Sign out"
       >
         Logout
       </button>
