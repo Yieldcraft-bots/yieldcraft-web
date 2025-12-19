@@ -6,12 +6,13 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
+type SessState = "loading" | "authed" | "guest";
+
 export default function AuthNav() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const [loading, setLoading] = useState(true);
-  const [signedIn, setSignedIn] = useState(false);
+  const [state, setState] = useState<SessState>("loading");
 
   useEffect(() => {
     let mounted = true;
@@ -20,13 +21,10 @@ export default function AuthNav() {
       try {
         const { data } = await supabase.auth.getSession();
         if (!mounted) return;
-        setSignedIn(!!data?.session);
+        setState(data?.session ? "authed" : "guest");
       } catch {
         if (!mounted) return;
-        setSignedIn(false);
-      } finally {
-        if (!mounted) return;
-        setLoading(false);
+        setState("guest");
       }
     }
 
@@ -35,8 +33,7 @@ export default function AuthNav() {
     // Keep nav in sync if session changes (login/logout in another tab)
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
-      setSignedIn(!!session);
-      setLoading(false);
+      setState(session ? "authed" : "guest");
     });
 
     return () => {
@@ -51,12 +48,13 @@ export default function AuthNav() {
     } finally {
       // If you're on an authed page, get them out cleanly.
       if (pathname?.startsWith("/dashboard")) router.replace("/login");
-      else router.refresh();
+      else router.push("/");
+      router.refresh();
     }
   };
 
   // Prevent layout jump while checking
-  if (loading) {
+  if (state === "loading") {
     return (
       <span className="inline-flex items-center gap-2">
         <span className="h-2 w-2 rounded-full bg-white/30" />
@@ -66,7 +64,7 @@ export default function AuthNav() {
   }
 
   // Logged OUT
-  if (!signedIn) {
+  if (state === "guest") {
     return (
       <div className="flex items-center gap-2">
         {/* Login = calm secondary */}
@@ -77,9 +75,9 @@ export default function AuthNav() {
           Login
         </Link>
 
-        {/* Join = primary */}
+        {/* Join = primary (SIGNUP) */}
         <Link
-          href="/pricing"
+          href="/login?mode=signup"
           className="inline-flex items-center justify-center rounded-xl bg-yellow-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_12px_40px_rgba(250,204,21,0.22)] transition hover:brightness-110"
         >
           Join
