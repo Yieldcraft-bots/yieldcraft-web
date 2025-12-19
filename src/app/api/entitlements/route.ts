@@ -4,8 +4,8 @@ import { createServerClient } from "@supabase/ssr";
 
 export const runtime = "nodejs";
 
-function supabaseFromCookies() {
-  const cookieStore = cookies();
+async function supabaseFromCookies() {
+  const cookieStore = await cookies();
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -31,7 +31,7 @@ function supabaseFromCookies() {
 
 export async function GET() {
   try {
-    const supabase = supabaseFromCookies();
+    const supabase = await supabaseFromCookies();
 
     const { data: auth, error: authErr } = await supabase.auth.getUser();
     if (authErr || !auth?.user) {
