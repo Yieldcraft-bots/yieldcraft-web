@@ -1,7 +1,9 @@
+// src/app/layout.tsx
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
 import { Geist, Geist_Mono } from "next/font/google";
+import type { ReactNode } from "react";
 import "./globals.css";
 
 import AuthNav from "@/components/AuthNav";
@@ -42,14 +44,10 @@ const navLinks = [
   { href: "/quick-start", label: "Quick Start" },
   { href: "/atlas", label: "Atlas" },
   { href: "/affiliate", label: "Affiliate" },
-  // Dashboard handled by <AuthNav /> (only shows when signed in)
+  // Dashboard/Login/Logout handled by <AuthNav />
 ];
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body
@@ -108,7 +106,7 @@ export default function RootLayout({
                 </Link>
               ))}
 
-              {/* Login (logged out) OR Dashboard+Logout (logged in) */}
+              {/* Login/Join OR Dashboard/Logout */}
               <AuthNav />
             </nav>
 
@@ -143,9 +141,8 @@ export default function RootLayout({
                 </Link>
               ))}
 
-              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80">
-                <AuthNav />
-              </span>
+              {/* Login/Join OR Dashboard/Logout */}
+              <AuthNav />
             </div>
           </div>
         </header>
