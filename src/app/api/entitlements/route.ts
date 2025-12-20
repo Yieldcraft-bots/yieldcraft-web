@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-  // 1) Try cookie-based auth (works if you’re using SSR auth cookies)
+  // 1) Try cookie-based auth (SSR auth cookies)
   try {
     const cookieStore = await cookies();
 
@@ -45,15 +45,14 @@ export async function GET(req: Request) {
       const { data, error } = await supabase
         .from("entitlements")
         .select("pulse, recon, atlas, created_at")
-        .eq("user_id", user.id)
-        .single();
+        .eq("user_id", user.id); // <-- removed .single()
 
       if (error) return json(500, { ok: false, error: error.message });
 
       return json(200, {
         ok: true,
         user_id: user.id,
-        entitlements: data,
+        entitlements: data ?? [],
         source: "cookie",
       });
     }
@@ -61,7 +60,7 @@ export async function GET(req: Request) {
     // Ignore and fall through to Bearer token path
   }
 
-  // 2) Fallback: Bearer token auth (works with your current localStorage-style login)
+  // 2) Fallback: Bearer token auth (localStorage-style login)
   const authHeader = req.headers.get("authorization") || "";
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
   const token = m?.[1];
@@ -84,15 +83,14 @@ export async function GET(req: Request) {
   const { data, error } = await supabase
     .from("entitlements")
     .select("pulse, recon, atlas, created_at")
-    .eq("user_id", user.id)
-    .single();
+    .eq("user_id", user.id); // <-- removed .single()
 
   if (error) return json(500, { ok: false, error: error.message });
 
   return json(200, {
     ok: true,
     user_id: user.id,
-    entitlements: data,
+    entitlements: data ?? [],
     source: "bearer",
   });
 }
