@@ -11,9 +11,13 @@
 //   2) PULSE_TRADE_ARMED=true
 //
 // NOTE:
-// - Vercel Cron calls GET. GET can optionally trigger an internal POST when ?cron=1.
-// - It will NOT place trades from a normal browser GET (no ?cron=1).
-// - Add CRON_SECRET to restrict access (recommended).
+// - This route may be invoked by Vercel Cron (typically via GET).
+// - It will NOT place trades unless you POST with action=place_order AND both gates are true.
+// - Optional CRON_SECRET restricts access (recommended).
+//
+// ✅ NEW (read-only, non-blocking):
+// - On GET/POST we fetch a position snapshot (BTC + USD available/hold) from Coinbase,
+//   log it, and include it in responses. If Coinbase read fails, trading is NOT blocked.
 
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
@@ -90,11 +94,6 @@ function cronAuthorized(req: Request) {
   return auth === `Bearer ${secret}`;
 }
 
-function cronSecretHeaderValue() {
-  const secret = (process.env.CRON_SECRET || "").trim();
-  return secret ? `Bearer ${secret}` : "";
-}
-
 function gates() {
   const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
   const armed = truthy(process.env.PULSE_TRADE_ARMED);
@@ -123,11 +122,137 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
     uri,
   };
 
-  // NOTE: assumes ES256 key.
   return jwt.sign(payload, privateKey as any, {
     algorithm: "ES256",
     header: { kid: apiKeyName, nonce } as any,
   });
+}
+
+// -------------------- Coinbase position snapshot (read-only, non-blocking) --------------------
+
+type PositionSnapshot = {
+  ok: boolean;
+  at: string;
+  base_asset: string;
+  quote_asset: string;
+  base_available?: number | null;
+  base_hold?: number | null;
+  quote_available?: number | null;
+  quote_hold?: number | null;
+  notes?: string;
+  error?: string;
+};
+
+function toNum(v: any): number | null {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function fetchPositionSnapshot(
+  base_asset = "BTC",
+  quote_asset = "USD"
+): Promise<PositionSnapshot> {
+  const at = new Date().toISOString();
+
+  try {
+    // Coinbase Advanced Trade accounts endpoint
+    const path = "/api/v3/brokerage/accounts";
+    const token = buildCdpJwt("GET", path);
+
+    const res = await fetch(`https://api.coinbase.com${path}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      // Avoid caching surprises
+      cache: "no-store",
+    });
+
+    const text = await res.text();
+    const parsed = safeJsonParse(text);
+
+    if (!res.ok) {
+      return {
+        ok: false,
+        at,
+        base_asset,
+        quote_asset,
+        error: `accounts_fetch_failed status=${res.status}`,
+        notes: typeof parsed === "object" ? "See raw error in logs/Supabase." : "Non-JSON response.",
+      };
+    }
+
+    // Try to normalize the accounts list shape
+    const accounts =
+      parsed?.accounts ||
+      parsed?.data ||
+      parsed?.result?.accounts ||
+      [];
+
+    // Find matching currency accounts
+    const findAcct = (ccy: string) =>
+      (accounts || []).find((a: any) => {
+        const cur = a?.currency || a?.currency_code || a?.asset || a?.available_balance?.currency;
+        return String(cur || "").toUpperCase() === ccy.toUpperCase();
+      });
+
+    const baseAcct = findAcct(base_asset);
+    const quoteAcct = findAcct(quote_asset) || findAcct("USDC"); // fallback if user holds USDC instead of USD
+
+    const baseAvail =
+      toNum(baseAcct?.available_balance?.value) ??
+      toNum(baseAcct?.available_balance) ??
+      toNum(baseAcct?.available) ??
+      null;
+
+    const baseHold =
+      toNum(baseAcct?.hold?.value) ??
+      toNum(baseAcct?.hold) ??
+      toNum(baseAcct?.hold_balance?.value) ??
+      null;
+
+    const quoteAvail =
+      toNum(quoteAcct?.available_balance?.value) ??
+      toNum(quoteAcct?.available_balance) ??
+      toNum(quoteAcct?.available) ??
+      null;
+
+    const quoteHold =
+      toNum(quoteAcct?.hold?.value) ??
+      toNum(quoteAcct?.hold) ??
+      toNum(quoteAcct?.hold_balance?.value) ??
+      null;
+
+    return {
+      ok: true,
+      at,
+      base_asset,
+      quote_asset: quoteAcct
+        ? String(
+            quoteAcct?.currency ||
+              quoteAcct?.currency_code ||
+              quoteAcct?.asset ||
+              quoteAcct?.available_balance?.currency ||
+              quote_asset
+          ).toUpperCase()
+        : quote_asset,
+      base_available: baseAvail,
+      base_hold: baseHold,
+      quote_available: quoteAvail,
+      quote_hold: quoteHold,
+      notes: "Read-only snapshot from /brokerage/accounts. Non-blocking.",
+    };
+  } catch (e: any) {
+    return {
+      ok: false,
+      at,
+      base_asset,
+      quote_asset,
+      error: e?.message || String(e),
+      notes: "Snapshot fetch threw. Trading continues.",
+    };
+  }
 }
 
 // -------------------- Supabase logging (non-blocking) --------------------
@@ -179,10 +304,9 @@ async function logToSupabase(row: {
   }
 }
 
-// -------------------- GET (status / cron-safe + optional auto-trade) --------------------
+// -------------------- GET (status / cron-safe) --------------------
 
 export async function GET(req: Request) {
-  // Optional: lock cron access
   if (!cronAuthorized(req)) {
     console.log("[PULSE_TRADE] GET blocked (bad cron auth)");
     return jsonError("Unauthorized (cron).", 401);
@@ -190,88 +314,32 @@ export async function GET(req: Request) {
 
   const { tradingEnabled, armed, liveAllowed } = gates();
 
-  const url = new URL(req.url);
-  const isCron =
-    url.searchParams.get("cron") === "1" || req.headers.get("x-vercel-cron") === "1";
+  // ✅ Read-only snapshot (never blocks)
+  const snapshot = await fetchPositionSnapshot("BTC", "USD");
 
   console.log("[PULSE_TRADE] GET status", {
-    isCron,
+    isCron: req.nextUrl?.searchParams?.get("cron") === "1",
     COINBASE_TRADING_ENABLED: tradingEnabled,
     PULSE_TRADE_ARMED: armed,
     LIVE_ALLOWED: liveAllowed,
-    at: new Date().toISOString(),
+    snapshot,
   });
 
-  // Only auto-execute when it is a cron invocation AND gates are true
-  if (isCron && liveAllowed) {
-    // Optional light cooldown guard (helps avoid accidental double-fires)
-    const key = "__pulse_trade_last_run__";
-    const g: any = globalThis as any;
-    const last = typeof g[key] === "number" ? g[key] : 0;
-    const now = Date.now();
-    const cooldownMs = Number(process.env.PULSE_TRADE_COOLDOWN_MS || "60000");
-    if (now - last < cooldownMs) {
-      console.log("[PULSE_TRADE] Cron skipped due to cooldown", {
-        since_ms: now - last,
-        cooldownMs,
-      });
-      return json(200, {
-        ok: true,
-        status: "SKIPPED_COOLDOWN",
-        cooldownMs,
-        since_ms: now - last,
-      });
-    }
-    g[key] = now;
-
-    // Defaults for cron trade (safe small buy)
-    const product_id = String(process.env.PULSE_TRADE_PRODUCT || "BTC-USD");
-    const quote_size = String(process.env.PULSE_TRADE_QUOTE_SIZE || "1.00");
-
-    console.log("[PULSE_TRADE] Cron triggering internal POST place_order", {
-      product_id,
-      quote_size,
-    });
-
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    const cronAuth = cronSecretHeaderValue();
-    if (cronAuth) headers["authorization"] = cronAuth;
-
-    const internalReq = new Request(req.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        action: "place_order",
-        product_id,
-        side: "BUY",
-        quote_size,
-      }),
-    });
-
-    return await POST(internalReq);
-  }
-
-  // Normal GET status response (no trades)
   return json(200, {
     ok: true,
     status: "PULSE_TRADE_READY",
-    note: isCron
-      ? liveAllowed
-        ? "Cron-ready: would auto-trade on this GET, but reached status path."
-        : "Cron hit, but LIVE is blocked until BOTH gates are true."
-      : "Status only. Add ?cron=1 for cron invocations.",
     gates: {
       COINBASE_TRADING_ENABLED: tradingEnabled,
       PULSE_TRADE_ARMED: armed,
       LIVE_ALLOWED: liveAllowed,
     },
+    position: snapshot, // ✅ now you see held BTC/US(D/C) in every cron log
   });
 }
 
 // -------------------- POST (status / dry-run / live order) --------------------
 
 export async function POST(req: Request) {
-  // Optional: lock cron access (keeps public from spamming POST)
   if (!cronAuthorized(req)) {
     console.log("[PULSE_TRADE] POST blocked (bad cron auth)");
     return jsonError("Unauthorized (cron).", 401);
@@ -287,6 +355,9 @@ export async function POST(req: Request) {
   const action = (body?.action || "status") as Action;
   const { tradingEnabled, armed, liveAllowed } = gates();
 
+  // ✅ Read-only snapshot (never blocks)
+  const snapshot = await fetchPositionSnapshot("BTC", "USD");
+
   console.log("[PULSE_TRADE] POST received", {
     action,
     gates: {
@@ -294,7 +365,7 @@ export async function POST(req: Request) {
       PULSE_TRADE_ARMED: armed,
       LIVE_ALLOWED: liveAllowed,
     },
-    at: new Date().toISOString(),
+    position: snapshot,
   });
 
   if (action === "status") {
@@ -306,6 +377,7 @@ export async function POST(req: Request) {
         PULSE_TRADE_ARMED: armed,
         LIVE_ALLOWED: liveAllowed,
       },
+      position: snapshot,
     });
   }
 
@@ -343,14 +415,6 @@ export async function POST(req: Request) {
 
   // -------------------- DRY RUN --------------------
   if (action === "dry_run_order") {
-    console.log("[PULSE_TRADE] DRY_RUN", {
-      product_id,
-      side,
-      quote_size,
-      base_size,
-      liveAllowed,
-    });
-
     await logToSupabase({
       bot: "pulse",
       symbol: product_id,
@@ -365,6 +429,7 @@ export async function POST(req: Request) {
           PULSE_TRADE_ARMED: armed,
           LIVE_ALLOWED: liveAllowed,
         },
+        position: snapshot,
         payload: orderPayload,
       },
     });
@@ -377,6 +442,7 @@ export async function POST(req: Request) {
         PULSE_TRADE_ARMED: armed,
         LIVE_ALLOWED: liveAllowed,
       },
+      position: snapshot,
       would_call: "POST https://api.coinbase.com/api/v3/brokerage/orders",
       payload: orderPayload,
       note: liveAllowed
@@ -387,16 +453,10 @@ export async function POST(req: Request) {
 
   // -------------------- LIVE ORDER --------------------
   if (action !== "place_order") {
-    console.log("[PULSE_TRADE] Unknown action", { action });
     return jsonError("Unknown action.", 400, { action });
   }
 
   if (!liveAllowed) {
-    console.log("[PULSE_TRADE] LIVE blocked by gates", {
-      COINBASE_TRADING_ENABLED: tradingEnabled,
-      PULSE_TRADE_ARMED: armed,
-    });
-
     return jsonError(
       "LIVE blocked. Set COINBASE_TRADING_ENABLED=true AND PULSE_TRADE_ARMED=true.",
       403,
@@ -406,17 +466,10 @@ export async function POST(req: Request) {
           PULSE_TRADE_ARMED: armed,
           LIVE_ALLOWED: liveAllowed,
         },
+        position: snapshot,
       }
     );
   }
-
-  console.log("[PULSE_TRADE] LIVE attempt", {
-    product_id,
-    side,
-    quote_size,
-    base_size,
-    client_order_id,
-  });
 
   const path = "/api/v3/brokerage/orders";
   const token = buildCdpJwt("POST", path);
@@ -440,12 +493,6 @@ export async function POST(req: Request) {
       parsed?.success_response?.order_id ||
       null;
 
-    console.log("[PULSE_TRADE] LIVE response", {
-      ok: res.ok,
-      status: res.status,
-      order_id: orderId,
-    });
-
     await logToSupabase({
       bot: "pulse",
       symbol: product_id,
@@ -461,6 +508,7 @@ export async function POST(req: Request) {
           PULSE_TRADE_ARMED: armed,
           LIVE_ALLOWED: liveAllowed,
         },
+        position: snapshot,
         request: orderPayload,
         response_status: res.status,
         response: parsed ?? text,
@@ -475,13 +523,12 @@ export async function POST(req: Request) {
         PULSE_TRADE_ARMED: armed,
         LIVE_ALLOWED: liveAllowed,
       },
+      position: snapshot,
       status: res.status,
       payload: orderPayload,
       coinbase: parsed ?? text,
     });
   } catch (e: any) {
-    console.log("[PULSE_TRADE] LIVE error", { message: e?.message || String(e) });
-
     await logToSupabase({
       bot: "pulse",
       symbol: product_id,
@@ -492,6 +539,7 @@ export async function POST(req: Request) {
         kind: "live_order_error",
         action,
         error: e?.message || String(e),
+        position: snapshot,
         payload: orderPayload,
       },
     });
