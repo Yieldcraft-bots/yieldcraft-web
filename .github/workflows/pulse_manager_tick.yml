@@ -14,10 +14,17 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          curl -s -X POST "https://yieldcraft.co/api/pulse-manager" \
+          echo "Calling Pulse Manager..."
+          RESPONSE=$(curl -sS -X POST "https://yieldcraft.co/api/pulse-manager" \
             -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
             -d '{
               "action": "tick",
               "product_id": "BTC-USD"
-            }'
+            }')
+
+          echo "Response:"
+          echo "$RESPONSE"
+
+          # Fail the job if the response contains ok:false
+          echo "$RESPONSE" | grep -q '"ok":false' && exit 1 || true
