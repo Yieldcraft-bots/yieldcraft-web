@@ -77,7 +77,12 @@ function minPositionBaseBtc() {
  */
 async function getExecutionStatus(origin: string) {
   const url = `${origin.replace(/\/$/, "")}/api/pulse-trade`;
-  const res = await fetch(url, { method: "GET", headers: { "Content-Type": "application/json" } });
+  const res = await fetch(url, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+  });
+
   const text = await res.text();
   const parsed = safeJsonParse(text);
 
@@ -160,9 +165,8 @@ async function tick(origin: string, body: any) {
   // Read current status (safe)
   const exec = await getExecutionStatus(origin);
 
-  // ✅ FIX FOR YOUR BUILD ERROR:
-  // pos/base can be undefined; we always coerce to a number safely.
-  const positionBase = Number(exec.position?.base ?? 0); // never undefined
+  // ✅ Build-stable: always coerce to a number; never undefined
+  const positionBase = Number(exec?.position?.base ?? 0);
   const minPos = minPositionBaseBtc();
 
   // If we already hold something meaningful, block repeated BUY spam
@@ -242,11 +246,17 @@ export async function POST(req: Request) {
   if (action === "status") {
     const { managerEnabled, soakMode } = managerGates();
     const exec = await getExecutionStatus(origin);
+
     return json(200, {
       ok: true,
       status: "PULSE_MANAGER_READY",
       gates: { managerEnabled, soakMode },
-      exec: { ok: exec.ok, status: exec.status, gates: exec.gates, positionBase: exec.position.base },
+      exec: {
+        ok: exec.ok,
+        status: exec.status,
+        gates: exec.gates,
+        positionBase: Number(exec?.position?.base ?? 0),
+      },
     });
   }
 
