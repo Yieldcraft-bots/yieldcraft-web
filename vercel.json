@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/pulse-trade",
+      "path": "/api/pulse-trade?cron=1",
       "schedule": "*/5 * * * *"
     }
   ]
