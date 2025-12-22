@@ -11,9 +11,9 @@
 //   2) PULSE_TRADE_ARMED=true
 //
 // NOTE:
-// - This route may be invoked by Vercel Cron (typically via GET).
-// - It will NOT place trades unless you POST with action=place_order AND both gates are true.
-// - Add CRON_SECRET to restrict cron access (recommended).
+// - Vercel Cron calls GET. GET can optionally trigger an internal POST when ?cron=1.
+// - It will NOT place trades from a normal browser GET (no ?cron=1).
+// - Add CRON_SECRET to restrict access (recommended).
 
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
@@ -82,13 +82,17 @@ function normalizePem(pem: string) {
 /**
  * Optional Cron auth:
  * If CRON_SECRET is set, require Authorization: Bearer <CRON_SECRET>
- * Vercel Cron can send this automatically if you set CRON_SECRET as env var in Vercel.
  */
 function cronAuthorized(req: Request) {
   const secret = (process.env.CRON_SECRET || "").trim();
   if (!secret) return true; // no secret configured = allow
   const auth = req.headers.get("authorization") || "";
   return auth === `Bearer ${secret}`;
+}
+
+function cronSecretHeaderValue() {
+  const secret = (process.env.CRON_SECRET || "").trim();
+  return secret ? `Bearer ${secret}` : "";
 }
 
 function gates() {
@@ -119,8 +123,7 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
     uri,
   };
 
-  // NOTE: assumes ES256 key. If you later switch to Ed25519,
-  // we’ll update this in a controlled way (don’t change mid-live without a plan).
+  // NOTE: assumes ES256 key.
   return jwt.sign(payload, privateKey as any, {
     algorithm: "ES256",
     header: { kid: apiKeyName, nonce } as any,
@@ -176,7 +179,7 @@ async function logToSupabase(row: {
   }
 }
 
-// -------------------- GET (status / cron-safe) --------------------
+// -------------------- GET (status / cron-safe + optional auto-trade) --------------------
 
 export async function GET(req: Request) {
   // Optional: lock cron access
@@ -187,16 +190,76 @@ export async function GET(req: Request) {
 
   const { tradingEnabled, armed, liveAllowed } = gates();
 
+  const url = new URL(req.url);
+  const isCron =
+    url.searchParams.get("cron") === "1" || req.headers.get("x-vercel-cron") === "1";
+
   console.log("[PULSE_TRADE] GET status", {
+    isCron,
     COINBASE_TRADING_ENABLED: tradingEnabled,
     PULSE_TRADE_ARMED: armed,
     LIVE_ALLOWED: liveAllowed,
     at: new Date().toISOString(),
   });
 
+  // Only auto-execute when it is a cron invocation AND gates are true
+  if (isCron && liveAllowed) {
+    // Optional light cooldown guard (helps avoid accidental double-fires)
+    const key = "__pulse_trade_last_run__";
+    const g: any = globalThis as any;
+    const last = typeof g[key] === "number" ? g[key] : 0;
+    const now = Date.now();
+    const cooldownMs = Number(process.env.PULSE_TRADE_COOLDOWN_MS || "60000");
+    if (now - last < cooldownMs) {
+      console.log("[PULSE_TRADE] Cron skipped due to cooldown", {
+        since_ms: now - last,
+        cooldownMs,
+      });
+      return json(200, {
+        ok: true,
+        status: "SKIPPED_COOLDOWN",
+        cooldownMs,
+        since_ms: now - last,
+      });
+    }
+    g[key] = now;
+
+    // Defaults for cron trade (safe small buy)
+    const product_id = String(process.env.PULSE_TRADE_PRODUCT || "BTC-USD");
+    const quote_size = String(process.env.PULSE_TRADE_QUOTE_SIZE || "1.00");
+
+    console.log("[PULSE_TRADE] Cron triggering internal POST place_order", {
+      product_id,
+      quote_size,
+    });
+
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const cronAuth = cronSecretHeaderValue();
+    if (cronAuth) headers["authorization"] = cronAuth;
+
+    const internalReq = new Request(req.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        action: "place_order",
+        product_id,
+        side: "BUY",
+        quote_size,
+      }),
+    });
+
+    return await POST(internalReq);
+  }
+
+  // Normal GET status response (no trades)
   return json(200, {
     ok: true,
     status: "PULSE_TRADE_READY",
+    note: isCron
+      ? liveAllowed
+        ? "Cron-ready: would auto-trade on this GET, but reached status path."
+        : "Cron hit, but LIVE is blocked until BOTH gates are true."
+      : "Status only. Add ?cron=1 for cron invocations.",
     gates: {
       COINBASE_TRADING_ENABLED: tradingEnabled,
       PULSE_TRADE_ARMED: armed,
