@@ -27,6 +27,13 @@ type ExchangeProbe = {
   };
 };
 
+type Entitlements = {
+  pulse: boolean;
+  recon: boolean;
+  atlas: boolean;
+  created_at?: string | null;
+};
+
 function truthy(v: any) {
   return v === true || v === "true" || v === 1 || v === "1";
 }
@@ -43,6 +50,15 @@ export default function DashboardPage() {
   // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
+
+  // NEW: Plan entitlements (read-only via /api/entitlements using Bearer token)
+  const [planConn, setPlanConn] = useState<Conn>("checking");
+  const [entitlements, setEntitlements] = useState<Entitlements>({
+    pulse: false,
+    recon: false,
+    atlas: false,
+    created_at: null,
+  });
 
   // NEW: Exchange keys (read-only probe via /api/pulse-heartbeat)
   const [exchangeConn, setExchangeConn] = useState<Conn>("checking");
@@ -66,9 +82,12 @@ export default function DashboardPage() {
     setChecking(true);
     setAccountConn("checking");
     setHealthConn("checking");
+    setPlanConn("checking");
     setExchangeConn("checking");
     setTradeConn("checking");
     setLastCheck(new Date());
+
+    let accessToken: string | null = null;
 
     // 1) Check auth session (Supabase)
     try {
@@ -82,17 +101,21 @@ export default function DashboardPage() {
 
       if (!ok) {
         setHealthConn("no");
+        setPlanConn("no");
         setExchangeConn("no");
         setTradeConn("no");
         setChecking(false);
         router.replace("/login");
         return;
       }
+
+      accessToken = data?.session?.access_token ?? null;
     } catch {
       if (!mountedRef.current) return;
       setAuthed(false);
       setAccountConn("no");
       setHealthConn("no");
+      setPlanConn("no");
       setExchangeConn("no");
       setTradeConn("no");
       setChecking(false);
@@ -120,7 +143,45 @@ export default function DashboardPage() {
       setHealthConn("no");
     }
 
-    // 3) Exchange keys probe (read-only) — verifies Coinbase auth only
+    // 3) Plan entitlements (Bearer token -> RLS-safe)
+    try {
+      if (!accessToken) throw new Error("missing_access_token");
+
+      const r = await fetch("/api/entitlements", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      let j: any = null;
+      try {
+        j = await r.json();
+      } catch {
+        j = null;
+      }
+
+      const ok = !!(r.ok && j && j.ok === true && j.entitlements);
+
+      if (!mountedRef.current) return;
+
+      if (ok) {
+        setEntitlements({
+          pulse: !!j.entitlements.pulse,
+          recon: !!j.entitlements.recon,
+          atlas: !!j.entitlements.atlas,
+          created_at: j.entitlements.created_at ?? null,
+        });
+        setPlanConn("ok");
+      } else {
+        setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
+        setPlanConn("no");
+      }
+    } catch {
+      if (!mountedRef.current) return;
+      setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
+      setPlanConn("no");
+    }
+
+    // 4) Exchange keys probe (read-only) — verifies Coinbase auth only
     try {
       const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
 
@@ -150,7 +211,7 @@ export default function DashboardPage() {
       setExchangeMeta({ authOk: false });
     }
 
-    // 4) Read-only trading gates (does NOT place orders)
+    // 5) Read-only trading gates (does NOT place orders)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
 
@@ -244,6 +305,7 @@ export default function DashboardPage() {
 
   const accP = pill(accountConn);
   const healthP = pill(healthConn);
+  const planP = pill(planConn);
   const exP = pill(exchangeConn);
   const tradeP = pill(tradeConn);
 
@@ -258,6 +320,13 @@ export default function DashboardPage() {
         tone: "text-emerald-200",
         badge: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/25",
       };
+
+  const planText =
+    planConn === "ok"
+      ? `Pulse: ${entitlements.pulse ? "ON" : "OFF"} · Recon: ${entitlements.recon ? "ON" : "OFF"} · Atlas: ${
+          entitlements.atlas ? "ON" : "OFF"
+        }`
+      : "Unable to read plan entitlements (check login / RLS / API).";
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -292,6 +361,18 @@ export default function DashboardPage() {
               >
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
+              </span>
+
+              {/* Plan entitlements (bearer) */}
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  planP.wrap,
+                ].join(" ")}
+                title="Read-only entitlement check via /api/entitlements using your session Bearer token."
+              >
+                <span className={["h-2 w-2 rounded-full", planP.dot].join(" ")} />
+                PLAN ACCESS: {planP.label}
               </span>
 
               {/* Exchange keys (read-only auth verification) */}
@@ -368,41 +449,8 @@ export default function DashboardPage() {
               </div>
 
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
-                <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">What the colors mean</p>
-                <ul className="mt-3 space-y-2 text-sm text-slate-200">
-                  <li className="flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30">
-                      ✓
-                    </span>
-                    <span>
-                      <span className="font-semibold text-slate-50">SIGNED IN green</span> = user session is valid
-                    </span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30">
-                      ✓
-                    </span>
-                    <span>
-                      <span className="font-semibold text-slate-50">HEALTH green</span> = /api/health returned ok:true
-                    </span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30">
-                      ✓
-                    </span>
-                    <span>
-                      <span className="font-semibold text-slate-50">EXCHANGE KEYS green</span> = Coinbase auth verified (read-only)
-                    </span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-slate-800 text-slate-200 ring-1 ring-slate-700">
-                      🛡️
-                    </span>
-                    <span>
-                      <span className="font-semibold text-slate-50">TRADING STATUS green</span> = gate state readable (still can be locked)
-                    </span>
-                  </li>
-                </ul>
+                <p className="text-xs font-semibold uppercase tracking-wide text-sky-300">Plan access</p>
+                <p className="mt-3 text-sm text-slate-200">{planText}</p>
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-400">
                   Trading is <span className={armedLabel.tone}>{armedLabel.title}</span> unless you explicitly arm it.
