@@ -2,7 +2,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -19,11 +19,29 @@ function json(status: number, body: any) {
   });
 }
 
+async function fetchLatestEntitlements(supabase: SupabaseClient, userId: string) {
+  const { data, error } = await supabase
+    .from("entitlements")
+    .select("pulse, recon, atlas, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return { ok: false as const, error: error.message };
+
+  return {
+    ok: true as const,
+    entitlements:
+      data ?? { pulse: false, recon: false, atlas: false, created_at: null },
+  };
+}
+
 export async function GET(req: Request) {
   const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-  // 1) Try cookie-based auth (SSR auth cookies)
+  // 1) Cookie-based auth (SSR cookies)
   try {
     const cookieStore = await cookies();
 
@@ -32,35 +50,29 @@ export async function GET(req: Request) {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll() {
-          // Route handlers can't reliably set cookies (and we don't need to here).
-        },
+        setAll() {},
       },
     });
 
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
+    const { data: userRes } = await supabase.auth.getUser();
     const user = userRes?.user;
 
-    if (user && !userErr) {
-      const { data, error } = await supabase
-        .from("entitlements")
-        .select("pulse, recon, atlas, created_at")
-        .eq("user_id", user.id); // <-- removed .single()
-
-      if (error) return json(500, { ok: false, error: error.message });
+    if (user) {
+      const ent = await fetchLatestEntitlements(supabase, user.id);
+      if (!ent.ok) return json(500, { ok: false, error: ent.error });
 
       return json(200, {
         ok: true,
         user_id: user.id,
-        entitlements: data ?? [],
+        entitlements: ent.entitlements,
         source: "cookie",
       });
     }
   } catch {
-    // Ignore and fall through to Bearer token path
+    // ignore and fall through
   }
 
-  // 2) Fallback: Bearer token auth (localStorage-style login)
+  // 2) Bearer token auth (localStorage-style login)
   const authHeader = req.headers.get("authorization") || "";
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
   const token = m?.[1];
@@ -69,28 +81,34 @@ export async function GET(req: Request) {
     return json(401, { ok: false, error: "not_authenticated" });
   }
 
-  const supabase = createClient(url, anon, {
-    auth: { persistSession: false, autoRefreshToken: false },
+  // IMPORTANT: attach token to ALL requests so RLS + auth.uid() works
+  const authed = createClient(url, anon, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+    global: {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    },
   });
 
-  const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+  const { data: userRes, error: userErr } = await authed.auth.getUser();
   const user = userRes?.user;
 
   if (userErr || !user) {
     return json(401, { ok: false, error: "not_authenticated" });
   }
 
-  const { data, error } = await supabase
-    .from("entitlements")
-    .select("pulse, recon, atlas, created_at")
-    .eq("user_id", user.id); // <-- removed .single()
-
-  if (error) return json(500, { ok: false, error: error.message });
+  const ent = await fetchLatestEntitlements(authed, user.id);
+  if (!ent.ok) return json(500, { ok: false, error: ent.error });
 
   return json(200, {
     ok: true,
     user_id: user.id,
-    entitlements: data ?? [],
+    entitlements: ent.entitlements,
     source: "bearer",
   });
 }
