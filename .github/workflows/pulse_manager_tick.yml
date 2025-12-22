@@ -1,87 +1,23 @@
 name: Pulse Manager Tick
 
 on:
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "tick (default) | status"
-        required: false
-        default: "tick"
-      force_live:
-        description: "true to force live even if soak mode is on"
-        required: false
-        default: "false"
-      product_id:
-        description: "BTC-USD (default)"
-        required: false
-        default: "BTC-USD"
-      side:
-        description: "BUY or SELL"
-        required: false
-        default: "BUY"
-      quote_size:
-        description: "BUY quote size (USD) e.g. 1.00"
-        required: false
-        default: "1.00"
-      base_size:
-        description: "SELL base size (BTC) e.g. 0.00001"
-        required: false
-        default: "0.00001"
-
   schedule:
-    # Every 5 minutes
+    # Every 5 minutes (UTC). Safe soak cadence.
     - cron: "*/5 * * * *"
-
-concurrency:
-  group: pulse-manager-tick
-  cancel-in-progress: false
+  workflow_dispatch: {}
 
 jobs:
   tick:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
     steps:
-      - name: Call pulse-manager (tick)
+      - name: Call Pulse Manager (tick)
         env:
-          BASE_URL: https://yieldcraft.co
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          set -euo pipefail
-
-          ACTION="${{ github.event.inputs.action || 'tick' }}"
-          FORCE_LIVE="${{ github.event.inputs.force_live || 'false' }}"
-          PRODUCT_ID="${{ github.event.inputs.product_id || 'BTC-USD' }}"
-          SIDE="${{ github.event.inputs.side || 'BUY' }}"
-          QUOTE_SIZE="${{ github.event.inputs.quote_size || '1.00' }}"
-          BASE_SIZE="${{ github.event.inputs.base_size || '0.00001' }}"
-
-          if [ -z "${CRON_SECRET}" ]; then
-            echo "Missing CRON_SECRET in GitHub Actions secrets."
-            exit 1
-          fi
-
-          echo "Hitting ${BASE_URL}/api/pulse-manager action=${ACTION} product=${PRODUCT_ID} side=${SIDE} force_live=${FORCE_LIVE}"
-
-          curl -sS -X POST "${BASE_URL}/api/pulse-manager" \
+          curl -s -X POST "https://yieldcraft.co/api/pulse-manager" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${CRON_SECRET}" \
-            -d "{\"action\":\"${ACTION}\",\"product_id\":\"${PRODUCT_ID}\",\"side\":\"${SIDE}\",\"quote_size\":\"${QUOTE_SIZE}\",\"base_size\":\"${BASE_SIZE}\",\"force_live\":${FORCE_LIVE}}" \
-            | tee /dev/stderr
-
-  status:
-    # Optional: quick status call after tick (runs on schedule too)
-    needs: [tick]
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Call pulse-manager (status)
-        env:
-          BASE_URL: https://yieldcraft.co
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        run: |
-          set -euo pipefail
-          curl -sS -X POST "${BASE_URL}/api/pulse-manager" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${CRON_SECRET}" \
-            -d "{\"action\":\"status\"}" \
-            | tee /dev/stderr
+            -d '{
+              "action": "tick",
+              "product_id": "BTC-USD"
+            }'
