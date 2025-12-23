@@ -11,21 +11,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Call Pulse Manager (tick)
+        shell: bash
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-        shell: bash
         run: |
+          # NEVER fail this job – manager/execution handle safety internally
           set +e
+
           echo "Calling Pulse Manager..."
 
-          OUT=$(curl -sS --max-time 20 -X POST "https://yieldcraft.co/api/pulse-manager" \
+          RESPONSE=$(curl -sS --max-time 20 \
+            -X POST "https://yieldcraft.co/api/pulse-manager" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${CRON_SECRET}" \
-            -d '{"action":"tick","product_id":"BTC-USD"}' \
-            -w "\nHTTP_STATUS=%{http_code}\n" ) || true
+            -d '{
+              "action": "tick",
+              "product_id": "BTC-USD"
+            }')
 
           echo "Response:"
-          echo "$OUT"
+          echo "$RESPONSE"
 
-          # Always succeed — manager/execution routes handle safety/no-op logic internally
+          # Always succeed
           exit 0
