@@ -2,7 +2,7 @@ name: Pulse Manager Tick
 
 on:
   schedule:
-    # Every 5 minutes (UTC)
+    # Every 5 minutes (UTC). Safe soak cadence.
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
@@ -27,4 +27,5 @@ jobs:
           echo "Response:"
           echo "$RESPONSE"
 
+          # Always succeed — manager/execution routes handle safety + no-op logic internally
           exit 0
