@@ -13,19 +13,19 @@ jobs:
       - name: Call Pulse Manager (tick)
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        shell: bash
         run: |
+          set +e
           echo "Calling Pulse Manager..."
 
-          RESPONSE=$(curl -s -X POST "https://yieldcraft.co/api/pulse-manager" \
+          OUT=$(curl -sS --max-time 20 -X POST "https://yieldcraft.co/api/pulse-manager" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${CRON_SECRET}" \
-            -d '{
-              "action": "tick",
-              "product_id": "BTC-USD"
-            }')
+            -d '{"action":"tick","product_id":"BTC-USD"}' \
+            -w "\nHTTP_STATUS=%{http_code}\n" ) || true
 
           echo "Response:"
-          echo "$RESPONSE"
+          echo "$OUT"
 
-          # Always succeed — manager/execution routes handle safety + no-op logic internally
+          # Always succeed — manager/execution routes handle safety/no-op logic internally
           exit 0
