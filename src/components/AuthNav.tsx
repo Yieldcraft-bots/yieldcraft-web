@@ -47,8 +47,15 @@ export default function AuthNav() {
       await supabase.auth.signOut();
     } finally {
       // If you're on an authed page, get them out cleanly.
-      if (pathname?.startsWith("/dashboard")) router.replace("/login");
-      else router.push("/");
+      if (
+        pathname?.startsWith("/dashboard") ||
+        pathname?.startsWith("/admin") ||
+        pathname?.startsWith("/live")
+      ) {
+        router.replace("/login");
+      } else {
+        router.push("/");
+      }
       router.refresh();
     }
   };
@@ -89,6 +96,14 @@ export default function AuthNav() {
   // Logged IN
   return (
     <div className="flex items-center gap-2">
+      <Link
+        href="/live"
+        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
+        title="Live Trading Snapshot"
+      >
+        Live
+      </Link>
+
       <Link
         href="/dashboard"
         className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
