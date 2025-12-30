@@ -2,7 +2,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // ✅ IMPORTANT: match the filename exactly
@@ -38,6 +38,10 @@ function truthy(v: any) {
   return v === true || v === "true" || v === 1 || v === "1";
 }
 
+function normEmail(v: any): string {
+  return (typeof v === "string" ? v : "").trim().toLowerCase();
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
@@ -45,8 +49,9 @@ export default function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
-  // NEW: keep the signed-in email (for admin gating UI only)
+  // Keep both the canonical email and the "display" email (provider vs password can differ)
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [displayEmail, setDisplayEmail] = useState<string | null>(null);
 
   // Real meanings:
   // - accountConn: SIGNED IN status (auth/session)
@@ -54,7 +59,7 @@ export default function DashboardPage() {
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
 
-  // NEW: Plan entitlements (read-only via /api/entitlements using Bearer token)
+  // Plan entitlements (read-only via /api/entitlements using Bearer token)
   const [planConn, setPlanConn] = useState<Conn>("checking");
   const [entitlements, setEntitlements] = useState<Entitlements>({
     pulse: false,
@@ -63,7 +68,7 @@ export default function DashboardPage() {
     created_at: null,
   });
 
-  // NEW: Exchange keys (read-only probe via /api/pulse-heartbeat)
+  // Exchange keys (read-only probe via /api/pulse-heartbeat)
   const [exchangeConn, setExchangeConn] = useState<Conn>("checking");
   const [exchangeMeta, setExchangeMeta] = useState<{
     authOk: boolean;
@@ -95,15 +100,25 @@ export default function DashboardPage() {
     // 1) Check auth session (Supabase)
     try {
       const { data } = await supabase.auth.getSession();
-      const ok = !!data?.session;
+      const session = data?.session ?? null;
+      const ok = !!session;
 
       if (!mountedRef.current) return;
 
       setAuthed(ok);
       setAccountConn(ok ? "ok" : "no");
 
-      // NEW: store email for UI gating (admin button)
-      setUserEmail((data?.session?.user?.email ?? null) as string | null);
+      // Canonical email (provider)
+      const email = session?.user?.email ?? null;
+
+      // Display email: prefers metadata email if present (often reflects actual login identity)
+      const metaEmail =
+        (session?.user as any)?.user_metadata?.email ??
+        (session?.user as any)?.user_metadata?.preferred_email ??
+        null;
+
+      setUserEmail(email as string | null);
+      setDisplayEmail((metaEmail ?? email) as string | null);
 
       if (!ok) {
         setHealthConn("no");
@@ -115,11 +130,12 @@ export default function DashboardPage() {
         return;
       }
 
-      accessToken = data?.session?.access_token ?? null;
+      accessToken = session?.access_token ?? null;
     } catch {
       if (!mountedRef.current) return;
       setAuthed(false);
       setUserEmail(null);
+      setDisplayEmail(null);
       setAccountConn("no");
       setHealthConn("no");
       setPlanConn("no");
@@ -271,7 +287,11 @@ export default function DashboardPage() {
     });
 
   // Admin UI gating (display only)
-  const isAdmin = (userEmail || "").toLowerCase() === "dk@dwklein.com";
+  const isAdmin = useMemo(() => {
+    const target = "dk@dwklein.com";
+    // check BOTH canonical and display email
+    return normEmail(userEmail) === target || normEmail(displayEmail) === target;
+  }, [userEmail, displayEmail]);
 
   // Simple guard UI
   if (checking) {
@@ -337,6 +357,8 @@ export default function DashboardPage() {
           entitlements.atlas ? "ON" : "OFF"
         }`
       : "Unable to read plan entitlements (check login / RLS / API).";
+
+  const shownEmail = displayEmail ?? userEmail ?? null;
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -464,7 +486,9 @@ export default function DashboardPage() {
                   </Link>
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">This dashboard is read-only by design. It does not enable trading from here.</p>
+                <p className="mt-3 text-xs text-slate-500">
+                  This dashboard is read-only by design. It does not enable trading from here.
+                </p>
               </div>
 
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
@@ -486,7 +510,9 @@ export default function DashboardPage() {
           <div className="flex items-end justify-between gap-4">
             <div>
               <h2 className="text-xl font-semibold">Status</h2>
-              <p className="mt-1 text-sm text-slate-400">If something is unknown, we show it as “Not connected / Not verified”.</p>
+              <p className="mt-1 text-sm text-slate-400">
+                If something is unknown, we show it as “Not connected / Not verified”.
+              </p>
             </div>
           </div>
 
@@ -513,7 +539,11 @@ export default function DashboardPage() {
               </div>
               <p className="mt-2 text-lg font-semibold">Signed In</p>
               <p className="mt-1 text-sm text-slate-300">Session verified. You can continue setup.</p>
-              {userEmail ? <p className="mt-2 text-xs text-slate-500">Signed in as: <span className="text-slate-200">{userEmail}</span></p> : null}
+              {shownEmail ? (
+                <p className="mt-2 text-xs text-slate-500">
+                  Signed in as: <span className="text-slate-200">{shownEmail}</span>
+                </p>
+              ) : null}
             </div>
 
             {/* Engine */}
