@@ -13,16 +13,32 @@ function json(status: number, body: any) {
   });
 }
 
-function mustEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env var: ${name}`);
-  return v;
-}
-
-function startOfTodayISO() {
+/**
+ * Central time (America/Chicago) "start of today" without external libs.
+ * Note: Fixed -6 offset (CST). Good enough for launch; we can make DST-aware later.
+ */
+function startOfTodayISO_Central(): string {
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return start.toISOString();
+
+  // shift "now" into Central by fixed -6 hours
+  const central = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+
+  // build a UTC-date representing Central midnight (00:00 in "central" clock)
+  const startCentralAsUTC = new Date(
+    Date.UTC(
+      central.getUTCFullYear(),
+      central.getUTCMonth(),
+      central.getUTCDate(),
+      0,
+      0,
+      0,
+      0
+    )
+  );
+
+  // convert back to real UTC instant by shifting +6 hours
+  const startUTC = new Date(startCentralAsUTC.getTime() + 6 * 60 * 60 * 1000);
+  return startUTC.toISOString();
 }
 
 /**
@@ -52,7 +68,8 @@ type TradeRow = {
 };
 
 function n(x: any): number {
-  const v = typeof x === "string" ? Number(x) : typeof x === "number" ? x : NaN;
+  const v =
+    typeof x === "string" ? Number(x) : typeof x === "number" ? x : NaN;
   return Number.isFinite(v) ? v : 0;
 }
 
@@ -64,16 +81,29 @@ function n(x: any): number {
 function computeStats(rows: TradeRow[]) {
   const fills = rows
     .filter((r) => (r.status || "").toLowerCase() !== "rejected")
-    .filter((r) => (r.side || "").toUpperCase() === "BUY" || (r.side || "").toUpperCase() === "SELL")
-    .sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    .filter((r) => {
+      const s = (r.side || "").toUpperCase();
+      return s === "BUY" || s === "SELL";
+    })
+    .sort(
+      (a, b) =>
+        new Date(a.created_at || 0).getTime() -
+        new Date(b.created_at || 0).getTime()
+    );
 
   const trades = fills.length;
 
-  const hasPnLField = fills.some((r) => "pnl_usd" in r && n((r as any).pnl_usd) !== 0);
-  let realized = 0;
+  const hasPnLField = fills.some(
+    (r) => "pnl_usd" in r && n((r as any).pnl_usd) !== 0
+  );
 
   // Fees: accept fee_usd or fee
-  const totalFees = fills.reduce((acc, r) => acc + n((r as any).fee_usd ?? (r as any).fee), 0);
+  const totalFees = fills.reduce(
+    (acc, r) => acc + n((r as any).fee_usd ?? (r as any).fee),
+    0
+  );
+
+  let realized = 0;
 
   if (hasPnLField) {
     realized = fills.reduce((acc, r) => acc + n((r as any).pnl_usd), 0);
@@ -101,18 +131,17 @@ function computeStats(rows: TradeRow[]) {
         while (remaining > 0 && lots.length > 0) {
           const lot = lots[0];
           const take = Math.min(remaining, lot.qty);
-          const lotUnitCost = lot.qty > 0 ? lot.cost / lot.qty : 0;
+          const unitCost = lot.qty > 0 ? lot.cost / lot.qty : 0;
 
-          costBasis += take * lotUnitCost;
+          costBasis += take * unitCost;
 
           lot.qty -= take;
-          lot.cost -= take * lotUnitCost;
+          lot.cost -= take * unitCost;
           remaining -= take;
 
           if (lot.qty <= 1e-12) lots.shift();
         }
 
-        // Proceeds - cost basis
         realized += notional - costBasis;
       }
     }
@@ -122,20 +151,14 @@ function computeStats(rows: TradeRow[]) {
   const grossPnL = realized;
   const netPnL = realized - totalFees;
 
-  // Win rate: count SELL events where realized delta > 0 if pnl_usd exists; otherwise approximate per sell.
-  // For simplicity, treat each SELL row as a "trade outcome" if possible.
+  // Win rate (simple): if pnl_usd exists per sell, count wins.
   let sells = 0;
   let wins = 0;
 
   for (const r of fills) {
-    const side = (r.side || "").toUpperCase();
-    if (side !== "SELL") continue;
+    if ((r.side || "").toUpperCase() !== "SELL") continue;
     sells++;
-
-    const pnlRow = n((r as any).pnl_usd);
-    if ("pnl_usd" in r) {
-      if (pnlRow > 0) wins++;
-    }
+    if ("pnl_usd" in r && n((r as any).pnl_usd) > 0) wins++;
   }
 
   const winRate = sells > 0 ? wins / sells : null;
@@ -154,9 +177,8 @@ function computeStats(rows: TradeRow[]) {
 export async function GET() {
   try {
     const url =
-      process.env.NEXT_PUBLIC_SUPABASE_URL ||
-      process.env.SUPABASE_URL ||
-      "";
+      process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+
     const serviceKey =
       process.env.SUPABASE_SERVICE_ROLE_KEY ||
       process.env.SUPABASE_SERVICE_KEY ||
@@ -166,16 +188,23 @@ export async function GET() {
       return json(200, {
         ok: false,
         status: "PULSE_STATS_NOT_CONFIGURED",
-        needed_env: ["NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)", "SUPABASE_SERVICE_ROLE_KEY"],
+        needed_env: [
+          "NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL)",
+          "SUPABASE_SERVICE_ROLE_KEY",
+        ],
         note:
           "This endpoint is read-only. Add the env vars in Vercel, redeploy, and retry.",
       });
     }
 
-    const supabase = createClient(url, serviceKey, { auth: { persistSession: false } });
+    const supabase = createClient(url, serviceKey, {
+      auth: { persistSession: false },
+    });
+
+    // Central-time day start for "today"
+    const since = startOfTodayISO_Central();
 
     // Try table candidates until one succeeds
-    const since = startOfTodayISO();
     let tableUsed: string | null = null;
     let rows: TradeRow[] = [];
     let lastErr: any = null;
@@ -217,6 +246,10 @@ export async function GET() {
       stats,
     });
   } catch (e: any) {
-    return json(500, { ok: false, status: "PULSE_STATS_ERROR", error: e?.message || String(e) });
+    return json(500, {
+      ok: false,
+      status: "PULSE_STATS_ERROR",
+      error: e?.message || String(e),
+    });
   }
 }
