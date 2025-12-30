@@ -45,6 +45,9 @@ export default function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
+  // NEW: keep the signed-in email (for admin gating UI only)
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
   // Real meanings:
   // - accountConn: SIGNED IN status (auth/session)
   // - healthConn: read-only /api/health probe (site/backend reachable)
@@ -99,6 +102,9 @@ export default function DashboardPage() {
       setAuthed(ok);
       setAccountConn(ok ? "ok" : "no");
 
+      // NEW: store email for UI gating (admin button)
+      setUserEmail((data?.session?.user?.email ?? null) as string | null);
+
       if (!ok) {
         setHealthConn("no");
         setPlanConn("no");
@@ -113,6 +119,7 @@ export default function DashboardPage() {
     } catch {
       if (!mountedRef.current) return;
       setAuthed(false);
+      setUserEmail(null);
       setAccountConn("no");
       setHealthConn("no");
       setPlanConn("no");
@@ -263,6 +270,9 @@ export default function DashboardPage() {
       minute: "2-digit",
     });
 
+  // Admin UI gating (display only)
+  const isAdmin = (userEmail || "").toLowerCase() === "dk@dwklein.com";
+
   // Simple guard UI
   if (checking) {
     return (
@@ -411,6 +421,17 @@ export default function DashboardPage() {
               >
                 Re-check
               </button>
+
+              {/* Admin shortcut (UI only) */}
+              {isAdmin && (
+                <Link
+                  href="/admin"
+                  className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/15"
+                  title="Admin Mission Control (you only)"
+                >
+                  Admin Mission Control →
+                </Link>
+              )}
             </div>
 
             <div className="grid gap-6 lg:grid-cols-[1.3fr_0.7fr] lg:items-start">
@@ -443,9 +464,7 @@ export default function DashboardPage() {
                   </Link>
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">
-                  This dashboard is read-only by design. It does not enable trading from here.
-                </p>
+                <p className="mt-3 text-xs text-slate-500">This dashboard is read-only by design. It does not enable trading from here.</p>
               </div>
 
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
@@ -467,9 +486,7 @@ export default function DashboardPage() {
           <div className="flex items-end justify-between gap-4">
             <div>
               <h2 className="text-xl font-semibold">Status</h2>
-              <p className="mt-1 text-sm text-slate-400">
-                If something is unknown, we show it as “Not connected / Not verified”.
-              </p>
+              <p className="mt-1 text-sm text-slate-400">If something is unknown, we show it as “Not connected / Not verified”.</p>
             </div>
           </div>
 
@@ -496,6 +513,7 @@ export default function DashboardPage() {
               </div>
               <p className="mt-2 text-lg font-semibold">Signed In</p>
               <p className="mt-1 text-sm text-slate-300">Session verified. You can continue setup.</p>
+              {userEmail ? <p className="mt-2 text-xs text-slate-500">Signed in as: <span className="text-slate-200">{userEmail}</span></p> : null}
             </div>
 
             {/* Engine */}
@@ -636,6 +654,20 @@ export default function DashboardPage() {
                 >
                   ← Back to homepage
                 </Link>
+                <Link
+                  href="/live"
+                  className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/20 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
+                >
+                  Live Snapshot →
+                </Link>
+                {isAdmin && (
+                  <Link
+                    href="/admin"
+                    className="inline-flex items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/15"
+                  >
+                    Admin Mission Control →
+                  </Link>
+                )}
               </div>
             </div>
           </div>
@@ -648,9 +680,7 @@ export default function DashboardPage() {
               <li>• Trade log viewer + daily rollups</li>
               <li>• Risk settings with safe defaults</li>
             </ul>
-            <p className="mt-3 text-xs text-slate-500">
-              Built to protect stability: website updates first, execution isolated.
-            </p>
+            <p className="mt-3 text-xs text-slate-500">Built to protect stability: website updates first, execution isolated.</p>
           </div>
         </div>
       </section>
