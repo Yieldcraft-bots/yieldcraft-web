@@ -37,7 +37,7 @@ export default function QuickStartPage() {
         </div>
 
         {/* STATUS PANEL */}
-        <div className="mb-14 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
+        <div className="mb-8 rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <h2 className="text-lg font-semibold">Live status lights</h2>
@@ -83,7 +83,20 @@ export default function QuickStartPage() {
           </div>
 
           <p className="mt-4 text-xs text-slate-500">
-            Performance targets are design goals, not promises. Markets are risky and results vary.
+            Performance targets are design goals, not promises. YieldCraft is live today with disciplined execution
+            and risk guardrails, while intelligence layers evolve continuously as the system learns.
+            Markets are risky and results vary.
+          </p>
+        </div>
+
+        {/* CONNECTION ≠ TRADE NOTICE */}
+        <div className="mb-14 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+          <p className="text-sm font-semibold text-amber-200">
+            Connection check ≠ trade
+          </p>
+          <p className="mt-1 text-xs text-slate-300">
+            When you connect your API key, YieldCraft performs a signed heartbeat check.
+            This confirms access — it does <span className="font-semibold">not</span> place a trade.
           </p>
         </div>
 
@@ -92,7 +105,7 @@ export default function QuickStartPage() {
           <Step
             number={1}
             title="Create / enable your Coinbase Advanced Trade account"
-            text="Enable Advanced Trade, then create an API key with View + Trade permissions. Keep it private."
+            text="Enable Advanced Trade, then create an API key with View + Trade permissions only (no withdrawals). You’ll copy two values: the key name and the private key. We’ll show you exactly where to paste them next."
             href="https://www.coinbase.com/settings/api"
             cta="Open Coinbase API settings"
           />
@@ -108,7 +121,14 @@ export default function QuickStartPage() {
           <Step
             number={3}
             title="Connect your exchange keys in YieldCraft"
-            text="You’ll paste your key name + private key into the secure onboarding flow. YieldCraft uses signed requests — it never holds your funds."
+            text={
+              "Paste your API key name + private key into the secure onboarding flow.\n" +
+              "Checklist before you paste:\n" +
+              "• Permissions: View + Trade\n" +
+              "• Withdrawals: OFF\n" +
+              "• IP restrictions: none required\n" +
+              "YieldCraft uses signed requests and never holds your funds."
+            }
             internalHref="/connect-keys"
             cta="Open Secure Onboarding"
           />
@@ -184,13 +204,13 @@ function StatusItem({
   title: string;
   description: string;
 }) {
-  const colorMap: Record<"green" | "yellow" | "red", string> = {
+  const colorMap = {
     green: "bg-emerald-400",
     yellow: "bg-amber-400",
     red: "bg-red-500",
   };
 
-  const ringMap: Record<"green" | "yellow" | "red", string> = {
+  const ringMap = {
     green: "shadow-[0_0_0_4px_rgba(52,211,153,0.12)]",
     yellow: "shadow-[0_0_0_4px_rgba(251,191,36,0.12)]",
     red: "shadow-[0_0_0_4px_rgba(239,68,68,0.12)]",
@@ -218,8 +238,8 @@ function Step({
   number: number;
   title: string;
   text: string;
-  href?: string; // external link (Coinbase)
-  internalHref?: string; // internal link (YieldCraft)
+  href?: string;
+  internalHref?: string;
   cta?: string;
 }) {
   const clickable = Boolean(href || internalHref);
@@ -229,10 +249,9 @@ function Step({
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-400 text-sm font-bold text-slate-950">
         {number}
       </div>
-      <div className="min-w-0">
+      <div className="min-w-0 whitespace-pre-line">
         <h4 className="font-semibold">{title}</h4>
         <p className="mt-1 text-sm text-slate-400">{text}</p>
-
         {clickable && (
           <p className="mt-2 text-xs font-semibold text-amber-300">
             → {cta ?? "Open"}
