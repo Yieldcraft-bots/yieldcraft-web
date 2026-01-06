@@ -9,6 +9,9 @@ import { supabase } from "@/lib/supabaseClient";
 // Server-side referral redirect you already created
 const COINBASE_REF_PATH = "/go/coinbase";
 
+// ✅ Must match dashboard
+const USER_COINBASE_LINK_FLAG = "yc_user_coinbase_linked_v1";
+
 type Status = "idle" | "ok" | "warn" | "bad" | "checking";
 
 function Pill({ label, status }: { label: string; status: Status }) {
@@ -99,10 +102,10 @@ export default function ConnectKeysPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
-  // Step tracking (for “guided page” success rate)
-  const [accountChoice, setAccountChoice] = useState<"none" | "new" | "existing">(
-    "none"
-  );
+  // Step tracking
+  const [accountChoice, setAccountChoice] = useState<
+    "none" | "new" | "existing"
+  >("none");
 
   // API fields (client-side only; no storage in this file)
   const [keyName, setKeyName] = useState("");
@@ -116,6 +119,20 @@ export default function ConnectKeysPage() {
   const [verifyStep, setVerifyStep] = useState<Status>("idle"); // Step 3
 
   const [message, setMessage] = useState<string | null>(null);
+
+  // ✅ If user already completed connect-keys on this device, reflect it
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem(USER_COINBASE_LINK_FLAG);
+      if (v === "true") {
+        setVerifyStep("ok");
+        setApiStep((s) => (s === "idle" ? "ok" : s));
+        setCoinbaseStep((s) => (s === "idle" ? "ok" : s));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // 🔒 Auth guard — same pattern as dashboard
   useEffect(() => {
@@ -178,9 +195,16 @@ export default function ConnectKeysPage() {
       return;
     }
 
+    // ✅ Mark this user (on this device) as “linked” so Dashboard shows YOUR COINBASE: GREEN
+    try {
+      window.localStorage.setItem(USER_COINBASE_LINK_FLAG, "true");
+    } catch {
+      // ignore
+    }
+
     setVerifyStep("ok");
     setMessage(
-      "Looks good ✅ Next: we’ll add a safe server-side verification (read-only) so the dashboard can show “EXCHANGE KEYS: GREEN”."
+      "Saved ✅ Your dashboard will now show “YOUR COINBASE: GREEN” on this device. Next: we’ll wire secure server-side storage so it works across devices."
     );
   }
 
@@ -241,7 +265,7 @@ export default function ConnectKeysPage() {
             <p className="mt-2 text-sm text-slate-300">
               YieldCraft connects using{" "}
               <span className="font-semibold text-slate-100">
-                read + trade permissions only
+                view + trade permissions only
               </span>
               .
             </p>
@@ -435,8 +459,7 @@ export default function ConnectKeysPage() {
               </button>
 
               <p className="text-xs text-slate-400">
-                Next upgrade: add a safe server-side verification (read-only) so your dashboard can
-                show “EXCHANGE KEYS: GREEN”.
+                Next upgrade: store per-user connection server-side so it works across devices.
               </p>
             </div>
           </div>
