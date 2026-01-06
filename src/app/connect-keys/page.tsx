@@ -2,9 +2,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type ReactNode, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient"; // ✅ match exact filename + correct path
+import { supabase } from "@/lib/supabaseClient";
 
 // Server-side referral redirect you already created
 const COINBASE_REF_PATH = "/go/coinbase";
@@ -93,10 +93,31 @@ export default function ConnectKeysPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
 
+  // ✅ ALL hooks must be defined BEFORE any conditional return (fixes React #310)
+
+  // Auth gate
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
-  // 🔒 Auth guard — same pattern as dashboard, prevents non-logged users from seeing key fields
+  // Step tracking (for “guided page” success rate)
+  const [accountChoice, setAccountChoice] = useState<"none" | "new" | "existing">(
+    "none"
+  );
+
+  // API fields (client-side only; no storage in this file)
+  const [keyName, setKeyName] = useState("");
+  const [keyId, setKeyId] = useState("");
+  const [keySecret, setKeySecret] = useState("");
+  const [showSecret, setShowSecret] = useState(false);
+
+  // Status lights
+  const [coinbaseStep, setCoinbaseStep] = useState<Status>("idle"); // Step 1
+  const [apiStep, setApiStep] = useState<Status>("idle"); // Step 2
+  const [verifyStep, setVerifyStep] = useState<Status>("idle"); // Step 3
+
+  const [message, setMessage] = useState<string | null>(null);
+
+  // 🔒 Auth guard — same pattern as dashboard
   useEffect(() => {
     mountedRef.current = true;
 
@@ -124,51 +145,15 @@ export default function ConnectKeysPage() {
     };
   }, [router]);
 
-  if (checking) {
-    return (
-      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
-        <div className="text-sm text-slate-300">Checking session…</div>
-      </main>
-    );
-  }
-
-  if (!authed) {
-    return (
-      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
-        <div className="text-sm text-slate-300">Redirecting to login…</div>
-      </main>
-    );
-  }
-
-  // Step tracking (for “guided page” success rate)
-  const [accountChoice, setAccountChoice] = useState<"none" | "new" | "existing">(
-    "none"
-  );
-
-  // API fields (client-side only; no storage in this file)
-  const [keyName, setKeyName] = useState("");
-  const [keyId, setKeyId] = useState("");
-  const [keySecret, setKeySecret] = useState("");
-  const [showSecret, setShowSecret] = useState(false);
-
-  // Status lights
-  const [coinbaseStep, setCoinbaseStep] = useState<Status>("idle"); // Step 1
-  const [apiStep, setApiStep] = useState<Status>("idle"); // Step 2
-  const [verifyStep, setVerifyStep] = useState<Status>("idle"); // Step 3
-
-  const [message, setMessage] = useState<string | null>(null);
-
   function chooseAccount(which: "new" | "existing") {
     setAccountChoice(which);
     setCoinbaseStep("ok");
-    // Nudge next step visually
     setApiStep((s) => (s === "idle" ? "warn" : s));
     setMessage(null);
   }
 
   function openedApiSettings() {
     setApiStep("ok");
-    // Nudge verify step visually
     setVerifyStep((s) => (s === "idle" ? "warn" : s));
     setMessage(null);
   }
@@ -196,6 +181,23 @@ export default function ConnectKeysPage() {
     setVerifyStep("ok");
     setMessage(
       "Looks good ✅ Next: we’ll add a safe server-side verification (read-only) so the dashboard can show “EXCHANGE KEYS: GREEN”."
+    );
+  }
+
+  // ✅ Now conditional returns are safe (hooks already declared above)
+  if (checking) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-300">Checking session…</div>
+      </main>
+    );
+  }
+
+  if (!authed) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
+        <div className="text-sm text-slate-300">Redirecting to login…</div>
+      </main>
     );
   }
 
