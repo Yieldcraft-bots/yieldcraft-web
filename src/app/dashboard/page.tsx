@@ -42,6 +42,9 @@ function normEmail(v: any): string {
   return (typeof v === "string" ? v : "").trim().toLowerCase();
 }
 
+// 🔑 Local per-user marker (temporary until we store keys per user server-side)
+const USER_COINBASE_LINK_FLAG = "yc_user_coinbase_linked_v1";
+
 export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
@@ -53,7 +56,6 @@ export default function DashboardPage() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [displayEmail, setDisplayEmail] = useState<string | null>(null);
 
-  // Real meanings:
   // - accountConn: SIGNED IN status (auth/session)
   // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
@@ -68,13 +70,17 @@ export default function DashboardPage() {
     created_at: null,
   });
 
-  // Exchange keys (read-only probe via /api/pulse-heartbeat)
-  const [exchangeConn, setExchangeConn] = useState<Conn>("checking");
-  const [exchangeMeta, setExchangeMeta] = useState<{
+  // ✅ Split exchange into TWO concepts:
+  // 1) platformEngineConn = server env Coinbase auth (applies to whole platform)
+  // 2) userCoinbaseConn   = user completed "Connect Keys" flow (per-user)
+  const [platformEngineConn, setPlatformEngineConn] = useState<Conn>("checking");
+  const [platformEngineMeta, setPlatformEngineMeta] = useState<{
     authOk: boolean;
     authStatus?: number;
     mode?: string;
   }>({ authOk: false });
+
+  const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
 
   // Trading status (read-only from /api/pulse-trade GET)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
@@ -86,12 +92,24 @@ export default function DashboardPage() {
 
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
+  const readUserCoinbaseFlag = useCallback(() => {
+    try {
+      const v = window.localStorage.getItem(USER_COINBASE_LINK_FLAG);
+      // "ok" only if explicitly set true
+      const ok = v === "true";
+      setUserCoinbaseConn(ok ? "ok" : "no");
+    } catch {
+      setUserCoinbaseConn("no");
+    }
+  }, []);
+
   const runCheck = useCallback(async () => {
     setChecking(true);
     setAccountConn("checking");
     setHealthConn("checking");
     setPlanConn("checking");
-    setExchangeConn("checking");
+    setPlatformEngineConn("checking");
+    setUserCoinbaseConn("checking");
     setTradeConn("checking");
     setLastCheck(new Date());
 
@@ -108,10 +126,7 @@ export default function DashboardPage() {
       setAuthed(ok);
       setAccountConn(ok ? "ok" : "no");
 
-      // Canonical email (provider)
       const email = session?.user?.email ?? null;
-
-      // Display email: prefers metadata email if present (often reflects actual login identity)
       const metaEmail =
         (session?.user as any)?.user_metadata?.email ??
         (session?.user as any)?.user_metadata?.preferred_email ??
@@ -123,7 +138,8 @@ export default function DashboardPage() {
       if (!ok) {
         setHealthConn("no");
         setPlanConn("no");
-        setExchangeConn("no");
+        setPlatformEngineConn("no");
+        setUserCoinbaseConn("no");
         setTradeConn("no");
         setChecking(false);
         router.replace("/login");
@@ -139,14 +155,18 @@ export default function DashboardPage() {
       setAccountConn("no");
       setHealthConn("no");
       setPlanConn("no");
-      setExchangeConn("no");
+      setPlatformEngineConn("no");
+      setUserCoinbaseConn("no");
       setTradeConn("no");
       setChecking(false);
       router.replace("/login");
       return;
     }
 
-    // 2) Read-only health probe (does NOT mean “keys connected”)
+    // ✅ 1b) Per-user Coinbase link indicator (temporary local marker)
+    if (mountedRef.current) readUserCoinbaseFlag();
+
+    // 2) Read-only health probe
     try {
       const res = await fetch("/api/health", { cache: "no-store" });
 
@@ -204,7 +224,7 @@ export default function DashboardPage() {
       setPlanConn("no");
     }
 
-    // 4) Exchange keys probe (read-only) — verifies Coinbase auth only
+    // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
     try {
       const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
 
@@ -220,18 +240,17 @@ export default function DashboardPage() {
 
       if (!mountedRef.current) return;
 
-      setExchangeMeta({
+      setPlatformEngineMeta({
         authOk,
         authStatus: j?.coinbase_auth?.status ?? j?.status,
         mode: j?.mode,
       });
 
-      // "ok" means: read-only auth verified (not just reachable)
-      setExchangeConn(ok ? "ok" : "no");
+      setPlatformEngineConn(ok ? "ok" : "no");
     } catch {
       if (!mountedRef.current) return;
-      setExchangeConn("no");
-      setExchangeMeta({ authOk: false });
+      setPlatformEngineConn("no");
+      setPlatformEngineMeta({ authOk: false });
     }
 
     // 5) Read-only trading gates (does NOT place orders)
@@ -256,8 +275,6 @@ export default function DashboardPage() {
 
       setTradeGates(parsed);
 
-      // "ok" means we can read the gate state successfully
-      // even if LIVE_ALLOWED is false (locked is expected).
       const ok = !!(r.ok && j && j.ok === true);
       setTradeConn(ok ? "ok" : "no");
     } catch {
@@ -267,7 +284,7 @@ export default function DashboardPage() {
 
     if (!mountedRef.current) return;
     setChecking(false);
-  }, [router]);
+  }, [router, readUserCoinbaseFlag]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -289,11 +306,9 @@ export default function DashboardPage() {
   // Admin UI gating (display only)
   const isAdmin = useMemo(() => {
     const target = "dk@dwklein.com";
-    // check BOTH canonical and display email
     return normEmail(userEmail) === target || normEmail(displayEmail) === target;
   }, [userEmail, displayEmail]);
 
-  // Simple guard UI
   if (checking) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
@@ -302,7 +317,6 @@ export default function DashboardPage() {
     );
   }
 
-  // If not authed, we already redirected — this prevents a flash.
   if (!authed) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
@@ -336,7 +350,8 @@ export default function DashboardPage() {
   const accP = pill(accountConn);
   const healthP = pill(healthConn);
   const planP = pill(planConn);
-  const exP = pill(exchangeConn);
+  const platP = pill(platformEngineConn);
+  const userKeysP = pill(userCoinbaseConn);
   const tradeP = pill(tradeConn);
 
   const armedLabel = tradeGates.LIVE_ALLOWED
@@ -362,7 +377,6 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
-      {/* Top */}
       <section className="border-b border-slate-800 bg-gradient-to-b from-slate-950 to-slate-900">
         <div className="mx-auto max-w-6xl px-6 py-12">
           <div className="flex flex-col gap-6">
@@ -371,7 +385,6 @@ export default function DashboardPage() {
                 Dashboard · Control Panel (Read-Only)
               </span>
 
-              {/* Signed-in status (real) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
@@ -383,19 +396,17 @@ export default function DashboardPage() {
                 SIGNED IN: {accP.label}
               </span>
 
-              {/* Health probe (read-only) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   healthP.wrap,
                 ].join(" ")}
-                title="This is a read-only /api/health probe (site/backend reachable)."
+                title="Read-only /api/health probe (site/backend reachable)."
               >
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
               </span>
 
-              {/* Plan entitlements (bearer) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
@@ -407,25 +418,36 @@ export default function DashboardPage() {
                 PLAN ACCESS: {planP.label}
               </span>
 
-              {/* Exchange keys (read-only auth verification) */}
+              {/* ✅ NEW: per-user status */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  exP.wrap,
+                  userKeysP.wrap,
                 ].join(" ")}
-                title="Read-only Coinbase auth verification via /api/pulse-heartbeat. Does NOT place trades."
+                title="This is YOUR connection status. It turns green after you complete Connect Keys."
               >
-                <span className={["h-2 w-2 rounded-full", exP.dot].join(" ")} />
-                EXCHANGE KEYS: {exP.label}
+                <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
+                YOUR COINBASE: {userKeysP.label}
               </span>
 
-              {/* Trading status (read-only gates probe) */}
+              {/* ✅ Renamed: platform engine keys */}
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  platP.wrap,
+                ].join(" ")}
+                title="Platform engine Coinbase auth (server env). This is NOT user-specific."
+              >
+                <span className={["h-2 w-2 rounded-full", platP.dot].join(" ")} />
+                PLATFORM ENGINE: {platP.label}
+              </span>
+
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   tradeP.wrap,
                 ].join(" ")}
-                title="Read-only check of /api/pulse-trade gates. This does NOT place trades."
+                title="Read-only check of /api/pulse-trade gates (does NOT place trades)."
               >
                 <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
                 TRADING STATUS: {tradeP.label}
@@ -444,7 +466,6 @@ export default function DashboardPage() {
                 Re-check
               </button>
 
-              {/* Admin shortcut (UI only) */}
               {isAdmin && (
                 <Link
                   href="/admin"
@@ -497,6 +518,14 @@ export default function DashboardPage() {
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-400">
                   Trading is <span className={armedLabel.tone}>{armedLabel.title}</span> unless you explicitly arm it.
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
+                  <p className="font-semibold text-slate-100">Important</p>
+                  <p className="mt-1 text-slate-400">
+                    “PLATFORM ENGINE” = server connectivity (us).<br />
+                    “YOUR COINBASE” = your personal setup completion (you).
+                  </p>
                 </div>
               </aside>
             </div>
@@ -621,50 +650,91 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            {/* Exchange Keys */}
+            {/* User Coinbase */}
             <div
               className={[
                 "rounded-3xl border bg-slate-900/40 p-5 lg:col-span-3",
-                exchangeConn === "ok"
+                userCoinbaseConn === "ok"
                   ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
                   : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
               ].join(" ")}
             >
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Exchange</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Your Connection</p>
                 <span
                   className={[
                     "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    exchangeConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
+                    userCoinbaseConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
                   ].join(" ")}
                 >
-                  {exchangeConn === "ok" ? "VERIFIED" : "NOT VERIFIED"}
+                  {userCoinbaseConn === "ok" ? "CONNECTED" : "NOT CONNECTED"}
                 </span>
               </div>
-              <p className="mt-2 text-lg font-semibold">Coinbase Keys (Read-Only)</p>
+              <p className="mt-2 text-lg font-semibold">Your Coinbase Link</p>
               <p className="mt-1 text-sm text-slate-300">
-                {exchangeConn === "ok"
-                  ? "Authentication verified (status 200). Safe mode confirmed."
-                  : "Auth probe failed or not reachable. Re-check or review env keys."}
+                {userCoinbaseConn === "ok"
+                  ? "You completed the Connect Keys setup on this device."
+                  : "You have not connected Coinbase yet. Click “Connect Keys” to finish setup."}
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Link
+                  href="/connect-keys"
+                  className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300"
+                >
+                  Connect Keys →
+                </Link>
+              </div>
+
+              <p className="mt-3 text-[11px] text-slate-500">
+                Note: This indicator is temporary (local-only). Next upgrade will store encrypted per-user exchange linkage server-side.
+              </p>
+            </div>
+
+            {/* Platform Engine */}
+            <div
+              className={[
+                "rounded-3xl border bg-slate-900/40 p-5 lg:col-span-3",
+                platformEngineConn === "ok"
+                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
+                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
+              ].join(" ")}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Platform Engine</p>
+                <span
+                  className={[
+                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+                    platformEngineConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
+                  ].join(" ")}
+                >
+                  {platformEngineConn === "ok" ? "VERIFIED" : "NOT VERIFIED"}
+                </span>
+              </div>
+              <p className="mt-2 text-lg font-semibold">Coinbase Engine Auth (Server)</p>
+              <p className="mt-1 text-sm text-slate-300">
+                {platformEngineConn === "ok"
+                  ? "Platform Coinbase auth verified (server-side)."
+                  : "Platform Coinbase auth failed. Review env keys / IP allowlist."}
               </p>
 
               <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/35 p-3 text-xs text-slate-300">
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   <span>
                     auth_ok:{" "}
-                    <span className={exchangeMeta.authOk ? "text-emerald-200" : "text-rose-200"}>
-                      {exchangeMeta.authOk ? "true" : "false"}
+                    <span className={platformEngineMeta.authOk ? "text-emerald-200" : "text-rose-200"}>
+                      {platformEngineMeta.authOk ? "true" : "false"}
                     </span>
                   </span>
                   <span>
-                    status: <span className="text-slate-200">{exchangeMeta.authStatus ?? "—"}</span>
+                    status: <span className="text-slate-200">{platformEngineMeta.authStatus ?? "—"}</span>
                   </span>
                   <span>
-                    mode: <span className="text-slate-200">{exchangeMeta.mode ?? "—"}</span>
+                    mode: <span className="text-slate-200">{platformEngineMeta.mode ?? "—"}</span>
                   </span>
                 </div>
                 <p className="mt-2 text-[11px] text-slate-400">
-                  Data comes from <code className="text-slate-200">/api/pulse-heartbeat</code>. This is a read-only verification, not execution.
+                  Data comes from <code className="text-slate-200">/api/pulse-heartbeat</code>. This is platform-level verification.
                 </p>
               </div>
             </div>
