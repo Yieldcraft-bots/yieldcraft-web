@@ -9,9 +9,6 @@ import { supabase } from "@/lib/supabaseClient";
 // Server-side referral redirect you already created
 const COINBASE_REF_PATH = "/go/coinbase";
 
-// ✅ Must match dashboard
-const USER_COINBASE_LINK_FLAG = "yc_user_coinbase_linked_v1";
-
 type Status = "idle" | "ok" | "warn" | "bad" | "checking";
 
 function Pill({ label, status }: { label: string; status: Status }) {
@@ -92,20 +89,27 @@ function ExternalButton({
   );
 }
 
+function scrollToId(id: string) {
+  if (typeof window === "undefined") return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 export default function ConnectKeysPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
 
-  // ✅ ALL hooks must be defined BEFORE any conditional return (fixes React #310)
+  // ✅ ALL hooks must be defined BEFORE any conditional return
 
   // Auth gate
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
   // Step tracking
-  const [accountChoice, setAccountChoice] = useState<
-    "none" | "new" | "existing"
-  >("none");
+  const [accountChoice, setAccountChoice] = useState<"none" | "new" | "existing">(
+    "none"
+  );
 
   // API fields (client-side only; no storage in this file)
   const [keyName, setKeyName] = useState("");
@@ -120,21 +124,7 @@ export default function ConnectKeysPage() {
 
   const [message, setMessage] = useState<string | null>(null);
 
-  // ✅ If user already completed connect-keys on this device, reflect it
-  useEffect(() => {
-    try {
-      const v = window.localStorage.getItem(USER_COINBASE_LINK_FLAG);
-      if (v === "true") {
-        setVerifyStep("ok");
-        setApiStep((s) => (s === "idle" ? "ok" : s));
-        setCoinbaseStep((s) => (s === "idle" ? "ok" : s));
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // 🔒 Auth guard — same pattern as dashboard
+  // 🔒 Auth guard
   useEffect(() => {
     mountedRef.current = true;
 
@@ -167,12 +157,16 @@ export default function ConnectKeysPage() {
     setCoinbaseStep("ok");
     setApiStep((s) => (s === "idle" ? "warn" : s));
     setMessage(null);
+    // Keep flow obvious: bring them to Step 2 right away
+    setTimeout(() => scrollToId("step-2"), 50);
   }
 
   function openedApiSettings() {
     setApiStep("ok");
     setVerifyStep((s) => (s === "idle" ? "warn" : s));
     setMessage(null);
+    // After opening, cue Step 3 when they come back
+    setTimeout(() => scrollToId("step-3"), 50);
   }
 
   async function onVerify() {
@@ -195,20 +189,13 @@ export default function ConnectKeysPage() {
       return;
     }
 
-    // ✅ Mark this user (on this device) as “linked” so Dashboard shows YOUR COINBASE: GREEN
-    try {
-      window.localStorage.setItem(USER_COINBASE_LINK_FLAG, "true");
-    } catch {
-      // ignore
-    }
-
     setVerifyStep("ok");
     setMessage(
-      "Saved ✅ Your dashboard will now show “YOUR COINBASE: GREEN” on this device. Next: we’ll wire secure server-side storage so it works across devices."
+      "Looks good ✅ Next: we’ll add a safe server-side verification (read-only) so the dashboard can show “YOUR COINBASE: GREEN”."
     );
   }
 
-  // ✅ Now conditional returns are safe (hooks already declared above)
+  // ✅ Conditional returns are safe (hooks already declared above)
   if (checking) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
@@ -249,7 +236,7 @@ export default function ConnectKeysPage() {
 
             <div className="mt-2 flex flex-wrap gap-2">
               <Pill label="COINBASE" status={coinbaseStep} />
-              <Pill label="API KEY" status={apiStep} />
+              <Pill label="ACCESS KEYS" status={apiStep} />
               <Pill label="VERIFY" status={verifyStep} />
             </div>
           </div>
@@ -259,32 +246,54 @@ export default function ConnectKeysPage() {
       {/* Content */}
       <section className="bg-slate-950">
         <div className="mx-auto max-w-3xl px-6 py-10 space-y-10">
-          {/* SAFETY */}
+          {/* TRUST / WHY THIS EXISTS */}
           <div className="rounded-3xl border border-slate-800 bg-slate-900/35 p-6">
-            <h2 className="text-lg font-semibold">🔒 Your funds stay on Coinbase</h2>
+            <h2 className="text-lg font-semibold">✅ Why this step exists (1 minute)</h2>
+
             <p className="mt-2 text-sm text-slate-300">
-              YieldCraft connects using{" "}
-              <span className="font-semibold text-slate-100">
-                view + trade permissions only
-              </span>
-              .
+              YieldCraft does <span className="font-semibold text-slate-100">not</span> log into your Coinbase
+              account and cannot move your money.
             </p>
+
+            <p className="mt-3 text-sm text-slate-300">
+              Instead, Coinbase gives you{" "}
+              <span className="font-semibold text-slate-100">Secure Access Keys</span> that:
+            </p>
+
             <ul className="mt-4 space-y-2 text-sm text-slate-200">
-              <li>• ❌ We cannot withdraw funds</li>
-              <li>• ❌ We cannot move money off Coinbase</li>
-              <li>• ✅ You can disable access instantly from Coinbase</li>
+              <li>• ✅ Allow viewing balances</li>
+              <li>• ✅ Allow placing trades only</li>
+              <li>• ❌ Cannot withdraw funds</li>
+              <li>• ❌ Cannot transfer money</li>
             </ul>
+
             <p className="mt-4 text-xs text-slate-400">
-              This is the same permission model used by professional trading platforms.
+              You can revoke access instantly from Coinbase at any time. This is the same security model used by
+              professional trading platforms.
             </p>
+
+            <div className="mt-5">
+              <button
+                type="button"
+                onClick={() => scrollToId("step-1")}
+                className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-700 bg-slate-950/30 px-5 py-3 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
+              >
+                Continue — set up Secure Access Keys →
+              </button>
+            </div>
           </div>
 
           {/* STEP 1 */}
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/30 p-6">
+          <div id="step-1" className="rounded-3xl border border-slate-800 bg-slate-900/30 p-6 scroll-mt-24">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-lg font-semibold">🏦 Step 1: Coinbase account</h2>
+              <h2 className="text-lg font-semibold">🏦 Step 1: Choose the Coinbase account</h2>
               <span className="text-xs text-slate-400">Choose one (both work)</span>
             </div>
+
+            <p className="mt-3 text-sm text-slate-300">
+              Choose the Coinbase account you want YieldCraft to trade on. We recommend a separate account for bots,
+              but both options work.
+            </p>
 
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <button
@@ -306,10 +315,7 @@ export default function ConnectKeysPage() {
                 </ul>
 
                 <div className="mt-4">
-                  <ExternalButton
-                    href={COINBASE_REF_PATH}
-                    onClick={() => chooseAccount("new")}
-                  >
+                  <ExternalButton href={COINBASE_REF_PATH} onClick={() => chooseAccount("new")}>
                     Create Coinbase account →
                   </ExternalButton>
                 </div>
@@ -332,15 +338,11 @@ export default function ConnectKeysPage() {
                 <p className="text-sm font-semibold text-slate-50">Already use Coinbase?</p>
                 <p className="mt-1 text-base font-semibold">Use existing account</p>
                 <p className="mt-3 text-sm text-slate-300">
-                  Works great if you mainly hold long-term. If you actively trade, a
-                  separate account is usually simpler.
+                  Works great if you mainly hold long-term. If you actively trade, a separate account is usually simpler.
                 </p>
 
                 <div className="mt-4">
-                  <ExternalButton
-                    href="https://www.coinbase.com/signin"
-                    onClick={() => chooseAccount("existing")}
-                  >
+                  <ExternalButton href="https://www.coinbase.com/signin" onClick={() => chooseAccount("existing")}>
                     Sign in to Coinbase →
                   </ExternalButton>
                 </div>
@@ -349,16 +351,37 @@ export default function ConnectKeysPage() {
           </div>
 
           {/* STEP 2 */}
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/30 p-6">
+          <div id="step-2" className="rounded-3xl border border-slate-800 bg-slate-900/30 p-6 scroll-mt-24">
             <div className="flex items-center justify-between gap-4">
-              <h2 className="text-lg font-semibold">🔑 Step 2: Create your API key</h2>
-              <span className="text-xs text-slate-400">Use these exact settings</span>
+              <h2 className="text-lg font-semibold">🔑 Step 2: Create Secure Access Keys</h2>
+              <span className="text-xs text-slate-400">We’ll guide you (no jargon)</span>
+            </div>
+
+            {/* Pre-checklist (prevents the “I’m lost” moment) */}
+            <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/25 p-5">
+              <p className="text-sm font-semibold text-slate-100">What you’ll do next (30 seconds)</p>
+              <p className="mt-2 text-sm text-slate-300">
+                Inside Coinbase, you’ll create a set of <span className="font-semibold text-slate-100">Secure Access Keys</span>.
+                These keys let YieldCraft place trades without ever being able to withdraw funds.
+              </p>
+
+              <ol className="mt-4 space-y-2 text-sm text-slate-200">
+                <li>1) Open Coinbase Settings</li>
+                <li>2) Go to <span className="font-semibold">API</span></li>
+                <li>3) Click <span className="font-semibold">Create API Key</span></li>
+                <li>
+                  4) Enable only:
+                  <span className="font-semibold"> View + Trade</span> (leave Withdraw off)
+                </li>
+              </ol>
+
+              <p className="mt-4 text-xs text-slate-400">
+                Coinbase layout can vary. That’s okay — Step 3 is a quick “did you copy the full values?” check.
+              </p>
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
-              <p className="text-sm font-semibold text-slate-100">
-                Create ONE new API key with:
-              </p>
+              <p className="text-sm font-semibold text-slate-100">Use these exact settings:</p>
               <ul className="mt-3 space-y-2 text-sm text-slate-200">
                 <li>
                   • ✅ Permissions: <span className="font-semibold">View + Trade</span>
@@ -385,16 +408,27 @@ export default function ConnectKeysPage() {
               </div>
 
               <p className="mt-3 text-xs text-slate-400">
-                Coinbase layout can vary. That’s okay — we verify in the next step.
+                After you create the key, Coinbase will show you a Key Name, Key ID, and Secret. Copy them once — then come
+                back here for Step 3.
               </p>
             </div>
           </div>
 
           {/* STEP 3 */}
-          <div className="rounded-3xl border border-slate-800 bg-slate-900/30 p-6">
+          <div id="step-3" className="rounded-3xl border border-slate-800 bg-slate-900/30 p-6 scroll-mt-24">
             <div className="flex items-center justify-between gap-4">
               <h2 className="text-lg font-semibold">🔐 Step 3: Paste & verify</h2>
-              <span className="text-xs text-slate-400">Paste → Verify → Green</span>
+              <span className="text-xs text-slate-400">Paste → Verify → Confidence</span>
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/25 p-4">
+              <p className="text-sm text-slate-200">
+                <span className="font-semibold text-slate-100">Important:</span> Connecting keys does{" "}
+                <span className="font-semibold text-slate-100">not</span> start trading.
+              </p>
+              <p className="mt-1 text-xs text-slate-400">
+                Trading stays OFF until you explicitly arm it. You remain in control.
+              </p>
             </div>
 
             <div className="mt-4 grid gap-4">
@@ -439,9 +473,7 @@ export default function ConnectKeysPage() {
                   placeholder="Paste Secret"
                   autoComplete="off"
                 />
-                <p className="mt-2 text-xs text-slate-400">
-                  We never display this back to you. Store it safely.
-                </p>
+                <p className="mt-2 text-xs text-slate-400">We never display this back to you. Store it safely.</p>
               </div>
 
               {message && (
@@ -455,11 +487,12 @@ export default function ConnectKeysPage() {
                 onClick={onVerify}
                 className="rounded-2xl bg-amber-400 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300"
               >
-                Verify & Connect
+                Verify & Continue
               </button>
 
               <p className="text-xs text-slate-400">
-                Next upgrade: store per-user connection server-side so it works across devices.
+                Next upgrade: add a safe server-side verification (read-only) so your dashboard can show “YOUR COINBASE:
+                GREEN”.
               </p>
             </div>
           </div>
@@ -472,16 +505,14 @@ export default function ConnectKeysPage() {
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
                 <p className="text-sm font-semibold text-slate-100">Pulse (Active)</p>
                 <p className="mt-1 text-sm text-slate-300">
-                  Starts <span className="font-semibold">disarmed</span> by default. Rules-based
-                  execution.
+                  Starts <span className="font-semibold">disarmed</span> by default. Rules-based execution.
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-800 bg-slate-950/30 p-5">
                 <p className="text-sm font-semibold text-slate-100">Atlas (Long-Term / DCA)</p>
                 <p className="mt-1 text-sm text-slate-300">
-                  Uses the <span className="font-semibold">same connection</span>. No extra setup
-                  later.
+                  Uses the <span className="font-semibold">same connection</span>. No extra setup later.
                 </p>
               </div>
             </div>
@@ -503,8 +534,8 @@ export default function ConnectKeysPage() {
             </div>
 
             <p className="mt-4 text-xs text-slate-500">
-              YieldCraft provides software tools for structured workflows. Not investment advice.
-              Trading involves risk, including possible loss of capital.
+              YieldCraft provides software tools for structured workflows. Not investment advice. Trading involves risk,
+              including possible loss of capital.
             </p>
           </div>
         </div>
