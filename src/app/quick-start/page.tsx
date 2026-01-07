@@ -13,9 +13,9 @@ export default function QuickStartPage() {
 
           <h1 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
             Get{" "}
-            <span className="text-amber-400">connected</span>, get{" "}
-            <span className="text-amber-400">confirmed</span>, then let the engine{" "}
-            <span className="text-amber-400">wait for the right moment</span>.
+            <span className="text-sky-300">connected</span>, get{" "}
+            <span className="text-sky-300">confirmed</span>, then let the engine{" "}
+            <span className="text-sky-300">wait for the right moment</span>.
           </h1>
 
           <p className="mt-6 text-lg text-slate-300">
@@ -27,11 +27,63 @@ export default function QuickStartPage() {
           <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
             <p className="text-sm text-slate-300">
               <span className="font-semibold text-slate-50">Important:</span> it’s normal
-              to see <span className="text-amber-300 font-semibold">no trade</span> right away.
+              to see <span className="text-sky-200 font-semibold">no trade</span> right away.
               Waiting is part of the strategy.
             </p>
             <p className="mt-2 text-xs text-slate-400">
               Your “proof” is the green lights + heartbeat confirmation — not an immediate order.
+            </p>
+          </div>
+        </div>
+
+        {/* DISCIPLINE SYSTEM (NEW) */}
+        <div className="mb-8 rounded-3xl border border-slate-800 bg-slate-900/35 p-6">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <div className="max-w-3xl">
+              <p className="text-xs font-semibold tracking-[0.28em] text-sky-300 uppercase">
+                The Discipline System
+              </p>
+              <h2 className="mt-2 text-xl md:text-2xl font-semibold">
+                Build a system for yourself — then let the bots go to work.
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                YieldCraft is designed to reward consistency, not impulse. Most people fail
+                because they trade emotionally. We help you build a repeatable habit:
+                <span className="text-slate-200 font-semibold"> pay yourself first</span>, contribute consistently,
+                and let disciplined automation do what it’s built to do.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Pill>Consistency &gt; intensity</Pill>
+              <Pill>Risk guardrails</Pill>
+              <Pill>Never force trades</Pill>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <GlassCard
+              title="Start small (yes, even $60)"
+              text="YieldCraft supports small accounts. The system adapts to your available balance and exchange minimums. Smaller balances may trade less often — by design."
+              accent="sky"
+            />
+            <GlassCard
+              title="Add a consistent amount"
+              text="Many users choose a monthly contribution (like paying themselves first). This builds discipline and reduces emotional decision-making."
+              accent="sky"
+            />
+            <GlassCard
+              title="Let the engine wait"
+              text="YieldCraft does not trade constantly. It waits for high-quality conditions. No trade is often a sign of discipline — not a problem."
+              accent="sky"
+            />
+          </div>
+
+          <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+            <p className="text-sm text-slate-300">
+              <span className="font-semibold text-slate-50">How sizing works:</span>{" "}
+              YieldCraft reads your available balances from the exchange and constrains order sizes by
+              available funds, minimum order rules, and risk controls. No leverage. No forced sizing.
             </p>
           </div>
         </div>
@@ -90,8 +142,8 @@ export default function QuickStartPage() {
         </div>
 
         {/* CONNECTION ≠ TRADE NOTICE */}
-        <div className="mb-14 rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
-          <p className="text-sm font-semibold text-amber-200">
+        <div className="mb-14 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+          <p className="text-sm font-semibold text-sky-200">
             Connection check ≠ trade
           </p>
           <p className="mt-1 text-xs text-slate-300">
@@ -104,8 +156,12 @@ export default function QuickStartPage() {
         <div className="space-y-6">
           <Step
             number={1}
-            title="Create / enable your Coinbase Advanced Trade account"
-            text="Enable Advanced Trade, then create an API key with View + Trade permissions only (no withdrawals). You’ll copy two values: the key name and the private key. We’ll show you exactly where to paste them next."
+            title="Create / enable your Coinbase Advanced Trade account (and fund it if it’s new)"
+            text={
+              "Enable Advanced Trade, then create an API key with View + Trade permissions only (no withdrawals).\n" +
+              "If your Coinbase account is new, you must deposit/fund it before trading can occur.\n" +
+              "You’ll copy two values: the key name and the private key. We’ll show you exactly where to paste them next."
+            }
             href="https://www.coinbase.com/settings/api"
             cta="Open Coinbase API settings"
           />
@@ -153,7 +209,7 @@ export default function QuickStartPage() {
           <div className="mt-5 flex flex-wrap gap-3">
             <Link
               href="/pricing"
-              className="inline-flex items-center justify-center rounded-full bg-amber-400 px-6 py-3 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
+              className="inline-flex items-center justify-center rounded-full bg-sky-400 px-6 py-3 text-sm font-semibold text-slate-950 shadow-lg hover:bg-sky-300"
             >
               Choose a Plan
             </Link>
@@ -191,6 +247,33 @@ function InfoCard({ title, text }: { title: string; text: string }) {
     <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
       <p className="text-sm font-semibold text-slate-50">{title}</p>
       <p className="mt-1 text-xs text-slate-400">{text}</p>
+    </div>
+  );
+}
+
+function GlassCard({
+  title,
+  text,
+  accent,
+}: {
+  title: string;
+  text: string;
+  accent?: "sky";
+}) {
+  const accentRing =
+    accent === "sky"
+      ? "shadow-[0_0_0_4px_rgba(56,189,248,0.10)]"
+      : "shadow-[0_0_0_4px_rgba(148,163,184,0.08)]";
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950/55 p-4">
+      <div className="flex items-start gap-3">
+        <span className={`mt-1 h-3 w-3 rounded-full bg-sky-400 ${accentRing}`} />
+        <div>
+          <p className="text-sm font-semibold text-slate-50">{title}</p>
+          <p className="mt-1 text-xs text-slate-400">{text}</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -246,14 +329,14 @@ function Step({
 
   const CardInner = (
     <div className="flex gap-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-400 text-sm font-bold text-slate-950">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-400 text-sm font-bold text-slate-950">
         {number}
       </div>
       <div className="min-w-0 whitespace-pre-line">
         <h4 className="font-semibold">{title}</h4>
         <p className="mt-1 text-sm text-slate-400">{text}</p>
         {clickable && (
-          <p className="mt-2 text-xs font-semibold text-amber-300">
+          <p className="mt-2 text-xs font-semibold text-sky-300">
             → {cta ?? "Open"}
           </p>
         )}
@@ -263,7 +346,7 @@ function Step({
 
   const className =
     "group relative block rounded-3xl border border-slate-800 bg-slate-900/40 p-6 transition " +
-    "hover:border-amber-500/40 hover:shadow-[0_0_60px_rgba(251,191,36,0.10)]";
+    "hover:border-sky-500/40 hover:shadow-[0_0_60px_rgba(56,189,248,0.10)]";
 
   if (internalHref) {
     return (
