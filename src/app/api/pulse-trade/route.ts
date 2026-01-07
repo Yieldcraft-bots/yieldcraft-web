@@ -12,11 +12,11 @@
 //
 // DESIGN:
 // - Single-position only (BTC-USD)
-// - BUY only if no BTC position
-// - SELL only if BTC position exists
+// - BUY only if no BTC position (above dust threshold)
+// - SELL only if BTC position exists (above dust threshold)
 // - Read-only position snapshot before execution (cannot trade)
 //
-// OPTIONAL (does nothing unless enabled):
+// OPTIONAL:
 // - PULSE_ORDER_MODE=market|maker   (default: market)
 // - MAKER_OFFSET_BPS=1.0            (default: 1.0)
 // - MAKER_TIMEOUT_MS=15000          (default: 15000)
@@ -29,7 +29,6 @@ export const runtime = "nodejs";
 
 type Side = "BUY" | "SELL";
 type Action = "status" | "dry_run_order" | "place_order";
-
 type OrderMode = "market" | "maker";
 
 // -------------------- helpers --------------------
@@ -96,9 +95,27 @@ function getOrderMode(): OrderMode {
   return m === "maker" ? "maker" : "market";
 }
 
-function mustOneOf<T extends string>(value: any, allowed: readonly T[], fallback: T): T {
+function mustOneOf<T extends string>(
+  value: any,
+  allowed: readonly T[],
+  fallback: T
+): T {
   const v = String(value || "").toUpperCase();
   return (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
+}
+
+// Treat “position exists” only if above a dust threshold (prevents false blocks)
+function minPositionBaseBtc() {
+  const raw = (process.env.PULSE_MIN_POSITION_BASE_BTC || "").trim();
+  const n = raw ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n >= 0) return n;
+  return 0.000001; // default dust threshold
+}
+
+function fmtBaseSize(x: number) {
+  // Coinbase BTC precision is typically up to 8 decimals; safe clamp
+  const v = Math.max(0, x);
+  return v.toFixed(8).replace(/\.?0+$/, "");
 }
 
 // -------------------- Coinbase JWT (CDP) --------------------
@@ -129,6 +146,7 @@ async function fetchBtcPosition() {
     const res = await fetch(`https://api.coinbase.com${path}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
     });
 
     const text = await res.text();
@@ -136,7 +154,7 @@ async function fetchBtcPosition() {
 
     if (!res.ok) {
       return {
-        ok: false,
+        ok: false as const,
         has_position: false,
         base_available: 0,
         status: res.status,
@@ -146,17 +164,18 @@ async function fetchBtcPosition() {
 
     const accounts = (parsed as any)?.accounts || [];
     const btc = accounts.find((a: any) => a?.currency === "BTC");
-
     const available = Number(btc?.available_balance?.value || 0);
 
+    const minPos = minPositionBaseBtc();
     return {
-      ok: true,
-      has_position: available > 0,
-      base_available: available,
+      ok: true as const,
+      has_position: Number.isFinite(available) && available >= minPos,
+      base_available: Number.isFinite(available) ? available : 0,
+      min_pos: minPos,
     };
   } catch (e: any) {
     return {
-      ok: false,
+      ok: false as const,
       has_position: false,
       base_available: 0,
       error: String(e?.message || e || "position_fetch_failed"),
@@ -165,30 +184,40 @@ async function fetchBtcPosition() {
 }
 
 // -------------------- MARKET PRICE (for maker) --------------------
-// Used only when PULSE_ORDER_MODE=maker
 
 async function fetchBestAskBid(product_id: string) {
-  const path = `/api/v3/brokerage/products/${encodeURIComponent(product_id)}/book?limit=1`;
+  const path = `/api/v3/brokerage/products/${encodeURIComponent(
+    product_id
+  )}/book?limit=1`;
   try {
     const token = buildCdpJwt("GET", path);
     const res = await fetch(`https://api.coinbase.com${path}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
     });
 
     const text = await res.text();
     const parsed = safeJsonParse(text);
 
-    if (!res.ok) return { ok: false, status: res.status, coinbase: parsed ?? text };
+    if (!res.ok)
+      return {
+        ok: false as const,
+        status: res.status,
+        coinbase: parsed ?? text,
+      };
 
     const bids = (parsed as any)?.pricebook?.bids || [];
     const asks = (parsed as any)?.pricebook?.asks || [];
     const bestBid = Number(bids?.[0]?.price || 0);
     const bestAsk = Number(asks?.[0]?.price || 0);
 
-    return { ok: true, bestBid, bestAsk };
+    return { ok: true as const, bestBid, bestAsk };
   } catch (e: any) {
-    return { ok: false, error: String(e?.message || e || "book_fetch_failed") };
+    return {
+      ok: false as const,
+      error: String(e?.message || e || "book_fetch_failed"),
+    };
   }
 }
 
@@ -197,13 +226,13 @@ function bpsAdjust(price: number, bps: number, direction: "down" | "up") {
   return Math.max(0, price * mult);
 }
 
-// -------------------- GET --------------------
-
-export async function GET(_req: NextRequest) {
+// Build a unified status payload so GET + POST(status) match
+async function buildStatusPayload() {
   const { tradingEnabled, armed, liveAllowed } = gates();
   const orderMode = getOrderMode();
+  const position = await fetchBtcPosition();
 
-  return json(200, {
+  return {
     ok: true,
     status: "PULSE_TRADE_READY",
     mode: orderMode,
@@ -212,7 +241,18 @@ export async function GET(_req: NextRequest) {
       PULSE_TRADE_ARMED: armed,
       LIVE_ALLOWED: liveAllowed,
     },
-  });
+    position, // <-- existing nested position
+    // ✅ NEW: manager-friendly flat fields
+    positionBase: position.ok ? Number(position.base_available || 0) : 0,
+    hasPosition: position.ok ? Boolean(position.has_position) : false,
+  };
+}
+
+// -------------------- GET --------------------
+
+export async function GET(_req: NextRequest) {
+  const body = await buildStatusPayload();
+  return json(200, body);
 }
 
 // -------------------- POST --------------------
@@ -230,39 +270,27 @@ export async function POST(req: Request) {
   const orderMode = getOrderMode();
 
   if (action === "status") {
-    return json(200, {
-      ok: true,
-      status: "PULSE_TRADE_READY",
-      mode: orderMode,
-      gates: {
-        COINBASE_TRADING_ENABLED: tradingEnabled,
-        PULSE_TRADE_ARMED: armed,
-        LIVE_ALLOWED: liveAllowed,
-      },
-    });
+    const statusBody = await buildStatusPayload();
+    return json(200, statusBody);
   }
 
   const product_id = "BTC-USD";
   const side = mustOneOf<Side>(body?.side, ["BUY", "SELL"] as const, "BUY");
 
   const quote_size = body?.quote_size != null ? String(body.quote_size) : null;
-  const base_size = body?.base_size != null ? String(body.base_size) : null;
+  const base_size_raw = body?.base_size != null ? String(body.base_size) : null;
 
   // Validate sizes before doing anything expensive
   if (side === "BUY") {
     const q = Number(quote_size);
     if (!quote_size || !Number.isFinite(q) || q <= 0) {
-      return jsonError("BUY requires quote_size > 0 (e.g., \"1.00\").", 400, {
+      return jsonError('BUY requires quote_size > 0 (e.g., "1.00").', 400, {
         got: { quote_size },
       });
     }
   } else {
-    const b = Number(base_size);
-    if (!base_size || !Number.isFinite(b) || b <= 0) {
-      return jsonError("SELL requires base_size > 0 (e.g., \"0.00002\").", 400, {
-        got: { base_size },
-      });
-    }
+    // Allow SELL without base_size by auto-selling the entire available position
+    // (caller can still provide base_size explicitly)
   }
 
   const position = await fetchBtcPosition();
@@ -274,24 +302,39 @@ export async function POST(req: Request) {
     });
   }
 
-  // -------------------- POSITION RULES --------------------
-
-  if (side === "BUY" && position.has_position) {
-    return jsonError("BUY blocked: BTC position already exists.", 409, { position });
+  // Determine SELL size if omitted
+  let base_size: string | null = base_size_raw;
+  if (side === "SELL") {
+    const available = Number((position as any)?.base_available || 0);
+    if (!base_size) base_size = fmtBaseSize(available);
+    const b = Number(base_size);
+    if (!base_size || !Number.isFinite(b) || b <= 0) {
+      return jsonError('SELL requires base_size > 0 (e.g., "0.00002").', 400, {
+        got: { base_size },
+        position,
+      });
+    }
   }
 
-  if (side === "SELL" && !position.has_position) {
-    return jsonError("SELL blocked: no BTC position to exit.", 409, { position });
+  // -------------------- POSITION RULES --------------------
+  if (side === "BUY" && position.ok && position.has_position) {
+    return jsonError("BUY blocked: BTC position already exists.", 409, {
+      position,
+    });
+  }
+
+  if (side === "SELL" && position.ok && !position.has_position) {
+    return jsonError("SELL blocked: no BTC position to exit.", 409, {
+      position,
+    });
   }
 
   const client_order_id = `yc_${action}_${Date.now()}`;
 
   // -------------------- Build payload --------------------
-
   let payload: any;
 
   if (orderMode === "market") {
-    // MARKET IOC (current behavior)
     payload = {
       client_order_id,
       product_id,
@@ -302,26 +345,27 @@ export async function POST(req: Request) {
           : { market_market_ioc: { base_size } },
     };
   } else {
-    // MAKER post-only limit (only if enabled via env)
     const offsetBps = num(optEnv("MAKER_OFFSET_BPS"), 1.0);
-    const timeoutMs = Math.max(1000, num(optEnv("MAKER_TIMEOUT_MS"), 15000));
 
     const book = await fetchBestAskBid(product_id);
     if (!book.ok) {
-      return jsonError("Maker mode blocked: cannot fetch order book.", 503, { book });
+      return jsonError("Maker mode blocked: cannot fetch order book.", 503, {
+        book,
+      });
     }
 
-    const refPrice = side === "BUY" ? book.bestAsk : book.bestBid;
+    const refPrice = side === "BUY" ? (book as any).bestAsk : (book as any).bestBid;
     if (!refPrice || refPrice <= 0) {
-      return jsonError("Maker mode blocked: invalid reference price.", 503, { book });
+      return jsonError("Maker mode blocked: invalid reference price.", 503, {
+        book,
+      });
     }
 
     const limitPrice =
       side === "BUY"
-        ? bpsAdjust(refPrice, offsetBps, "down") // buy slightly below
-        : bpsAdjust(refPrice, offsetBps, "up");  // sell slightly above
+        ? bpsAdjust(refPrice, offsetBps, "down")
+        : bpsAdjust(refPrice, offsetBps, "up");
 
-    // Coinbase expects string prices/sizes
     payload = {
       client_order_id,
       product_id,
@@ -334,9 +378,7 @@ export async function POST(req: Request) {
           post_only: true,
         },
       },
-      // Manager can choose to cancel/replace externally; we only place here.
-      // timeoutMs is returned for visibility.
-      _maker: { refPrice, limitPrice, offsetBps, timeoutMs },
+      _maker: { refPrice, limitPrice, offsetBps },
     };
   }
 
@@ -358,7 +400,6 @@ export async function POST(req: Request) {
   }
 
   // -------------------- LIVE place --------------------
-
   const path = "/api/v3/brokerage/orders";
   let token: string;
 
