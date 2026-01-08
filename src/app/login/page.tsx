@@ -2,7 +2,6 @@
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { supabase } from "../../lib/supabaseClient";
 
 type Mode = "signup" | "login";
@@ -17,14 +16,26 @@ function LoginInner() {
   }, [params]);
 
   const [mode, setMode] = useState<Mode>(initialMode);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
   const [status, setStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Forgot-password inline UI
+  const [showReset, setShowReset] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
 
   useEffect(() => {
     setMode(initialMode);
   }, [initialMode]);
+
+  useEffect(() => {
+    // When switching modes, keep it clean
+    setStatus(null);
+    setShowReset(false);
+  }, [mode]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,7 +46,7 @@ function LoginInner() {
       if (mode === "signup") {
         const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-        setStatus("Check your email to confirm your account.");
+        setStatus("✅ Check your email to confirm your account.");
         return;
       }
 
@@ -48,6 +59,40 @@ function LoginInner() {
       router.push("/dashboard");
     } catch (err: any) {
       setStatus(err?.message || "Something went wrong.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function sendResetEmail() {
+    setStatus(null);
+
+    const target = (resetEmail || email).trim();
+    if (!target) {
+      setStatus("Please enter your email first.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // IMPORTANT: This is where the reset link will send them back to your app
+      const redirectTo =
+        typeof window !== "undefined"
+          ? `${window.location.origin}/reset-password`
+          : "https://yieldcraft.co/reset-password";
+
+      const { error } = await supabase.auth.resetPasswordForEmail(target, {
+        redirectTo,
+      });
+
+      if (error) throw error;
+
+      setStatus(
+        "✅ Password reset email sent. Check your inbox (and spam) for the link."
+      );
+      setShowReset(false);
+    } catch (err: any) {
+      setStatus(err?.message || "Could not send reset email.");
     } finally {
       setLoading(false);
     }
@@ -92,13 +137,52 @@ function LoginInner() {
 
           {/* Forgot password (login only) */}
           {mode === "login" && (
-            <div className="text-right">
-              <Link
-                href="/forgot-password"
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReset((v) => !v);
+                  setResetEmail(email);
+                  setStatus(null);
+                }}
                 className="text-xs text-white/60 hover:text-white underline"
               >
                 Forgot password?
-              </Link>
+              </button>
+
+              <span className="text-xs text-white/40">
+                Resets are automated
+              </span>
+            </div>
+          )}
+
+          {/* Inline reset box */}
+          {mode === "login" && showReset && (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
+              <div className="text-sm font-semibold text-white">
+                Reset your password
+              </div>
+              <div className="text-xs text-white/60">
+                We’ll email you a secure link to set a new password.
+              </div>
+
+              <input
+                className="w-full rounded-xl bg-black/20 border border-white/10 px-4 py-2 text-white outline-none focus:border-white/30"
+                type="email"
+                placeholder="Email for reset link"
+                value={resetEmail}
+                onChange={(e) => setResetEmail(e.target.value)}
+                autoComplete="email"
+              />
+
+              <button
+                type="button"
+                disabled={loading}
+                onClick={sendResetEmail}
+                className="w-full rounded-xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15 transition disabled:opacity-60"
+              >
+                {loading ? "Sending..." : "Send reset link"}
+              </button>
             </div>
           )}
 
