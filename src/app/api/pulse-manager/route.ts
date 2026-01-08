@@ -95,9 +95,7 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
 
-  // ✅ CRITICAL FIX:
-  // Many Advanced Trade endpoints include query params (?start=...&end=...)
-  // The CDP JWT `uri` claim should NOT include the query string.
+  // ✅ CRITICAL: uri claim should NOT include query string (avoids 401 on endpoints w/ params)
   const pathForUri = path.split("?")[0];
   const uri = `${method} api.coinbase.com${pathForUri}`;
 
@@ -172,7 +170,6 @@ async function fetchEntryFromFills(): Promise<
     return { ok: false, error: "no_fills_found" };
   }
 
-  // Most recent BUY (already filtered/sorted, but keep safe)
   const buy = fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") || fills[0];
   if (!buy) return { ok: false, error: "no_buy_fill_found" };
 
@@ -191,11 +188,23 @@ async function fetchPeakSince(isoTime: string): Promise<
   | { ok: false; error: any }
 > {
   const end = new Date();
-  const start = new Date(isoTime);
 
-  // safety clamp: max lookback 48h
+  // ✅ FIX: normalize entry time into a valid Date, else fallback to 2h ago
+  let start = new Date(isoTime);
+  if (!Number.isFinite(start.getTime())) {
+    // try parsing numeric epoch strings
+    const asNum = Number(isoTime);
+    if (Number.isFinite(asNum) && asNum > 0) {
+      start = new Date(asNum);
+    }
+  }
+  if (!Number.isFinite(start.getTime())) {
+    start = new Date(end.getTime() - 2 * 3600 * 1000); // fallback 2h
+  }
+
+  // safety clamp: max lookback 48h (keeps payload small)
   if (end.getTime() - start.getTime() > 48 * 3600 * 1000) {
-    start.setTime(end.getTime() - 48 * 3600 * 1000);
+    start = new Date(end.getTime() - 48 * 3600 * 1000);
   }
 
   const startIso = start.toISOString();
