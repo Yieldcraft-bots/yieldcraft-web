@@ -19,9 +19,7 @@
 // OPTIONAL:
 // - PULSE_ORDER_MODE=market|maker   (default: market)
 // - MAKER_OFFSET_BPS=1.0            (default: 1.0)
-// - MAKER_TIMEOUT_MS=15000          (declared; not used here)
-// NOTE: This endpoint is an execution utility. Strategy exits (TP/trailing)
-// should live in the heartbeat/manager layer, not here.
+// - MAKER_TIMEOUT_MS=15000          (default: 15000)
 
 import { NextResponse, type NextRequest } from "next/server";
 import jwt from "jsonwebtoken";
@@ -114,14 +112,14 @@ function minPositionBaseBtc() {
   return 0.000001; // default dust threshold
 }
 
-function clamp(n: number, lo: number, hi: number) {
-  return Math.min(hi, Math.max(lo, n));
-}
-
 function fmtBaseSize(x: number) {
-  // BTC precision: use up to 8 decimals and trim trailing zeros
   const v = Math.max(0, x);
   return v.toFixed(8).replace(/\.?0+$/, "");
+}
+
+function fmtQuote(x: number) {
+  const v = Math.max(0, x);
+  return v.toFixed(2).replace(/\.?0+$/, "");
 }
 
 // -------------------- Coinbase JWT (CDP) --------------------
@@ -189,7 +187,7 @@ async function fetchBtcPosition() {
   }
 }
 
-// -------------------- MARKET PRICE (for maker) --------------------
+// -------------------- ORDER BOOK (for maker) --------------------
 
 async function fetchBestAskBid(product_id: string) {
   const path = `/api/v3/brokerage/products/${encodeURIComponent(
@@ -248,6 +246,7 @@ async function buildStatusPayload() {
       LIVE_ALLOWED: liveAllowed,
     },
     position,
+    // manager-friendly flat fields
     positionBase: position.ok ? Number(position.base_available || 0) : 0,
     hasPosition: position.ok ? Boolean(position.has_position) : false,
   };
@@ -279,19 +278,13 @@ export async function POST(req: Request) {
     return json(200, statusBody);
   }
 
-  if (action !== "dry_run_order" && action !== "place_order") {
-    return jsonError("Invalid action. Use status | dry_run_order | place_order.", 400, {
-      got: { action },
-    });
-  }
-
   const product_id = "BTC-USD";
   const side = mustOneOf<Side>(body?.side, ["BUY", "SELL"] as const, "BUY");
 
   const quote_size = body?.quote_size != null ? String(body.quote_size) : null;
   const base_size_raw = body?.base_size != null ? String(body.base_size) : null;
 
-  // Validate sizes early
+  // Validate sizes before doing anything expensive
   if (side === "BUY") {
     const q = Number(quote_size);
     if (!quote_size || !Number.isFinite(q) || q <= 0) {
@@ -315,7 +308,6 @@ export async function POST(req: Request) {
   if (side === "SELL") {
     const available = Number((position as any)?.base_available || 0);
     if (!base_size) base_size = fmtBaseSize(available);
-
     const b = Number(base_size);
     if (!base_size || !Number.isFinite(b) || b <= 0) {
       return jsonError('SELL requires base_size > 0 (e.g., "0.00002").', 400, {
@@ -354,7 +346,10 @@ export async function POST(req: Request) {
           : { market_market_ioc: { base_size } },
     };
   } else {
-    // Maker mode: Coinbase limit orders use base_size + limit_price (NOT quote_size)
+    // MAKER mode:
+    // - Anchor BUY to bestBid, then slightly lower (stay maker)
+    // - Anchor SELL to bestAsk, then slightly higher (stay maker)
+    // - Coinbase limit wants base_size, so BUY must compute base_size from quote_size/limit_price
     const offsetBps = num(optEnv("MAKER_OFFSET_BPS"), 1.0);
 
     const book = await fetchBestAskBid(product_id);
@@ -367,42 +362,42 @@ export async function POST(req: Request) {
     const bestBid = Number((book as any).bestBid || 0);
     const bestAsk = Number((book as any).bestAsk || 0);
 
-    if (!bestBid || !bestAsk || bestBid <= 0 || bestAsk <= 0) {
-      return jsonError("Maker mode blocked: invalid book prices.", 503, {
+    const refPrice = side === "BUY" ? bestBid : bestAsk;
+    if (!refPrice || refPrice <= 0) {
+      return jsonError("Maker mode blocked: invalid reference price.", 503, {
         book,
       });
     }
 
-    // ✅ Correct maker anchoring:
-    // BUY: price just below bestBid
-    // SELL: price just above bestAsk
     const limitPrice =
       side === "BUY"
-        ? bpsAdjust(bestBid, offsetBps, "down")
-        : bpsAdjust(bestAsk, offsetBps, "up");
+        ? bpsAdjust(refPrice, offsetBps, "down")
+        : bpsAdjust(refPrice, offsetBps, "up");
 
     if (!limitPrice || limitPrice <= 0) {
       return jsonError("Maker mode blocked: invalid limit price.", 503, {
-        book,
+        refPrice,
         limitPrice,
+        offsetBps,
       });
     }
 
-    // Compute base_size for BUY from quote_size / limitPrice
-    let makerBaseSize: string | null = side === "SELL" ? base_size : null;
+    let makerBaseSize: string | null = null;
+
     if (side === "BUY") {
       const q = Number(quote_size);
       const computed = q / limitPrice;
-      // Basic clamp to avoid insane numbers if something goes wrong
-      const clamped = clamp(computed, 0, 10); // 10 BTC safety clamp (far above your use)
-      makerBaseSize = fmtBaseSize(clamped);
-
-      const b = Number(makerBaseSize);
-      if (!makerBaseSize || !Number.isFinite(b) || b <= 0) {
-        return jsonError("Maker BUY blocked: could not compute base_size.", 400, {
-          got: { quote_size, limitPrice, makerBaseSize },
+      // safety clamp: never send 0
+      if (!Number.isFinite(computed) || computed <= 0) {
+        return jsonError("Maker BUY blocked: cannot compute base_size.", 400, {
+          quote_size,
+          limitPrice,
+          computed,
         });
       }
+      makerBaseSize = fmtBaseSize(computed);
+    } else {
+      makerBaseSize = base_size!;
     }
 
     payload = {
@@ -419,9 +414,10 @@ export async function POST(req: Request) {
       _maker: {
         bestBid,
         bestAsk,
+        refPrice,
         limitPrice,
         offsetBps,
-        computedBaseSize: side === "BUY" ? makerBaseSize : undefined,
+        computed_base_size: side === "BUY" ? makerBaseSize : undefined,
       },
     };
   }
