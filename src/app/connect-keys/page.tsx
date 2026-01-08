@@ -1,65 +1,118 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 /**
  * ConnectKeysPage (Coinbase CDP)
- * - Glassy + polished UI
- * - Uses Coinbase CDP fields (API Key Name + Private Key PEM)
+ * - Explains Coinbase's copy buttons (little copy icon next to each value)
+ * - Uses Coinbase CDP fields:
+ *    1) API Key Name (organizations/.../apiKeys/...)
+ *    2) Private Key (PEM block)
  * - Calls POST /api/connect-keys to verify + store encrypted per user
  *
- * IMPORTANT:
- * Coinbase CDP is NOT "API key + secret".
- * It is:
- *  - coinbase_api_key_name (organizations/.../apiKeys/...)
- *  - coinbase_private_key (-----BEGIN ... PRIVATE KEY----- ... )
+ * SECURITY NOTE:
+ * - YieldCraft cannot withdraw funds.
+ * - Trading stays OFF until the user explicitly enables it elsewhere.
  */
 
 type Status = "idle" | "verifying" | "ok" | "error";
 
 export default function ConnectKeysPage() {
   const [label, setLabel] = useState("Coinbase");
+
   const [apiKeyName, setApiKeyName] = useState(""); // organizations/.../apiKeys/...
   const [privateKeyPem, setPrivateKeyPem] = useState(""); // PEM block
   const [showPem, setShowPem] = useState(false);
 
   const [status, setStatus] = useState<Status>("idle");
-  const [errorMsg, setErrorMsg] = useState<string>("");
-  const [verifiedAt, setVerifiedAt] = useState<string>("");
+  const [errorMsg, setErrorMsg] = useState("");
+  const [verifiedAt, setVerifiedAt] = useState("");
+
+  const [userId, setUserId] = useState("");
+
+  // If you have a real auth source, replace this.
+  useEffect(() => {
+    try {
+      const id =
+        window.localStorage.getItem("yc_user_id") ||
+        window.localStorage.getItem("user_id") ||
+        "";
+      setUserId(id);
+    } catch {
+      setUserId("");
+    }
+  }, []);
 
   const coinbaseApiUrl = "https://www.coinbase.com/settings/api";
+
+  const looksLikeApiKeyName = useMemo(() => {
+    const v = apiKeyName.trim();
+    return v.startsWith("organizations/") && v.includes("/apiKeys/");
+  }, [apiKeyName]);
+
+  const looksLikePem = useMemo(() => {
+    const v = privateKeyPem.trim();
+    return v.includes("BEGIN") && v.includes("PRIVATE KEY") && v.includes("END");
+  }, [privateKeyPem]);
+
+  function setError(msg: string) {
+    setStatus("error");
+    setErrorMsg(msg);
+  }
+
+  async function pasteFromClipboard(into: "apiKeyName" | "privateKeyPem") {
+    setErrorMsg("");
+    try {
+      if (!navigator.clipboard?.readText) {
+        setError("Clipboard not available in this browser. Please paste manually.");
+        return;
+      }
+      const text = await navigator.clipboard.readText();
+      if (!text?.trim()) {
+        setError("Clipboard is empty. Click the copy button in Coinbase first, then click Paste here.");
+        return;
+      }
+      if (into === "apiKeyName") setApiKeyName(text.trim());
+      if (into === "privateKeyPem") setPrivateKeyPem(text);
+      setStatus("idle");
+    } catch {
+      setError(
+        "Paste blocked by browser permissions. Click inside the field and press Ctrl+V (or Cmd+V on Mac)."
+      );
+    }
+  }
 
   async function verifyAndContinue() {
     setErrorMsg("");
     setVerifiedAt("");
 
+    if (!userId) {
+      setError("You must be logged in to connect Coinbase. Please log in and try again.");
+      return;
+    }
+
     if (!apiKeyName.trim()) {
-      setStatus("error");
-      setErrorMsg(
-        "Paste your Coinbase API Key Name (organizations/.../apiKeys/...)."
-      );
+      setError("Paste your API Key Name from Coinbase (the organizations/.../apiKeys/... value).");
       return;
     }
 
     if (!privateKeyPem.trim()) {
-      setStatus("error");
-      setErrorMsg("Paste your Coinbase Private Key (PEM).");
+      setError("Paste your Private Key from Coinbase (the block that starts with -----BEGIN PRIVATE KEY-----).");
       return;
     }
 
-    const pem = privateKeyPem.trim();
-
-    // Coinbase may show EC PRIVATE KEY (SEC1) or PRIVATE KEY (PKCS8). Accept both.
-    const looksLikePem =
-      pem.includes("BEGIN") &&
-      (pem.includes("PRIVATE KEY") || pem.includes("EC PRIVATE KEY")) &&
-      pem.includes("END");
+    // Gentle validation (so users know immediately if they copied the wrong thing)
+    if (!looksLikeApiKeyName) {
+      setError(
+        "That API Key Name doesn’t look right. Go back to Coinbase and click the small copy icon next to “API key name”. It usually starts with organizations/…/apiKeys/…"
+      );
+      return;
+    }
 
     if (!looksLikePem) {
-      setStatus("error");
-      setErrorMsg(
-        "That doesn’t look like a Private Key PEM. It should include BEGIN/END lines (e.g. -----BEGIN EC PRIVATE KEY----- ...)."
+      setError(
+        "That Private Key doesn’t look right. It must include -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY-----. Click the small copy icon next to “Private key” in Coinbase."
       );
       return;
     }
@@ -72,19 +125,19 @@ export default function ConnectKeysPage() {
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
         body: JSON.stringify({
-          label: (label || "Coinbase").trim(),
+          user_id: userId,
+          label: label || "Coinbase",
           coinbase_api_key_name: apiKeyName.trim(),
-          coinbase_private_key: privateKeyPem, // preserve newlines as pasted
+          coinbase_private_key: privateKeyPem,
         }),
       });
 
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data?.ok) {
-        setStatus("error");
-        setErrorMsg(
+        setError(
           data?.error ||
-            `Verify failed (HTTP ${res.status}). Ensure permissions are View + Trade, Transfer is OFF, and you pasted CDP "API key name" + "Private key".`
+            `Verify failed (HTTP ${res.status}). Double-check: (1) View + Trade permissions, (2) you copied “API key name” + “Private key” using Coinbase’s copy buttons.`
         );
         return;
       }
@@ -92,8 +145,7 @@ export default function ConnectKeysPage() {
       setStatus("ok");
       setVerifiedAt(data?.verified_at || new Date().toISOString());
     } catch (e: any) {
-      setStatus("error");
-      setErrorMsg(String(e?.message || e || "Verify failed"));
+      setError(String(e?.message || e || "Verify failed"));
     }
   }
 
@@ -111,9 +163,7 @@ export default function ConnectKeysPage() {
           <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-200">
             SECURE SETUP
           </span>
-          <span className="text-xs text-slate-400">
-            No withdrawals. View + trade only.
-          </span>
+          <span className="text-xs text-slate-400">No withdrawals. View + trade only.</span>
         </div>
 
         <h1 className="text-3xl font-bold text-white">
@@ -124,158 +174,155 @@ export default function ConnectKeysPage() {
         </h1>
 
         <p className="mt-2 text-sm text-slate-400">
-          When this turns green, your Coinbase connection is verified. Trading
-          stays OFF until you explicitly arm it.
+          This verifies your Coinbase connection. <span className="text-slate-200">Trading stays OFF</span> until you
+          explicitly enable it.
         </p>
 
-        {/* WHY */}
+        {/* STEP 1 */}
         <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.02] p-6 backdrop-blur-xl">
-          <p className="font-semibold text-white">
-            ✅ Why this step exists (1 minute)
-          </p>
-
-          <ul className="mt-3 space-y-2 text-sm text-slate-300">
-            <li>✔ YieldCraft does NOT log into your Coinbase account</li>
-            <li>✔ YieldCraft cannot withdraw or move funds</li>
-            <li>✔ API keys allow view + trade only</li>
-            <li>❌ Withdrawals/Transfer permission should stay OFF</li>
-          </ul>
+          <p className="font-semibold text-white">✅ Step 1: Open Coinbase API Key Settings</p>
 
           <a
             href={coinbaseApiUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="group mt-5 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-gradient-to-r from-sky-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950 shadow-lg shadow-sky-500/10 transition hover:-translate-y-[1px] hover:shadow-sky-500/20 active:translate-y-0"
+            className="group mt-4 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-gradient-to-r from-sky-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950 shadow-lg shadow-sky-500/10 transition hover:-translate-y-[1px] hover:shadow-sky-500/20 active:translate-y-0"
           >
             <span className="mr-2">Open Coinbase API Key Settings</span>
-            <span className="transition-transform group-hover:translate-x-0.5">
-              →
-            </span>
+            <span className="transition-transform group-hover:translate-x-0.5">→</span>
           </a>
 
-          <p className="mt-2 text-center text-xs text-slate-400">
-            Opens in a new tab. Create a key, then come back here.
-          </p>
+          <p className="mt-2 text-center text-xs text-slate-400">Opens in a new tab. Come back here after creating the key.</p>
         </div>
 
-        {/* WHAT TO COPY (visual help) */}
+        {/* STEP 2 */}
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-6 backdrop-blur-xl">
-          <p className="font-semibold text-white">🧩 What to copy from Coinbase</p>
+          <p className="font-semibold text-white">🧩 Step 2: Create the key (exact checkboxes)</p>
 
           <ol className="mt-3 space-y-2 text-sm text-slate-300">
             <li>
-              <span className="font-semibold text-slate-100">1)</span> Click{" "}
-              <span className="font-semibold text-slate-100">Create API key</span>
+              <span className="font-semibold text-slate-100">1)</span> Click <span className="font-semibold text-slate-100">Create API key</span>.
             </li>
             <li>
-              <span className="font-semibold text-slate-100">2)</span> Select{" "}
-              <span className="font-semibold text-slate-100">Portfolio: Primary</span>
+              <span className="font-semibold text-slate-100">2)</span> Portfolio: choose{" "}
+              <span className="font-semibold text-slate-100">Primary</span>.
             </li>
             <li>
-              <span className="font-semibold text-slate-100">3)</span> Enable{" "}
-              <span className="font-semibold text-slate-100">View</span> ✅ and{" "}
-              <span className="font-semibold text-slate-100">Trade</span> ✅
-              (leave <span className="font-semibold text-slate-100">Transfer</span> OFF)
+              <span className="font-semibold text-slate-100">3)</span> Permissions: check{" "}
+              <span className="font-semibold text-slate-100">View</span> and{" "}
+              <span className="font-semibold text-slate-100">Trade</span>.
             </li>
             <li>
-              <span className="font-semibold text-slate-100">4)</span> Leave{" "}
-              <span className="font-semibold text-slate-100">IP whitelist blank</span>
+              <span className="font-semibold text-slate-100">4)</span> Do{" "}
+              <span className="font-semibold text-rose-200">NOT</span> enable{" "}
+              <span className="font-semibold text-rose-200">Transfer</span>.
             </li>
             <li>
-              <span className="font-semibold text-slate-100">5)</span> Click{" "}
-              <span className="font-semibold text-slate-100">Create &amp; download</span>
-            </li>
-            <li>
-              <span className="font-semibold text-slate-100">6)</span> Copy these two
-              values into YieldCraft:
+              <span className="font-semibold text-slate-100">5)</span> IP whitelist:{" "}
+              <span className="font-semibold text-slate-100">leave blank</span> unless you know exactly what you’re doing.
             </li>
           </ol>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-              <p className="text-sm font-semibold text-white">API Key Name</p>
-              <p className="mt-1 text-xs text-slate-400">
-                Looks like{" "}
-                <span className="font-mono text-slate-200">organizations/…</span>
-              </p>
-              <div className="mt-3 rounded-lg border border-white/10 bg-black/30 p-3 font-mono text-[11px] text-slate-200">
-                organizations/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/apiKeys/xxxxxxxx-xxxx…
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-              <p className="text-sm font-semibold text-white">Private Key</p>
-              <p className="mt-1 text-xs text-slate-400">
-                A PEM block starting with{" "}
-                <span className="font-mono text-slate-200">BEGIN</span>
-              </p>
-              <div className="mt-3 rounded-lg border border-white/10 bg-black/30 p-3 font-mono text-[11px] text-slate-200">
-                -----BEGIN EC PRIVATE KEY-----{"\n"}
-                …your key…{"\n"}
-                -----END EC PRIVATE KEY-----
-              </div>
+          <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">
+            <div className="font-semibold text-slate-200">Important</div>
+            <div className="mt-2 text-slate-400">
+              Coinbase will show your credentials with a <span className="font-semibold text-slate-200">small copy icon</span>{" "}
+              (looks like two squares) next to each value.{" "}
+              <span className="text-slate-200">Click the copy icon</span> — don’t try to drag-select the text.
             </div>
           </div>
-
-          <p className="mt-3 text-xs text-slate-500">
-            Your Private Key is shown once by Coinbase. Store it safely. YieldCraft cannot withdraw funds.
-          </p>
         </div>
 
-        {/* STEP: PASTE + VERIFY */}
+        {/* STEP 3 */}
         <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.02] p-6 backdrop-blur-xl">
-          <p className="font-semibold text-white">🔐 Paste & verify</p>
+          <p className="font-semibold text-white">🔐 Step 3: Copy from Coinbase → Paste here → Verify</p>
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-4 text-xs text-slate-300">
+            <div className="font-semibold text-slate-200">Exactly what to copy</div>
+            <ul className="mt-2 space-y-1 text-slate-400">
+              <li>
+                • <span className="text-slate-200">API Key Name</span> (starts with{" "}
+                <span className="font-mono text-slate-300">organizations/</span>)
+              </li>
+              <li>
+                • <span className="text-slate-200">Private key</span> (starts with{" "}
+                <span className="font-mono text-slate-300">-----BEGIN PRIVATE KEY-----</span>)
+              </li>
+            </ul>
+          </div>
+
+          <div className="mt-5 space-y-3">
             <input
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="Label (e.g. Coinbase)"
+              placeholder="Label (optional) — e.g. Coinbase"
               className="w-full rounded-xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-500/10"
             />
 
-            <input
-              value={apiKeyName}
-              onChange={(e) => setApiKeyName(e.target.value)}
-              placeholder="Coinbase API Key Name (organizations/.../apiKeys/...)"
-              className="w-full rounded-xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-500/10"
-            />
+            {/* API Key Name row */}
+            <div className="flex gap-2">
+              <input
+                value={apiKeyName}
+                onChange={(e) => setApiKeyName(e.target.value)}
+                placeholder="Paste API Key Name (organizations/.../apiKeys/...)"
+                className="w-full rounded-xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white placeholder-slate-500 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-500/10"
+              />
+              <button
+                type="button"
+                onClick={() => pasteFromClipboard("apiKeyName")}
+                className="shrink-0 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.07]"
+                title="Click Coinbase copy icon first, then click here"
+              >
+                Paste
+              </button>
+            </div>
 
+            {/* Private key row */}
             <div className="relative">
               <textarea
                 value={privateKeyPem}
                 onChange={(e) => setPrivateKeyPem(e.target.value)}
-                placeholder="Coinbase Private Key (PEM) — starts with -----BEGIN ... PRIVATE KEY-----"
-                rows={showPem ? 8 : 4}
-                className="w-full resize-none rounded-xl border border-white/10 bg-slate-950/40 px-4 py-3 pr-24 text-sm text-white placeholder-slate-500 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-500/10"
+                placeholder="Paste Private Key (PEM) — starts with -----BEGIN PRIVATE KEY-----"
+                rows={showPem ? 8 : 5}
+                className="w-full resize-none rounded-xl border border-white/10 bg-slate-950/40 px-4 py-3 pr-28 text-sm text-white placeholder-slate-500 outline-none transition focus:border-sky-400/40 focus:ring-2 focus:ring-sky-500/10"
                 style={{ WebkitTextSecurity: showPem ? "none" : "disc" } as any}
               />
-
-              <button
-                type="button"
-                onClick={() => setShowPem((s) => !s)}
-                className="absolute right-3 top-3 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-slate-200 transition hover:bg-white/[0.07]"
-              >
-                {showPem ? "Hide" : "Show"}
-              </button>
+              <div className="absolute right-3 top-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => pasteFromClipboard("privateKeyPem")}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.07]"
+                  title="Click Coinbase copy icon first, then click here"
+                >
+                  Paste
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPem((s) => !s)}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-slate-200 transition hover:bg-white/[0.07]"
+                >
+                  {showPem ? "Hide" : "Show"}
+                </button>
+              </div>
             </div>
+
+            <p className="text-xs text-slate-500">
+              Coinbase shows the private key once. Paste it here immediately. YieldCraft stores it{" "}
+              <span className="text-slate-300">encrypted</span> and you can revoke it anytime in Coinbase.
+            </p>
           </div>
 
           {status === "error" && (
-            <p className="mt-3 text-sm text-rose-300">
-              {errorMsg || "Verify failed."}
-            </p>
+            <p className="mt-4 text-sm text-rose-300">{errorMsg || "Verify failed."}</p>
           )}
 
           {status === "ok" && (
-            <p className="mt-3 text-sm text-emerald-300">
-              ✔ Verified. Coinbase is connected. Trading is still OFF.{" "}
-              {verifiedAt ? (
-                <span className="text-xs text-slate-400">
-                  (Verified: {verifiedAt})
-                </span>
-              ) : null}
-            </p>
+            <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+              <div className="font-semibold">✔ Verified. Coinbase is connected.</div>
+              <div className="mt-1 text-xs text-emerald-200/80">
+                Trading is still OFF. {verifiedAt ? `Verified: ${verifiedAt}` : ""}
+              </div>
+            </div>
           )}
 
           <button
@@ -283,16 +330,12 @@ export default function ConnectKeysPage() {
             disabled={status === "verifying"}
             className="group mt-5 inline-flex w-full items-center justify-center rounded-full border border-white/10 bg-gradient-to-r from-sky-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950 shadow-lg shadow-sky-500/10 transition hover:-translate-y-[1px] hover:shadow-sky-500/20 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-70"
           >
-            <span className="mr-2">
-              {status === "verifying" ? "Verifying..." : "Verify & Continue"}
-            </span>
-            <span className="transition-transform group-hover:translate-x-0.5">
-              →
-            </span>
+            <span className="mr-2">{status === "verifying" ? "Verifying..." : "Verify & Continue"}</span>
+            <span className="transition-transform group-hover:translate-x-0.5">→</span>
           </button>
 
           <p className="mt-3 text-xs text-slate-500">
-            Your key is encrypted at rest. YieldCraft cannot withdraw funds. You can revoke the key anytime in Coinbase.
+            This step only checks permissions + connectivity. It does not place trades.
           </p>
         </div>
 
@@ -313,8 +356,7 @@ export default function ConnectKeysPage() {
         </div>
 
         <p className="mt-6 text-xs text-slate-500">
-          YieldCraft provides software tools only. Not investment advice. Trading
-          involves risk, including loss of capital.
+          YieldCraft provides software tools only. Not investment advice. Trading involves risk, including loss of capital.
         </p>
       </section>
     </main>
