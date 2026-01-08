@@ -155,9 +155,12 @@ async function fetchEntryFromFills(): Promise<
 > {
   // Coinbase endpoint: historical fills
   // We’ll take the most recent BUY fill for BTC-USD as the “entry”.
-  const path = `/api/v3/brokerage/orders/historical/fills?product_id=${encodeURIComponent(
+  //
+  // IMPORTANT:
+  // Advanced Trade uses product_ids (not product_id). Also filter to BUY + sort by TRADE_TIME.
+  const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
     PRODUCT_ID
-  )}&limit=100`;
+  )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
 
   const r = await cbFetch(path);
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
@@ -167,8 +170,8 @@ async function fetchEntryFromFills(): Promise<
     return { ok: false, error: "no_fills_found" };
   }
 
-  // find last BUY fill
-  const buy = fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY");
+  // most recent BUY (already filtered/sorted, but keep safe)
+  const buy = fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") || fills[0];
   if (!buy) return { ok: false, error: "no_buy_fill_found" };
 
   const px = Number(buy?.price || buy?.fill_price || 0);
@@ -187,7 +190,6 @@ async function fetchPeakSince(isoTime: string): Promise<
 > {
   // Coinbase candles endpoint (Advanced Trade):
   // /products/{product_id}/candles?start=...&end=...&granularity=...
-  // Use 1-minute candles by default, fallback to 5m if needed.
   const end = new Date();
   const start = new Date(isoTime);
   // safety clamp: max lookback 48h (keeps payload small)
@@ -213,8 +215,6 @@ async function fetchPeakSince(isoTime: string): Promise<
     return { ok: false, error: "no_candles" };
   }
 
-  // candle shape varies; handle common fields:
-  // { high, low, open, close } OR arrays
   let peak = 0;
   let last = 0;
 
@@ -233,8 +233,7 @@ async function fetchPeakSince(isoTime: string): Promise<
 
 // ---------- place SELL via pulse-trade ----------
 async function placeSell(baseSize: string) {
-  // IMPORTANT FIX:
-  // Forward the SAME cron auth header so pulse-trade does not reject internal calls.
+  // IMPORTANT FIX: forward cron auth so pulse-trade accepts internal calls
   const site =
     (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
       /\/$/,
@@ -248,7 +247,6 @@ async function placeSell(baseSize: string) {
   };
   if (cronSecret) {
     headers["x-cron-secret"] = cronSecret;
-    // optional: some handlers accept bearer form; harmless to include
     headers["Authorization"] = `Bearer ${cronSecret}`;
   }
 
@@ -280,7 +278,6 @@ async function runManager() {
   const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
   const armed = truthy(process.env.PULSE_TRADE_ARMED);
   const exitsEnabled = truthy(process.env.PULSE_EXITS_ENABLED);
-
   const exitsDryRun = truthy(process.env.PULSE_EXITS_DRY_RUN);
 
   const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
@@ -298,7 +295,6 @@ async function runManager() {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  // If not live allowed, do nothing (but still report)
   if (!gates.LIVE_ALLOWED) {
     return {
       ok: true,
@@ -309,7 +305,6 @@ async function runManager() {
     };
   }
 
-  // Only exits in this manager (for now)
   if (!position.ok) {
     return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
   }
@@ -334,7 +329,6 @@ async function runManager() {
     };
   }
 
-  // Derive entry + peak + current
   const entry = await fetchEntryFromFills();
   if (!entry.ok) {
     return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_entry", entry };
@@ -381,10 +375,8 @@ async function runManager() {
     };
   }
 
-  // SELL entire available position (above dust)
   const baseSize = fmtBaseSize(position.base_available);
 
-  // DRY RUN: compute and report what we'd do, but do NOT place an order.
   if (exitsDryRun) {
     return {
       ok: true,
@@ -419,7 +411,6 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
-  // POST lets you optionally call with { action: "status" | "run" }
   let body: any = null;
   try {
     body = await req.json();
@@ -429,7 +420,6 @@ export async function POST(req: Request) {
   const action = String(body?.action || "run").toLowerCase();
 
   if (action === "status") {
-    // return a richer status so we can confirm env propagation quickly
     const position = await fetchBtcPosition();
     const gates = {
       BOT_ENABLED: truthy(process.env.BOT_ENABLED),
