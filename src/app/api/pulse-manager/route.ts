@@ -94,7 +94,12 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
-  const uri = `${method} api.coinbase.com${path}`;
+
+  // ✅ CRITICAL FIX:
+  // Many Advanced Trade endpoints include query params (?start=...&end=...)
+  // The CDP JWT `uri` claim should NOT include the query string.
+  const pathForUri = path.split("?")[0];
+  const uri = `${method} api.coinbase.com${pathForUri}`;
 
   return jwt.sign(
     { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri },
@@ -153,11 +158,8 @@ async function fetchEntryFromFills(): Promise<
   | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
   | { ok: false; error: any }
 > {
-  // Coinbase endpoint: historical fills
-  // We’ll take the most recent BUY fill for BTC-USD as the “entry”.
-  //
-  // IMPORTANT:
-  // Advanced Trade uses product_ids (not product_id). Also filter to BUY + sort by TRADE_TIME.
+  // Advanced Trade: historical fills
+  // IMPORTANT: use product_ids (not product_id). Filter to BUY, sorted by TRADE_TIME.
   const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
     PRODUCT_ID
   )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
@@ -170,7 +172,7 @@ async function fetchEntryFromFills(): Promise<
     return { ok: false, error: "no_fills_found" };
   }
 
-  // most recent BUY (already filtered/sorted, but keep safe)
+  // Most recent BUY (already filtered/sorted, but keep safe)
   const buy = fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") || fills[0];
   if (!buy) return { ok: false, error: "no_buy_fill_found" };
 
@@ -188,11 +190,10 @@ async function fetchPeakSince(isoTime: string): Promise<
   | { ok: true; peak: number; last: number }
   | { ok: false; error: any }
 > {
-  // Coinbase candles endpoint (Advanced Trade):
-  // /products/{product_id}/candles?start=...&end=...&granularity=...
   const end = new Date();
   const start = new Date(isoTime);
-  // safety clamp: max lookback 48h (keeps payload small)
+
+  // safety clamp: max lookback 48h
   if (end.getTime() - start.getTime() > 48 * 3600 * 1000) {
     start.setTime(end.getTime() - 48 * 3600 * 1000);
   }
@@ -233,7 +234,7 @@ async function fetchPeakSince(isoTime: string): Promise<
 
 // ---------- place SELL via pulse-trade ----------
 async function placeSell(baseSize: string) {
-  // IMPORTANT FIX: forward cron auth so pulse-trade accepts internal calls
+  // Forward cron auth so pulse-trade accepts internal calls
   const site =
     (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
       /\/$/,
@@ -433,7 +434,7 @@ export async function POST(req: Request) {
       status: "PULSE_MANAGER_READY",
       gates,
       position,
-      note: "Use GET or POST action=run to execute exit logic (if enabled).",
+      note: "Use GET or POST (default) to execute exit logic (if enabled).",
     });
   }
 
