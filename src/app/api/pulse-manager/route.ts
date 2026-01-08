@@ -8,13 +8,16 @@
 // - If a position exists AND PULSE_EXITS_ENABLED=true:
 //     • Take-profit at PROFIT_TARGET_BPS
 //     • Trailing stop: arm at TRAIL_ARM_BPS, trail by TRAIL_OFFSET_BPS using candles peak
-// - Places SELL via Coinbase (maker by default through envs used in pulse-trade)
+// - Places SELL via Pulse Trade (maker by default through envs used in pulse-trade)
 //
 // Flags:
 //   BOT_ENABLED=true
 //   COINBASE_TRADING_ENABLED=true
 //   PULSE_TRADE_ARMED=true
-//   PULSE_EXITS_ENABLED=true   <-- NEW (controls exits only)
+//   PULSE_EXITS_ENABLED=true   <-- controls exits only
+//
+// Optional safety:
+//   PULSE_EXITS_DRY_RUN=true   <-- compute decision, DO NOT place order
 //
 // Notes:
 // - This does NOT “invent” AI. It’s the safety/exit layer.
@@ -198,9 +201,9 @@ async function fetchPeakSince(isoTime: string): Promise<
   const gran = optEnv("PULSE_CANDLE_GRANULARITY") || "ONE_MINUTE";
   const path = `/api/v3/brokerage/products/${encodeURIComponent(
     PRODUCT_ID
-  )}/candles?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&granularity=${encodeURIComponent(
-    gran
-  )}`;
+  )}/candles?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(
+    endIso
+  )}&granularity=${encodeURIComponent(gran)}`;
 
   const r = await cbFetch(path);
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
@@ -230,11 +233,28 @@ async function fetchPeakSince(isoTime: string): Promise<
 
 // ---------- place SELL via pulse-trade ----------
 async function placeSell(baseSize: string) {
-  // Use internal endpoint so all gates/formatting stay consistent
-  const url = `${process.env.NEXT_PUBLIC_SITE_URL || "https://yieldcraft.co"}/api/pulse-trade`;
+  // IMPORTANT FIX:
+  // Forward the SAME cron auth header so pulse-trade does not reject internal calls.
+  const site =
+    (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
+      /\/$/,
+      ""
+    );
+  const url = `${site}/api/pulse-trade`;
+
+  const cronSecret = (process.env.CRON_SECRET || "").trim();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (cronSecret) {
+    headers["x-cron-secret"] = cronSecret;
+    // optional: some handlers accept bearer form; harmless to include
+    headers["Authorization"] = `Bearer ${cronSecret}`;
+  }
+
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({
       action: "place_order",
       side: "SELL",
@@ -261,6 +281,8 @@ async function runManager() {
   const armed = truthy(process.env.PULSE_TRADE_ARMED);
   const exitsEnabled = truthy(process.env.PULSE_EXITS_ENABLED);
 
+  const exitsDryRun = truthy(process.env.PULSE_EXITS_DRY_RUN);
+
   const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
   const trailArmBps = num(process.env.TRAIL_ARM_BPS, 150);
   const trailOffsetBps = num(process.env.TRAIL_OFFSET_BPS, 50);
@@ -272,6 +294,7 @@ async function runManager() {
     COINBASE_TRADING_ENABLED: tradingEnabled,
     PULSE_TRADE_ARMED: armed,
     PULSE_EXITS_ENABLED: exitsEnabled,
+    PULSE_EXITS_DRY_RUN: exitsDryRun,
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
@@ -361,6 +384,19 @@ async function runManager() {
   // SELL entire available position (above dust)
   const baseSize = fmtBaseSize(position.base_available);
 
+  // DRY RUN: compute and report what we'd do, but do NOT place an order.
+  if (exitsDryRun) {
+    return {
+      ok: true,
+      mode: "DRY_RUN_SELL",
+      gates,
+      position,
+      decision,
+      would_sell_base_size: baseSize,
+      note: "PULSE_EXITS_DRY_RUN=true so no order was placed.",
+    };
+  }
+
   const sell = await placeSell(baseSize);
 
   return {
@@ -393,10 +429,21 @@ export async function POST(req: Request) {
   const action = String(body?.action || "run").toLowerCase();
 
   if (action === "status") {
+    // return a richer status so we can confirm env propagation quickly
+    const position = await fetchBtcPosition();
+    const gates = {
+      BOT_ENABLED: truthy(process.env.BOT_ENABLED),
+      COINBASE_TRADING_ENABLED: truthy(process.env.COINBASE_TRADING_ENABLED),
+      PULSE_TRADE_ARMED: truthy(process.env.PULSE_TRADE_ARMED),
+      PULSE_EXITS_ENABLED: truthy(process.env.PULSE_EXITS_ENABLED),
+      PULSE_EXITS_DRY_RUN: truthy(process.env.PULSE_EXITS_DRY_RUN),
+    };
     return json(200, {
       ok: true,
       status: "PULSE_MANAGER_READY",
-      note: "Use GET/POST action=run to execute exit logic (if enabled).",
+      gates,
+      position,
+      note: "Use GET or POST action=run to execute exit logic (if enabled).",
     });
   }
 
