@@ -6,79 +6,193 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
-type PlanTier = "Free" | "Starter" | "Pro" | "Elite";
+type BotStatus = "Active" | "Available" | "Locked";
+type StepState = "Done" | "Next" | "Pending";
 
-type Bot = {
-  name: string;
-  description: string;
-  status: "Active" | "Available" | "Locked";
-  badge: string;
-};
+function fmtDate(d?: Date | null) {
+  if (!d) return "—";
+  try {
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  } catch {
+    return "—";
+  }
+}
 
-function Pill({
+function cx(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
+
+function Badge({
   children,
   tone = "neutral",
+  className,
 }: {
   children: React.ReactNode;
-  tone?: "neutral" | "good" | "warn" | "danger";
+  tone?: "neutral" | "good" | "warn" | "bad";
+  className?: string;
 }) {
-  const cls =
+  const styles =
     tone === "good"
-      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
       : tone === "warn"
-      ? "border-yellow-400/30 bg-yellow-400/10 text-yellow-100"
-      : tone === "danger"
-      ? "border-red-400/30 bg-red-400/10 text-red-200"
-      : "border-white/10 bg-white/5 text-white/80";
+        ? "border-amber-500/35 bg-amber-500/10 text-amber-200"
+        : tone === "bad"
+          ? "border-rose-500/35 bg-rose-500/10 text-rose-200"
+          : "border-white/10 bg-white/5 text-white/70";
 
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium ${cls}`}
+      className={cx(
+        "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium tracking-wide",
+        styles,
+        className
+      )}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+      {children}
+    </span>
+  );
+}
+
+function Chip({
+  children,
+  tone = "neutral",
+  className,
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "good" | "warn" | "bad";
+  className?: string;
+}) {
+  const styles =
+    tone === "good"
+      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+      : tone === "warn"
+        ? "border-amber-500/35 bg-amber-500/10 text-amber-200"
+        : tone === "bad"
+          ? "border-rose-500/35 bg-rose-500/10 text-rose-200"
+          : "border-white/10 bg-white/5 text-white/70";
+
+  return (
+    <span
+      className={cx(
+        "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold",
+        styles,
+        className
+      )}
     >
       {children}
     </span>
   );
 }
 
-function Card({
-  title,
-  subtitle,
-  right,
+function SoftButton({
   children,
+  onClick,
+  href,
+  variant = "neutral",
+  className,
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+  href?: string;
+  variant?: "neutral" | "danger" | "gold";
+  className?: string;
+}) {
+  const base =
+    "inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-white/10";
+  const styles =
+    variant === "danger"
+      ? "border border-rose-500/35 bg-rose-500/10 text-rose-200 hover:bg-rose-500/15"
+      : variant === "gold"
+        ? "border border-amber-400/30 bg-amber-400/10 text-amber-100 hover:bg-amber-400/15"
+        : "border border-white/10 bg-white/5 text-white/85 hover:bg-white/10";
+
+  if (href) {
+    return (
+      <Link href={href} className={cx(base, styles, className)}>
+        {children}
+      </Link>
+    );
+  }
+
+  return (
+    <button onClick={onClick} className={cx(base, styles, className)} type="button">
+      {children}
+    </button>
+  );
+}
+
+function StepRow({
+  title,
+  desc,
+  state,
+  ctaLabel,
+  onCta,
 }: {
   title: string;
-  subtitle?: string;
-  right?: React.ReactNode;
-  children: React.ReactNode;
+  desc: string;
+  state: StepState;
+  ctaLabel?: string;
+  onCta?: () => void;
 }) {
+  const pill =
+    state === "Done" ? (
+      <Chip tone="good">Done</Chip>
+    ) : state === "Next" ? (
+      <Chip tone="warn">Next</Chip>
+    ) : (
+      <Chip>Pending</Chip>
+    );
+
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/35 shadow-2xl backdrop-blur">
-      <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-white text-base font-semibold">{title}</div>
-          {subtitle ? (
-            <div className="mt-1 text-xs text-white/60">{subtitle}</div>
-          ) : null}
+          <div className="text-white font-semibold">{title}</div>
+          <div className="mt-1 text-sm text-white/65">{desc}</div>
         </div>
-        {right ? <div className="pt-0.5">{right}</div> : null}
+        {pill}
       </div>
-      <div className="px-5 py-4">{children}</div>
+
+      {ctaLabel && onCta ? (
+        <button
+          type="button"
+          onClick={onCta}
+          className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-white/80 hover:text-white transition"
+        >
+          {ctaLabel}
+          <span className="text-white/45">→</span>
+        </button>
+      ) : null}
     </div>
   );
 }
 
-function formatDate(dt: string | null | undefined) {
-  if (!dt) return "—";
-  try {
-    const d = new Date(dt);
-    return d.toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-    });
-  } catch {
-    return "—";
-  }
+function BotCard({
+  name,
+  tag,
+  desc,
+  status,
+}: {
+  name: string;
+  tag: string;
+  desc: string;
+  status: BotStatus;
+}) {
+  const tone = status === "Active" ? "good" : status === "Available" ? "warn" : "neutral";
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="text-white font-semibold">{name}</div>
+          <Chip tone={tone}>{tag}</Chip>
+        </div>
+        <Chip tone={tone}>{status}</Chip>
+      </div>
+      <div className="mt-2 text-sm text-white/65">{desc}</div>
+    </div>
+  );
 }
 
 export default function AccountPage() {
@@ -86,69 +200,50 @@ export default function AccountPage() {
 
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
-  const [createdAt, setCreatedAt] = useState<string | null>(null);
-  const [emailConfirmedAt, setEmailConfirmedAt] = useState<string | null>(null);
+  const [createdAt, setCreatedAt] = useState<Date | null>(null);
+  const [emailVerified, setEmailVerified] = useState(false);
 
-  // Future: Replace these with real subscription + connection state (safe reads).
-  const plan: PlanTier = "Starter";
-  const coinbaseConnected = false;
-
-  const bots: Bot[] = useMemo(
-    () => [
-      {
-        name: "Pulse",
-        description: "Core execution bot (spot) with disciplined cadence.",
-        status: "Active",
-        badge: "LIVE READY",
-      },
-      {
-        name: "Recon",
-        description: "Signal intelligence layer (confidence + regime).",
-        status: "Active",
-        badge: "SIGNALS",
-      },
-      {
-        name: "Atlas",
-        description: "Long-term allocator for steady compounding (DCA).",
-        status: "Available",
-        badge: "WEALTH",
-      },
-      {
-        name: "Ignition",
-        description: "Momentum burst module (risk-gated).",
-        status: "Locked",
-        badge: "PRO+",
-      },
-      {
-        name: "Ascend",
-        description: "Institutional-style upgrades & paired logic.",
-        status: "Locked",
-        badge: "ELITE",
-      },
-    ],
-    []
-  );
+  // These are optional “upgrade hooks” you can later wire to real data.
+  const [planName, setPlanName] = useState<string>("Starter Plan");
+  const [coinbaseConnected, setCoinbaseConnected] = useState<boolean>(false);
+  const [coinbaseGreen, setCoinbaseGreen] = useState<boolean>(false);
 
   useEffect(() => {
     let mounted = true;
 
     (async () => {
-      const { data } = await supabase.auth.getUser();
+      const { data, error } = await supabase.auth.getUser();
+
       if (!mounted) return;
 
-      if (!data.user) {
+      if (error || !data?.user) {
         router.push("/login");
         return;
       }
 
-      setEmail(data.user.email ?? null);
-      setCreatedAt((data.user as any)?.created_at ?? null);
-      // Supabase returns different fields depending on config; handle both.
-      setEmailConfirmedAt(
-        (data.user as any)?.email_confirmed_at ??
-          (data.user as any)?.confirmed_at ??
-          null
-      );
+      const u = data.user;
+      setEmail(u.email ?? null);
+      setCreatedAt(u.created_at ? new Date(u.created_at) : null);
+
+      // Supabase user objects may have different fields depending on setup; handle safely.
+      const verified =
+        Boolean((u as any).email_confirmed_at) ||
+        Boolean((u as any).confirmed_at) ||
+        Boolean((u as any).user_metadata?.email_verified);
+
+      setEmailVerified(verified);
+
+      // Optional metadata-driven UI (safe fallbacks)
+      const meta: any = (u as any).user_metadata || {};
+      const plan = typeof meta.plan_name === "string" && meta.plan_name.trim() ? meta.plan_name : "Starter Plan";
+      setPlanName(plan);
+
+      const cbConnected = Boolean(meta.coinbase_connected) || Boolean(meta.coinbase_keys_saved);
+      setCoinbaseConnected(cbConnected);
+
+      // “Green” means your app’s status checks are passing (wire later). For now use metadata if present.
+      const cbGreen = Boolean(meta.coinbase_green) || Boolean(meta.coinbase_status_ok);
+      setCoinbaseGreen(cbGreen);
 
       setLoading(false);
     })();
@@ -158,54 +253,34 @@ export default function AccountPage() {
     };
   }, [router]);
 
-  async function logout() {
+  const onboarding = useMemo(() => {
+    const step1: StepState = emailVerified ? "Done" : "Next";
+    const step2: StepState = coinbaseConnected ? "Done" : emailVerified ? "Next" : "Pending";
+    const step3: StepState = coinbaseGreen ? "Done" : coinbaseConnected ? "Next" : "Pending";
+    return { step1, step2, step3 };
+  }, [emailVerified, coinbaseConnected, coinbaseGreen]);
+
+  const accountStateTone = emailVerified ? "good" : "warn";
+  const accountStateLabel = emailVerified ? "Secure" : "Action needed";
+
+  async function signOut() {
     await supabase.auth.signOut();
     router.push("/");
   }
 
-  const emailVerified = Boolean(emailConfirmedAt);
+  function goConnectKeys() {
+    router.push("/connect-keys");
+  }
 
-  const onboarding = [
-    {
-      title: "Verify your email",
-      desc: "Required for password resets and security alerts.",
-      done: emailVerified,
-      cta: emailVerified ? null : (
-        <Link
-          href="/login?mode=login"
-          className="text-xs text-white/70 hover:text-white underline"
-        >
-          Resend verification (if needed)
-        </Link>
-      ),
-    },
-    {
-      title: "Connect Coinbase",
-      desc: "Unlock live status checks and API onboarding.",
-      done: coinbaseConnected,
-      cta: (
-        <Link
-          href="/connect-keys"
-          className="text-xs text-white/70 hover:text-white underline"
-        >
-          Go to Connect Keys
-        </Link>
-      ),
-    },
-    {
-      title: "Confirm “Your Coinbase” is green",
-      desc: "We’ll guide users to a clean preflight state (no red flags).",
-      done: false,
-      cta: (
-        <Link
-          href="/dashboard"
-          className="text-xs text-white/70 hover:text-white underline"
-        >
-          Open Dashboard
-        </Link>
-      ),
-    },
-  ];
+  function goDashboard() {
+    router.push("/dashboard");
+  }
+
+  function goForgotPassword() {
+    // You already built /forgot-password — use it as the safe reset path.
+    const q = email ? `?email=${encodeURIComponent(email)}` : "";
+    router.push(`/forgot-password${q}`);
+  }
 
   if (loading) {
     return (
@@ -216,286 +291,221 @@ export default function AccountPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 px-6 py-10">
-      {/* Ambient glow */}
-      <div className="pointer-events-none fixed inset-0 opacity-70">
-        <div className="absolute -top-24 left-1/2 h-72 w-[42rem] -translate-x-1/2 rounded-full bg-blue-500/10 blur-3xl" />
-        <div className="absolute top-32 left-12 h-64 w-64 rounded-full bg-yellow-400/10 blur-3xl" />
-        <div className="absolute bottom-10 right-10 h-72 w-72 rounded-full bg-purple-500/10 blur-3xl" />
-      </div>
-
-      <div className="relative mx-auto w-full max-w-5xl">
+    <div className="min-h-screen bg-slate-950">
+      <div className="mx-auto w-full max-w-6xl px-6 py-10">
         {/* Header */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
           <div>
-            <div className="inline-flex items-center gap-2">
-              <h1 className="text-3xl font-semibold text-white">Account</h1>
-              <Pill tone="good">Secure</Pill>
-              {plan ? <Pill>{plan} Plan</Pill> : null}
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-4xl font-semibold tracking-tight text-white">Account</h1>
+              <Badge tone={accountStateTone}>{accountStateLabel}</Badge>
+              <Chip>{planName}</Chip>
             </div>
-            <p className="mt-2 text-sm text-white/65">
+
+            <p className="mt-2 text-white/65">
               Your control center for onboarding, subscriptions, and safety.
+              <span className="ml-2 text-white/40">
+                Funds remain on your exchange — YieldCraft never takes custody.
+              </span>
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard"
-              className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/80 hover:bg-white/10 transition"
-            >
-              Open Dashboard
-            </Link>
-            <button
-              onClick={logout}
-              className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-200 hover:bg-red-500/20 transition"
-            >
+          <div className="flex flex-wrap gap-3">
+            <SoftButton onClick={goDashboard}>Open Dashboard</SoftButton>
+            <SoftButton onClick={signOut} variant="danger">
               Sign out
-            </button>
+            </SoftButton>
           </div>
         </div>
 
-        {/* Grid */}
-        <div className="mt-8 grid grid-cols-1 gap-5 lg:grid-cols-3">
-          {/* Left: Overview + Security */}
-          <div className="space-y-5 lg:col-span-1">
-            <Card
-              title="Account Overview"
-              subtitle="Identity, verification, and membership."
-              right={
-                emailVerified ? (
-                  <Pill tone="good">Email Verified</Pill>
-                ) : (
-                  <Pill tone="warn">Verify Email</Pill>
-                )
-              }
-            >
-              <div className="space-y-3">
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                  <div className="text-xs uppercase tracking-wide text-white/50">
-                    Logged in as
-                  </div>
-                  <div className="mt-1 text-white font-medium">
-                    {email ?? "—"}
-                  </div>
-                </div>
+        {/* Main grid */}
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Left: Account Overview */}
+          <div className="rounded-3xl border border-white/10 bg-black/40 p-6 shadow-2xl backdrop-blur">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-white text-lg font-semibold">Account Overview</div>
+                <div className="mt-1 text-sm text-white/60">Identity, verification, and membership.</div>
+              </div>
+              <Chip tone={emailVerified ? "good" : "warn"}>{emailVerified ? "Email Verified" : "Verify Email"}</Chip>
+            </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-white/50">Member since</div>
-                    <div className="mt-1 text-sm text-white">
-                      {formatDate(createdAt)}
-                    </div>
-                  </div>
-                  <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs text-white/50">Status</div>
-                    <div className="mt-1">
-                      <Pill tone="good">Active</Pill>
-                    </div>
-                  </div>
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
+              <div className="text-[11px] uppercase tracking-wider text-white/45">Logged in as</div>
+              <div className="mt-1 text-white text-lg font-semibold break-all">{email ?? "—"}</div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-4">
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-white/45">Member since</div>
+                <div className="mt-1 text-white font-semibold">{fmtDate(createdAt)}</div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+                <div className="text-[11px] uppercase tracking-wider text-white/45">Status</div>
+                <div className="mt-1">
+                  <Chip tone="good">Active</Chip>
                 </div>
               </div>
-            </Card>
+            </div>
 
-            <Card
-              title="Security"
-              subtitle="Account recovery & best practices."
-            >
-              <div className="space-y-3">
-                <Link
-                  href="/forgot-password"
-                  className="block w-full rounded-xl bg-yellow-400 px-4 py-2 text-center text-sm font-semibold text-black hover:bg-yellow-300 transition"
-                >
-                  Reset password
-                </Link>
+            <div className="mt-6 rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="text-white font-semibold">Security</div>
+              <div className="mt-1 text-sm text-white/60">Account recovery & best practices.</div>
 
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-xs text-white/70 leading-relaxed">
-                  Tip: If you don’t receive emails, check spam/promotions.
-                  We’re updating all system emails to show <span className="text-white font-medium">YieldCraft</span>{" "}
-                  as the sender.
-                </div>
+              <button
+                type="button"
+                onClick={goForgotPassword}
+                className="mt-5 w-full rounded-2xl bg-amber-400 px-4 py-3 text-sm font-extrabold text-black hover:brightness-110 transition"
+              >
+                Reset password
+              </button>
+
+              <div className="mt-4 text-xs text-white/50">
+                Tip: use a strong password and enable 2FA on your email provider.
               </div>
-            </Card>
+            </div>
           </div>
 
-          {/* Middle: Onboarding */}
-          <div className="space-y-5 lg:col-span-1">
-            <Card
-              title="Onboarding Checklist"
-              subtitle="Three steps to a clean, green setup."
-              right={<Pill tone="neutral">Guided</Pill>}
-            >
-              <div className="space-y-3">
-                {onboarding.map((item) => (
-                  <div
-                    key={item.title}
-                    className="rounded-xl border border-white/10 bg-white/5 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-white">
-                          {item.title}
-                        </div>
-                        <div className="mt-1 text-xs text-white/65">
-                          {item.desc}
-                        </div>
-                      </div>
-                      {item.done ? (
-                        <Pill tone="good">Done</Pill>
-                      ) : (
-                        <Pill tone="warn">Next</Pill>
-                      )}
-                    </div>
-                    {item.cta ? (
-                      <div className="mt-3">{item.cta}</div>
-                    ) : null}
-                  </div>
-                ))}
+          {/* Middle: Onboarding Checklist */}
+          <div className="rounded-3xl border border-white/10 bg-black/40 p-6 shadow-2xl backdrop-blur">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-white text-lg font-semibold">Onboarding Checklist</div>
+                <div className="mt-1 text-sm text-white/60">Three steps to a clean, green setup.</div>
               </div>
-            </Card>
+              <Chip>Guided</Chip>
+            </div>
 
-            <Card
-              title="Coinbase Connection"
-              subtitle="Status shown here once keys are connected."
-              right={
-                coinbaseConnected ? (
-                  <Pill tone="good">Connected</Pill>
-                ) : (
-                  <Pill tone="danger">Not Connected</Pill>
-                )
-              }
-            >
-              <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-white">
-                      Your Coinbase
-                    </div>
-                    <div className="mt-1 text-xs text-white/65">
-                      We’ll show a green status when your API setup passes preflight.
-                    </div>
-                  </div>
-                  {coinbaseConnected ? (
-                    <Pill tone="good">Green</Pill>
-                  ) : (
-                    <Pill tone="danger">Red</Pill>
-                  )}
-                </div>
+            <div className="mt-6 space-y-4">
+              <StepRow
+                title="Verify your email"
+                desc="Required for password resets and security alerts."
+                state={onboarding.step1}
+                ctaLabel={!emailVerified ? "Resend verification (in app)" : undefined}
+                onCta={
+                  !emailVerified
+                    ? async () => {
+                        if (!email) return;
+                        // This sends a new sign-in link if you use magic links OR can be replaced later with a dedicated verification resend flow.
+                        await supabase.auth.resend({ type: "signup", email });
+                        alert("Verification email requested. Check inbox/spam.");
+                      }
+                    : undefined
+                }
+              />
 
-                <div className="mt-4 flex gap-2">
-                  <Link
-                    href="/connect-keys"
-                    className="flex-1 rounded-xl bg-white/10 px-4 py-2 text-center text-sm text-white hover:bg-white/15 transition"
-                  >
-                    Connect keys
-                  </Link>
-                  <Link
-                    href="/dashboard"
-                    className="flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-2 text-center text-sm text-white/80 hover:bg-white/5 transition"
-                  >
-                    View status
-                  </Link>
-                </div>
+              <StepRow
+                title="Connect Coinbase"
+                desc="Unlock live status checks and API onboarding."
+                state={onboarding.step2}
+                ctaLabel="Go to Connect Keys"
+                onCta={goConnectKeys}
+              />
+
+              <StepRow
+                title='Confirm “Your Coinbase” is green'
+                desc="We’ll guide users to a clean preflight state (no red flags)."
+                state={onboarding.step3}
+                ctaLabel="Open Dashboard"
+                onCta={goDashboard}
+              />
+            </div>
+
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-white font-semibold">Support</div>
+                <Chip tone="warn">Fast help</Chip>
+              </div>
+              <div className="mt-2 text-sm text-white/60">
+                If something looks wrong (email not arriving, Coinbase not green), it’s almost always DNS/SMTP,
+                permissions, or one missing key field. We’ll keep it step-by-step.
               </div>
 
-              <div className="mt-3 text-xs text-white/60">
-                Note: This page is UI-only. No trading happens from here.
+              <div className="mt-4 flex flex-wrap gap-3">
+                <SoftButton href="/forgot-password" variant="neutral" className="text-white/85">
+                  Reset link
+                </SoftButton>
+                <SoftButton href="/connect-keys" variant="neutral" className="text-white/85">
+                  Reconnect keys
+                </SoftButton>
+                <SoftButton href="/pricing" variant="gold">
+                  See plans
+                </SoftButton>
               </div>
-            </Card>
+            </div>
           </div>
 
-          {/* Right: Bots + Support */}
-          <div className="space-y-5 lg:col-span-1">
-            <Card
-              title="Subscribed Bots"
-              subtitle="Your current suite and availability."
-              right={<Pill>{bots.filter((b) => b.status === "Active").length} Active</Pill>}
-            >
-              <div className="space-y-3">
-                {bots.map((b) => (
-                  <div
-                    key={b.name}
-                    className="rounded-xl border border-white/10 bg-white/5 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-sm font-semibold text-white">
-                            {b.name}
-                          </div>
-                          <Pill tone="neutral">{b.badge}</Pill>
-                        </div>
-                        <div className="mt-1 text-xs text-white/65">
-                          {b.description}
-                        </div>
-                      </div>
-
-                      {b.status === "Active" ? (
-                        <Pill tone="good">Active</Pill>
-                      ) : b.status === "Available" ? (
-                        <Pill tone="warn">Available</Pill>
-                      ) : (
-                        <Pill tone="neutral">Locked</Pill>
-                      )}
-                    </div>
-                  </div>
-                ))}
+          {/* Right: Subscribed Bots */}
+          <div className="rounded-3xl border border-white/10 bg-black/40 p-6 shadow-2xl backdrop-blur">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-white text-lg font-semibold">Subscribed Bots</div>
+                <div className="mt-1 text-sm text-white/60">Your current suite and availability.</div>
               </div>
+              <Chip tone="good">2 Active</Chip>
+            </div>
 
-              <div className="mt-4 flex gap-2">
-                <Link
-                  href="/pricing"
-                  className="flex-1 rounded-xl bg-yellow-400 px-4 py-2 text-center text-sm font-semibold text-black hover:bg-yellow-300 transition"
-                >
-                  Upgrade plan
-                </Link>
-                <Link
-                  href="/quick-start"
-                  className="flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-2 text-center text-sm text-white/80 hover:bg-white/5 transition"
-                >
-                  Quick Start
-                </Link>
-              </div>
-            </Card>
+            <div className="mt-6 space-y-4">
+              <BotCard
+                name="Pulse"
+                tag="LIVE READY"
+                desc="Core execution bot (spot) with disciplined cadence."
+                status="Active"
+              />
+              <BotCard
+                name="Recon"
+                tag="SIGNALS"
+                desc="Signal intelligence layer (confidence + regime)."
+                status="Active"
+              />
+              <BotCard
+                name="Atlas"
+                tag="WEALTH"
+                desc="Long-term allocator for steady compounding (DCA)."
+                status="Available"
+              />
+              <BotCard
+                name="Ignition"
+                tag="PRO+"
+                desc="Momentum burst module (risk-aware)."
+                status="Locked"
+              />
+            </div>
 
-            <Card
-              title="Support & Safety"
-              subtitle="Fast answers + guardrails."
-            >
-              <div className="space-y-3">
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/80">
-                  <div className="font-semibold text-white">Need help?</div>
-                  <div className="mt-1 text-xs text-white/65">
-                    If anything feels off during onboarding, don’t guess—use the checklist and we’ll get you green.
-                  </div>
-                  <div className="mt-3 flex flex-col gap-2">
-                    <a
-                      className="text-xs text-white/70 hover:text-white underline"
-                      href="mailto:support@yieldcraft.co"
-                    >
-                      Email support: support@yieldcraft.co
-                    </a>
-                    <Link
-                      className="text-xs text-white/70 hover:text-white underline"
-                      href="/dashboard"
-                    >
-                      Open Dashboard (Status)
-                    </Link>
+            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
+              <div className="text-white font-semibold">Account Health</div>
+              <div className="mt-2 grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-white/45">Email</div>
+                  <div className="mt-1">
+                    <Chip tone={emailVerified ? "good" : "warn"}>{emailVerified ? "Verified" : "Pending"}</Chip>
                   </div>
                 </div>
-
-                <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-xs text-white/65 leading-relaxed">
-                  <span className="text-white/80 font-semibold">Safety note:</span>{" "}
-                  YieldCraft will never place orders unless trading is explicitly enabled by the user in the trading layer.
-                  This page is informational and designed to reduce credential issues and support load.
+                <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-white/45">Coinbase</div>
+                  <div className="mt-1">
+                    <Chip tone={coinbaseConnected ? "good" : "warn"}>{coinbaseConnected ? "Connected" : "Not set"}</Chip>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div className="text-[11px] uppercase tracking-wider text-white/45">Status</div>
+                  <div className="mt-1">
+                    <Chip tone={coinbaseGreen ? "good" : "warn"}>{coinbaseGreen ? "Green" : "Needs check"}</Chip>
+                  </div>
                 </div>
               </div>
-            </Card>
+
+              <div className="mt-4 text-xs text-white/45">
+                *Coinbase “Green” will reflect real preflight checks once we wire the status endpoint.
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Footer hint */}
-        <div className="mt-8 text-center text-xs text-white/45">
-          YieldCraft • Direct Execution • AI Risk Engines
+        {/* Footer note */}
+        <div className="mt-8 text-xs text-white/40">
+          YieldCraft is a decision-support and execution tooling platform. All trading involves risk; you control keys and
+          permissions.
         </div>
       </div>
     </div>
