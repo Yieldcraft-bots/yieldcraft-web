@@ -1,269 +1,405 @@
 // src/app/api/pulse-manager/route.ts
-// Pulse Manager: lightweight orchestrator (safe + build-stable)
+// Pulse Manager — authenticated “real trading” runner (cron-safe)
+// - Keeps /api/pulse-heartbeat public + safe.
+// - This route is PRIVATE (requires CRON_SECRET).
 //
-// Goals:
-// - Never break production trading routes
-// - Provide a single "tick" endpoint you can cron
-// - Delegate actual execution to /api/pulse-trade (which already has gates)
+// What it does (when enabled):
+// - Reads current position (BTC-USD)
+// - If a position exists AND PULSE_EXITS_ENABLED=true:
+//     • Take-profit at PROFIT_TARGET_BPS
+//     • Trailing stop: arm at TRAIL_ARM_BPS, trail by TRAIL_OFFSET_BPS using candles peak
+// - Places SELL via Coinbase (maker by default through envs used in pulse-trade)
 //
-// Endpoints:
-//   GET  -> status
-//   POST -> { action: "status" | "tick" | "dry_run" | "place_order", ... }
+// Flags:
+//   BOT_ENABLED=true
+//   COINBASE_TRADING_ENABLED=true
+//   PULSE_TRADE_ARMED=true
+//   PULSE_EXITS_ENABLED=true   <-- NEW (controls exits only)
 //
-// Security (recommended):
-//   If CRON_SECRET is set, require Authorization: Bearer <CRON_SECRET>
+// Notes:
+// - This does NOT “invent” AI. It’s the safety/exit layer.
+// - It does NOT require a DB: derives entry + peak from Coinbase fills + candles.
+// - Uses signed Coinbase CDP JWT (same style as pulse-trade).
 
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 
-type Side = "BUY" | "SELL";
+const PRODUCT_ID = "BTC-USD";
 
+// ---------- helpers ----------
+function json(status: number, body: any) {
+  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+}
 function truthy(v?: string) {
   return ["1", "true", "yes", "on"].includes((v || "").toLowerCase());
 }
-
-function json(status: number, body: any) {
-  return NextResponse.json(body, {
-    status,
-    headers: { "Cache-Control": "no-store" },
-  });
+function num(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
-
-function safeJsonParse(text: string) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
+function requireEnv(name: string) {
+  const v = process.env[name];
+  if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
+  return v.trim();
+}
+function optEnv(name: string) {
+  const v = process.env[name];
+  return v && v.trim() ? v.trim() : null;
+}
+function normalizePem(pem: string) {
+  let p = pem.trim();
+  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+    p = p.slice(1, -1);
   }
+  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
 }
-
-/**
- * Optional auth:
- * If CRON_SECRET is set, require Authorization: Bearer <CRON_SECRET>
- */
-function cronAuthorized(req: Request) {
-  const secret = (process.env.CRON_SECRET || "").trim();
-  if (!secret) return true;
-  const auth = req.headers.get("authorization") || "";
-  return auth === `Bearer ${secret}`;
-}
-
-/** Manager gates (separate from execution gates in pulse-trade) */
-function managerGates() {
-  const managerEnabled = truthy(process.env.PULSE_MANAGER_ENABLED || "true"); // default on
-  const soakMode = truthy(process.env.PULSE_SOAK_MODE || "true"); // default soak ON
-  return { managerEnabled, soakMode };
-}
-
-/**
- * Compute a "min position" threshold (BTC) so small accounts don't churn.
- * - For tiny accounts, set a small base threshold to prevent spam.
- * - For big accounts, threshold stays tiny relative to size.
- */
 function minPositionBaseBtc() {
   const raw = (process.env.PULSE_MIN_POSITION_BASE_BTC || "").trim();
   const n = raw ? Number(raw) : NaN;
   if (Number.isFinite(n) && n >= 0) return n;
-  return 0.000001; // default: 0.000001 BTC
+  return 0.000001;
+}
+function fmtBaseSize(x: number) {
+  const v = Math.max(0, x);
+  return v.toFixed(8).replace(/\.?0+$/, "");
 }
 
-/**
- * Read a position snapshot from the execution route if available.
- * NOTE: This does NOT place orders — it just asks /api/pulse-trade for status
- * and expects it may include a position object.
- *
- * If pulse-trade doesn’t include position info, this returns base=0 safely.
- */
-async function getExecutionStatus(origin: string) {
-  const url = `${origin.replace(/\/$/, "")}/api/pulse-trade`;
-  const res = await fetch(url, {
+function okAuth(req: Request) {
+  const secret = process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "";
+  if (!secret) return false;
+
+  // allow either header or query param
+  const h =
+    req.headers.get("x-cron-secret") ||
+    req.headers.get("x-pulse-secret") ||
+    req.headers.get("authorization");
+
+  if (h && (h === secret || h === `Bearer ${secret}`)) return true;
+
+  const url = new URL(req.url);
+  const q = url.searchParams.get("secret");
+  return q === secret;
+}
+
+// ---------- Coinbase CDP JWT ----------
+function buildCdpJwt(method: "GET" | "POST", path: string) {
+  const apiKeyName = requireEnv("COINBASE_API_KEY_NAME");
+  const privateKey = normalizePem(requireEnv("COINBASE_PRIVATE_KEY"));
+
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const uri = `${method} api.coinbase.com${path}`;
+
+  return jwt.sign(
+    { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri },
+    privateKey as any,
+    { algorithm: "ES256", header: { kid: apiKeyName, nonce } as any }
+  );
+}
+
+async function cbFetch(path: string) {
+  const token = buildCdpJwt("GET", path);
+  const res = await fetch(`https://api.coinbase.com${path}`, {
     method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  const text = await res.text();
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
+  }
+  return { ok: res.ok, status: res.status, json: parsed, text };
+}
+
+// ---------- position ----------
+async function fetchBtcPosition() {
+  const path = "/api/v3/brokerage/accounts";
+  const r = await cbFetch(path);
+
+  if (!r.ok) {
+    return {
+      ok: false as const,
+      has_position: false,
+      base_available: 0,
+      status: r.status,
+      coinbase: r.json ?? r.text,
+    };
+  }
+
+  const accounts = (r.json as any)?.accounts || [];
+  const btc = accounts.find((a: any) => a?.currency === "BTC");
+  const available = Number(btc?.available_balance?.value || 0);
+
+  const minPos = minPositionBaseBtc();
+  return {
+    ok: true as const,
+    has_position: Number.isFinite(available) && available >= minPos,
+    base_available: Number.isFinite(available) ? available : 0,
+    min_pos: minPos,
+  };
+}
+
+// ---------- entry price from fills ----------
+async function fetchEntryFromFills(): Promise<
+  | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
+  | { ok: false; error: any }
+> {
+  // Coinbase endpoint: historical fills
+  // We’ll take the most recent BUY fill for BTC-USD as the “entry”.
+  const path = `/api/v3/brokerage/orders/historical/fills?product_id=${encodeURIComponent(
+    PRODUCT_ID
+  )}&limit=100`;
+
+  const r = await cbFetch(path);
+  if (!r.ok) return { ok: false, error: r.json ?? r.text };
+
+  const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
+  if (!Array.isArray(fills) || fills.length === 0) {
+    return { ok: false, error: "no_fills_found" };
+  }
+
+  // find last BUY fill
+  const buy = fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY");
+  if (!buy) return { ok: false, error: "no_buy_fill_found" };
+
+  const px = Number(buy?.price || buy?.fill_price || 0);
+  const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
+  const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
+
+  if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
+
+  return { ok: true, entryPrice: px, entryTime: t || new Date().toISOString(), entryQty: qty };
+}
+
+// ---------- peak price since entry via candles ----------
+async function fetchPeakSince(isoTime: string): Promise<
+  | { ok: true; peak: number; last: number }
+  | { ok: false; error: any }
+> {
+  // Coinbase candles endpoint (Advanced Trade):
+  // /products/{product_id}/candles?start=...&end=...&granularity=...
+  // Use 1-minute candles by default, fallback to 5m if needed.
+  const end = new Date();
+  const start = new Date(isoTime);
+  // safety clamp: max lookback 48h (keeps payload small)
+  if (end.getTime() - start.getTime() > 48 * 3600 * 1000) {
+    start.setTime(end.getTime() - 48 * 3600 * 1000);
+  }
+
+  const startIso = start.toISOString();
+  const endIso = end.toISOString();
+
+  const gran = optEnv("PULSE_CANDLE_GRANULARITY") || "ONE_MINUTE";
+  const path = `/api/v3/brokerage/products/${encodeURIComponent(
+    PRODUCT_ID
+  )}/candles?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(endIso)}&granularity=${encodeURIComponent(
+    gran
+  )}`;
+
+  const r = await cbFetch(path);
+  if (!r.ok) return { ok: false, error: r.json ?? r.text };
+
+  const candles = (r.json as any)?.candles || [];
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return { ok: false, error: "no_candles" };
+  }
+
+  // candle shape varies; handle common fields:
+  // { high, low, open, close } OR arrays
+  let peak = 0;
+  let last = 0;
+
+  for (const c of candles) {
+    const high = Number((c as any)?.high ?? (c as any)?.h ?? 0);
+    const close = Number((c as any)?.close ?? (c as any)?.c ?? 0);
+    if (Number.isFinite(high) && high > peak) peak = high;
+    if (Number.isFinite(close) && close > 0) last = close;
+  }
+
+  if (!peak || peak <= 0) return { ok: false, error: { bad_peak: candles[0] } };
+  if (!last || last <= 0) last = peak;
+
+  return { ok: true, peak, last };
+}
+
+// ---------- place SELL via pulse-trade ----------
+async function placeSell(baseSize: string) {
+  // Use internal endpoint so all gates/formatting stay consistent
+  const url = `${process.env.NEXT_PUBLIC_SITE_URL || "https://yieldcraft.co"}/api/pulse-trade`;
+  const res = await fetch(url, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "place_order",
+      side: "SELL",
+      base_size: baseSize,
+    }),
     cache: "no-store",
   });
 
   const text = await res.text();
-  const parsed = safeJsonParse(text);
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
+  }
 
-  // Safe defaults to prevent TS + runtime issues
-  const gates = parsed?.gates ?? null;
+  return { ok: res.ok, status: res.status, data: parsed ?? text };
+}
 
-  // If your pulse-trade returns position, we’ll use it. Otherwise: base=0
-  const pos = parsed?.position ?? parsed?.pos ?? null;
+// ---------- main runner ----------
+async function runManager() {
+  const botEnabled = truthy(process.env.BOT_ENABLED);
+  const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
+  const armed = truthy(process.env.PULSE_TRADE_ARMED);
+  const exitsEnabled = truthy(process.env.PULSE_EXITS_ENABLED);
 
-  const base =
-    typeof pos?.base === "number"
-      ? pos.base
-      : typeof pos?.base === "string"
-      ? Number(pos.base)
-      : typeof pos?.base_size === "string"
-      ? Number(pos.base_size)
-      : 0;
+  const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
+  const trailArmBps = num(process.env.TRAIL_ARM_BPS, 150);
+  const trailOffsetBps = num(process.env.TRAIL_OFFSET_BPS, 50);
+
+  const position = await fetchBtcPosition();
+
+  const gates = {
+    BOT_ENABLED: botEnabled,
+    COINBASE_TRADING_ENABLED: tradingEnabled,
+    PULSE_TRADE_ARMED: armed,
+    PULSE_EXITS_ENABLED: exitsEnabled,
+    LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
+  };
+
+  // If not live allowed, do nothing (but still report)
+  if (!gates.LIVE_ALLOWED) {
+    return {
+      ok: true,
+      mode: "NOOP_GATES",
+      gates,
+      position,
+      note: "Manager did not trade because gates are not fully enabled.",
+    };
+  }
+
+  // Only exits in this manager (for now)
+  if (!position.ok) {
+    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
+  }
+
+  if (!position.has_position) {
+    return {
+      ok: true,
+      mode: "NO_POSITION",
+      gates,
+      position,
+      note: "No BTC position -> exits skipped.",
+    };
+  }
+
+  if (!exitsEnabled) {
+    return {
+      ok: true,
+      mode: "HOLD_EXITS_DISABLED",
+      gates,
+      position,
+      note: "BTC position exists but exits are disabled (PULSE_EXITS_ENABLED=false).",
+    };
+  }
+
+  // Derive entry + peak + current
+  const entry = await fetchEntryFromFills();
+  if (!entry.ok) {
+    return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_entry", entry };
+  }
+
+  const peak = await fetchPeakSince(entry.entryTime);
+  if (!peak.ok) {
+    return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_peak", peak };
+  }
+
+  const entryPrice = entry.entryPrice;
+  const current = peak.last;
+  const peakPrice = peak.peak;
+
+  const pnlBps = ((current - entryPrice) / entryPrice) * 10_000;
+  const drawdownFromPeakBps = ((peakPrice - current) / peakPrice) * 10_000;
+
+  const shouldTakeProfit = pnlBps >= profitTargetBps;
+  const trailArmed = pnlBps >= trailArmBps;
+  const shouldTrailStop = trailArmed && drawdownFromPeakBps >= trailOffsetBps;
+
+  const decision = {
+    entryPrice,
+    current,
+    peakPrice,
+    pnlBps: Number(pnlBps.toFixed(2)),
+    drawdownFromPeakBps: Number(drawdownFromPeakBps.toFixed(2)),
+    profitTargetBps,
+    trailArmBps,
+    trailOffsetBps,
+    shouldTakeProfit,
+    trailArmed,
+    shouldTrailStop,
+  };
+
+  if (!shouldTakeProfit && !shouldTrailStop) {
+    return {
+      ok: true,
+      mode: "HOLD",
+      gates,
+      position,
+      decision,
+      note: "Exit conditions not met.",
+    };
+  }
+
+  // SELL entire available position (above dust)
+  const baseSize = fmtBaseSize(position.base_available);
+
+  const sell = await placeSell(baseSize);
 
   return {
-    ok: res.ok,
-    status: res.status,
+    ok: sell.ok,
+    mode: "EXIT_SELL",
     gates,
-    position: {
-      base: Number.isFinite(base) ? base : 0,
-      raw: pos ?? null,
-    },
-    raw: parsed ?? text,
+    position,
+    decision,
+    sell,
   };
 }
 
-/**
- * Call the execution route (/api/pulse-trade) to do a dry-run or live order.
- * pulse-trade has its own gates: COINBASE_TRADING_ENABLED + PULSE_TRADE_ARMED.
- */
-async function callPulseTrade(origin: string, payload: any) {
-  const url = `${origin.replace(/\/$/, "")}/api/pulse-trade`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-
-  // Forward CRON auth if you’re using it everywhere
-  const secret = (process.env.CRON_SECRET || "").trim();
-  if (secret) headers["Authorization"] = `Bearer ${secret}`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
-
-  const text = await res.text();
-  const parsed = safeJsonParse(text);
-  return {
-    ok: res.ok,
-    status: res.status,
-    body: parsed ?? text,
-  };
+// ---------- handlers ----------
+export async function GET(req: Request) {
+  if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
+  const result = await runManager();
+  return json(result.ok ? 200 : 500, result);
 }
-
-/**
- * The manager "tick":
- * - Reads current status/position (best effort)
- * - If SOAK is on: defaults to DRY_RUN unless explicitly told to place live
- * - If a BUY is requested but position already exists, it returns no-op
- */
-async function tick(origin: string, body: any) {
-  const { managerEnabled, soakMode } = managerGates();
-  if (!managerEnabled) {
-    return {
-      ok: true,
-      did: "manager_disabled",
-      managerEnabled,
-      soakMode,
-    };
-  }
-
-  const product_id = String(body?.product_id || "BTC-USD");
-  const requestedSide = String(body?.side || "BUY").toUpperCase() as Side;
-  const quote_size = body?.quote_size != null ? String(body.quote_size) : "1.00";
-  const base_size = body?.base_size != null ? String(body.base_size) : "0.00001";
-
-  // Read current status (safe)
-  const exec = await getExecutionStatus(origin);
-
-  // ✅ Build-stable: always coerce to a number; never undefined
-  const positionBase = Number(exec?.position?.base ?? 0);
-  const minPos = minPositionBaseBtc();
-
-  // If we already hold something meaningful, block repeated BUY spam
-  if (requestedSide === "BUY" && positionBase >= minPos) {
-    return {
-      ok: true,
-      did: "no_op",
-      reason: "buy_blocked_position_exists",
-      positionBase,
-      minPos,
-      exec: { ok: exec.ok, status: exec.status, gates: exec.gates },
-    };
-  }
-
-  // Decide action
-  const forceLive = truthy(body?.force_live);
-  const action =
-    body?.action === "place_order" || body?.action === "live"
-      ? "place_order"
-      : body?.action === "dry_run_order" || body?.action === "dry_run"
-      ? "dry_run_order"
-      : soakMode && !forceLive
-      ? "dry_run_order"
-      : "place_order";
-
-  const payload =
-    requestedSide === "BUY"
-      ? { action, product_id, side: "BUY", quote_size }
-      : { action, product_id, side: "SELL", base_size };
-
-  const result = await callPulseTrade(origin, payload);
-
-  return {
-    ok: true,
-    did: "tick",
-    managerEnabled,
-    soakMode,
-    decided_action: action,
-    requested: { product_id, side: requestedSide, quote_size, base_size },
-    positionBase,
-    minPos,
-    pulse_trade: { ok: result.ok, status: result.status, body: result.body },
-  };
-}
-
-// -------------------- GET --------------------
-
-export async function GET(req: NextRequest) {
-  if (!cronAuthorized(req)) return json(401, { ok: false, error: "unauthorized" });
-
-  const { managerEnabled, soakMode } = managerGates();
-  return json(200, {
-    ok: true,
-    status: "PULSE_MANAGER_READY",
-    gates: { managerEnabled, soakMode },
-    note: "POST {action:'tick'} to run orchestration. Execution is delegated to /api/pulse-trade.",
-  });
-}
-
-// -------------------- POST --------------------
 
 export async function POST(req: Request) {
-  if (!cronAuthorized(req)) return json(401, { ok: false, error: "unauthorized" });
+  if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
-  let body: any = {};
+  // POST lets you optionally call with { action: "status" | "run" }
+  let body: any = null;
   try {
     body = await req.json();
   } catch {
-    body = {};
+    body = null;
   }
-
-  const action = String(body?.action || "status");
-
-  // Figure origin for internal calls
-  const origin = new URL(req.url).origin;
+  const action = String(body?.action || "run").toLowerCase();
 
   if (action === "status") {
-    const { managerEnabled, soakMode } = managerGates();
-    const exec = await getExecutionStatus(origin);
-
     return json(200, {
       ok: true,
       status: "PULSE_MANAGER_READY",
-      gates: { managerEnabled, soakMode },
-      exec: {
-        ok: exec.ok,
-        status: exec.status,
-        gates: exec.gates,
-        positionBase: Number(exec?.position?.base ?? 0),
-      },
+      note: "Use GET/POST action=run to execute exit logic (if enabled).",
     });
   }
 
-  if (action === "tick" || action === "dry_run" || action === "live" || action === "place_order") {
-    const result = await tick(origin, body);
-    return json(200, result);
-  }
-
-  return json(400, { ok: false, error: "unknown_action", action });
+  const result = await runManager();
+  return json(result.ok ? 200 : 500, result);
 }
