@@ -145,7 +145,7 @@ async function fetchEntryFromFills(): Promise<
   const px = Number(buy?.price || buy?.fill_price || 0);
   const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
 
-  // NOTE: we keep entryTime for reporting only; we do NOT trust it for candles start anymore
+  // Keep for reporting only (don’t trust it for candles params)
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
   if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
@@ -153,24 +153,23 @@ async function fetchEntryFromFills(): Promise<
   return { ok: true, entryPrice: px, entryTime: t || new Date().toISOString(), entryQty: qty };
 }
 
-// ---------- peak price via candles (SAFE WINDOW) ----------
+// ---------- peak price via candles (UNIX seconds) ----------
 async function fetchPeakWindow(): Promise<
-  | { ok: true; peak: number; last: number; startIso: string; endIso: string }
+  | { ok: true; peak: number; last: number; startTs: string; endTs: string }
   | { ok: false; error: any }
 > {
   const end = new Date();
+  const start = new Date(end.getTime() - 2 * 3600 * 1000); // last 2 hours
 
-  // ✅ Always use a safe window Coinbase accepts: last 2 hours
-  const start = new Date(end.getTime() - 2 * 3600 * 1000);
-
-  const startIso = start.toISOString();
-  const endIso = end.toISOString();
+  // ✅ Coinbase candles expects UNIX timestamps (seconds) as strings
+  const startTs = String(Math.floor(start.getTime() / 1000));
+  const endTs = String(Math.floor(end.getTime() / 1000));
 
   const gran = optEnv("PULSE_CANDLE_GRANULARITY") || "ONE_MINUTE";
   const path = `/api/v3/brokerage/products/${encodeURIComponent(
     PRODUCT_ID
-  )}/candles?start=${encodeURIComponent(startIso)}&end=${encodeURIComponent(
-    endIso
+  )}/candles?start=${encodeURIComponent(startTs)}&end=${encodeURIComponent(
+    endTs
   )}&granularity=${encodeURIComponent(gran)}`;
 
   const r = await cbFetch(path);
@@ -192,7 +191,7 @@ async function fetchPeakWindow(): Promise<
   if (!peak || peak <= 0) return { ok: false, error: { bad_peak: candles[0] } };
   if (!last || last <= 0) last = peak;
 
-  return { ok: true, peak, last, startIso, endIso };
+  return { ok: true, peak, last, startTs, endTs };
 }
 
 // ---------- place SELL via pulse-trade ----------
@@ -256,10 +255,7 @@ async function runManager() {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  if (!gates.LIVE_ALLOWED) {
-    return { ok: true, mode: "NOOP_GATES", gates, position };
-  }
-
+  if (!gates.LIVE_ALLOWED) return { ok: true, mode: "NOOP_GATES", gates, position };
   if (!position.ok) return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
   if (!position.has_position) return { ok: true, mode: "NO_POSITION", gates, position };
   if (!exitsEnabled) return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position };
@@ -284,7 +280,7 @@ async function runManager() {
   const decision = {
     entryPrice,
     entryTime: entry.entryTime,
-    candleWindow: { start: peak.startIso, end: peak.endIso },
+    candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
     current,
     peakPrice,
     pnlBps: Number(pnlBps.toFixed(2)),
