@@ -1,3 +1,4 @@
+// src/app/account/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -10,14 +11,24 @@ export default function AccountPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let mounted = true;
+
     supabase.auth.getUser().then(({ data }) => {
+      if (!mounted) return;
+
       if (!data.user) {
         router.push("/login");
         return;
       }
-      setEmail(data.user.email);
+
+      // ✅ email can be undefined, so coerce to null
+      setEmail(data.user.email ?? null);
       setLoading(false);
     });
+
+    return () => {
+      mounted = false;
+    };
   }, [router]);
 
   async function logout() {
@@ -36,21 +47,15 @@ export default function AccountPage() {
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-6">
       <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-black/40 p-8 shadow-2xl backdrop-blur">
-        <h1 className="text-3xl font-semibold text-white">
-          Account
-        </h1>
+        <h1 className="text-3xl font-semibold text-white">Account</h1>
 
-        <p className="mt-2 text-white/70 text-sm">
-          Secure account overview
-        </p>
+        <p className="mt-2 text-white/70 text-sm">Secure account overview</p>
 
         <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4">
           <div className="text-xs uppercase tracking-wide text-white/50">
             Logged in as
           </div>
-          <div className="mt-1 text-white font-medium">
-            {email}
-          </div>
+          <div className="mt-1 text-white font-medium">{email ?? "—"}</div>
         </div>
 
         <button
