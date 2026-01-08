@@ -1,9 +1,9 @@
-// src/app/login/page.tsx
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient"; // ✅ correct: from src/app/login -> src/lib
+import Link from "next/link";
+import { supabase } from "../../lib/supabaseClient";
 
 type Mode = "signup" | "login";
 
@@ -55,14 +55,14 @@ function LoginInner() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-slate-950">
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-black/40 p-6 shadow-xl">
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-black/40 p-6 shadow-xl backdrop-blur">
         <h1 className="text-2xl font-semibold text-white">
           {mode === "signup" ? "Create your account" : "Welcome back"}
         </h1>
         <p className="mt-2 text-sm text-white/70">
           {mode === "signup"
             ? "Sign up to access your YieldCraft dashboard."
-            : "Log in to continue."}
+            : "Log in to continue to YieldCraft."}
         </p>
 
         <form onSubmit={onSubmit} className="mt-6 space-y-4">
@@ -90,6 +90,18 @@ function LoginInner() {
             />
           </div>
 
+          {/* Forgot password (login only) */}
+          {mode === "login" && (
+            <div className="text-right">
+              <Link
+                href="/forgot-password"
+                className="text-xs text-white/60 hover:text-white underline"
+              >
+                Forgot password?
+              </Link>
+            </div>
+          )}
+
           {status && (
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
               {status}
@@ -98,7 +110,7 @@ function LoginInner() {
 
           <button
             disabled={loading}
-            className="w-full rounded-xl bg-yellow-400 text-black font-semibold px-4 py-2 disabled:opacity-60"
+            className="w-full rounded-xl bg-yellow-400 text-black font-semibold px-4 py-2 disabled:opacity-60 hover:bg-yellow-300 transition"
             type="submit"
           >
             {loading ? "Working..." : mode === "signup" ? "Sign Up" : "Log In"}
@@ -107,7 +119,7 @@ function LoginInner() {
           <button
             type="button"
             onClick={() => setMode((m) => (m === "login" ? "signup" : "login"))}
-            className="w-full text-sm text-white/70 hover:text-white"
+            className="w-full text-sm text-white/70 hover:text-white transition"
           >
             {mode === "login"
               ? "Need an account? Sign up"
