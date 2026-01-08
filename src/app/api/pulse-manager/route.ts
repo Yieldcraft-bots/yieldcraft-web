@@ -1,29 +1,4 @@
 // src/app/api/pulse-manager/route.ts
-// Pulse Manager — authenticated “real trading” runner (cron-safe)
-// - Keeps /api/pulse-heartbeat public + safe.
-// - This route is PRIVATE (requires CRON_SECRET).
-//
-// What it does (when enabled):
-// - Reads current position (BTC-USD)
-// - If a position exists AND PULSE_EXITS_ENABLED=true:
-//     • Take-profit at PROFIT_TARGET_BPS
-//     • Trailing stop: arm at TRAIL_ARM_BPS, trail by TRAIL_OFFSET_BPS using candles peak
-// - Places SELL via Pulse Trade (maker by default through envs used in pulse-trade)
-//
-// Flags:
-//   BOT_ENABLED=true
-//   COINBASE_TRADING_ENABLED=true
-//   PULSE_TRADE_ARMED=true
-//   PULSE_EXITS_ENABLED=true   <-- controls exits only
-//
-// Optional safety:
-//   PULSE_EXITS_DRY_RUN=true   <-- compute decision, DO NOT place order
-//
-// Notes:
-// - This does NOT “invent” AI. It’s the safety/exit layer.
-// - It does NOT require a DB: derives entry + peak from Coinbase fills + candles.
-// - Uses signed Coinbase CDP JWT (same style as pulse-trade).
-
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
@@ -74,7 +49,6 @@ function okAuth(req: Request) {
   const secret = process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "";
   if (!secret) return false;
 
-  // allow either header or query param
   const h =
     req.headers.get("x-cron-secret") ||
     req.headers.get("x-pulse-secret") ||
@@ -95,7 +69,7 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
 
-  // ✅ CRITICAL: uri claim should NOT include query string (avoids 401 on endpoints w/ params)
+  // uri claim should NOT include query string
   const pathForUri = path.split("?")[0];
   const uri = `${method} api.coinbase.com${pathForUri}`;
 
@@ -125,8 +99,7 @@ async function cbFetch(path: string) {
 
 // ---------- position ----------
 async function fetchBtcPosition() {
-  const path = "/api/v3/brokerage/accounts";
-  const r = await cbFetch(path);
+  const r = await cbFetch("/api/v3/brokerage/accounts");
 
   if (!r.ok) {
     return {
@@ -156,8 +129,6 @@ async function fetchEntryFromFills(): Promise<
   | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
   | { ok: false; error: any }
 > {
-  // Advanced Trade: historical fills
-  // IMPORTANT: use product_ids (not product_id). Filter to BUY, sorted by TRADE_TIME.
   const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
     PRODUCT_ID
   )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
@@ -166,15 +137,15 @@ async function fetchEntryFromFills(): Promise<
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
-  if (!Array.isArray(fills) || fills.length === 0) {
-    return { ok: false, error: "no_fills_found" };
-  }
+  if (!Array.isArray(fills) || fills.length === 0) return { ok: false, error: "no_fills_found" };
 
   const buy = fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") || fills[0];
   if (!buy) return { ok: false, error: "no_buy_fill_found" };
 
   const px = Number(buy?.price || buy?.fill_price || 0);
   const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
+
+  // NOTE: we keep entryTime for reporting only; we do NOT trust it for candles start anymore
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
   if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
@@ -182,30 +153,15 @@ async function fetchEntryFromFills(): Promise<
   return { ok: true, entryPrice: px, entryTime: t || new Date().toISOString(), entryQty: qty };
 }
 
-// ---------- peak price since entry via candles ----------
-async function fetchPeakSince(isoTime: string): Promise<
-  | { ok: true; peak: number; last: number }
+// ---------- peak price via candles (SAFE WINDOW) ----------
+async function fetchPeakWindow(): Promise<
+  | { ok: true; peak: number; last: number; startIso: string; endIso: string }
   | { ok: false; error: any }
 > {
   const end = new Date();
 
-  // ✅ FIX: normalize entry time into a valid Date, else fallback to 2h ago
-  let start = new Date(isoTime);
-  if (!Number.isFinite(start.getTime())) {
-    // try parsing numeric epoch strings
-    const asNum = Number(isoTime);
-    if (Number.isFinite(asNum) && asNum > 0) {
-      start = new Date(asNum);
-    }
-  }
-  if (!Number.isFinite(start.getTime())) {
-    start = new Date(end.getTime() - 2 * 3600 * 1000); // fallback 2h
-  }
-
-  // safety clamp: max lookback 48h (keeps payload small)
-  if (end.getTime() - start.getTime() > 48 * 3600 * 1000) {
-    start = new Date(end.getTime() - 48 * 3600 * 1000);
-  }
+  // ✅ Always use a safe window Coinbase accepts: last 2 hours
+  const start = new Date(end.getTime() - 2 * 3600 * 1000);
 
   const startIso = start.toISOString();
   const endIso = end.toISOString();
@@ -221,9 +177,7 @@ async function fetchPeakSince(isoTime: string): Promise<
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const candles = (r.json as any)?.candles || [];
-  if (!Array.isArray(candles) || candles.length === 0) {
-    return { ok: false, error: "no_candles" };
-  }
+  if (!Array.isArray(candles) || candles.length === 0) return { ok: false, error: "no_candles" };
 
   let peak = 0;
   let last = 0;
@@ -238,12 +192,11 @@ async function fetchPeakSince(isoTime: string): Promise<
   if (!peak || peak <= 0) return { ok: false, error: { bad_peak: candles[0] } };
   if (!last || last <= 0) last = peak;
 
-  return { ok: true, peak, last };
+  return { ok: true, peak, last, startIso, endIso };
 }
 
 // ---------- place SELL via pulse-trade ----------
 async function placeSell(baseSize: string) {
-  // Forward cron auth so pulse-trade accepts internal calls
   const site =
     (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
       /\/$/,
@@ -252,9 +205,7 @@ async function placeSell(baseSize: string) {
   const url = `${site}/api/pulse-trade`;
 
   const cronSecret = (process.env.CRON_SECRET || "").trim();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (cronSecret) {
     headers["x-cron-secret"] = cronSecret;
     headers["Authorization"] = `Bearer ${cronSecret}`;
@@ -306,48 +257,18 @@ async function runManager() {
   };
 
   if (!gates.LIVE_ALLOWED) {
-    return {
-      ok: true,
-      mode: "NOOP_GATES",
-      gates,
-      position,
-      note: "Manager did not trade because gates are not fully enabled.",
-    };
+    return { ok: true, mode: "NOOP_GATES", gates, position };
   }
 
-  if (!position.ok) {
-    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
-  }
-
-  if (!position.has_position) {
-    return {
-      ok: true,
-      mode: "NO_POSITION",
-      gates,
-      position,
-      note: "No BTC position -> exits skipped.",
-    };
-  }
-
-  if (!exitsEnabled) {
-    return {
-      ok: true,
-      mode: "HOLD_EXITS_DISABLED",
-      gates,
-      position,
-      note: "BTC position exists but exits are disabled (PULSE_EXITS_ENABLED=false).",
-    };
-  }
+  if (!position.ok) return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
+  if (!position.has_position) return { ok: true, mode: "NO_POSITION", gates, position };
+  if (!exitsEnabled) return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position };
 
   const entry = await fetchEntryFromFills();
-  if (!entry.ok) {
-    return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_entry", entry };
-  }
+  if (!entry.ok) return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_entry", entry };
 
-  const peak = await fetchPeakSince(entry.entryTime);
-  if (!peak.ok) {
-    return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_peak", peak };
-  }
+  const peak = await fetchPeakWindow();
+  if (!peak.ok) return { ok: false, mode: "BLOCKED", gates, position, error: "cannot_read_peak", peak };
 
   const entryPrice = entry.entryPrice;
   const current = peak.last;
@@ -362,6 +283,8 @@ async function runManager() {
 
   const decision = {
     entryPrice,
+    entryTime: entry.entryTime,
+    candleWindow: { start: peak.startIso, end: peak.endIso },
     current,
     peakPrice,
     pnlBps: Number(pnlBps.toFixed(2)),
@@ -375,40 +298,17 @@ async function runManager() {
   };
 
   if (!shouldTakeProfit && !shouldTrailStop) {
-    return {
-      ok: true,
-      mode: "HOLD",
-      gates,
-      position,
-      decision,
-      note: "Exit conditions not met.",
-    };
+    return { ok: true, mode: "HOLD", gates, position, decision };
   }
 
   const baseSize = fmtBaseSize(position.base_available);
 
   if (exitsDryRun) {
-    return {
-      ok: true,
-      mode: "DRY_RUN_SELL",
-      gates,
-      position,
-      decision,
-      would_sell_base_size: baseSize,
-      note: "PULSE_EXITS_DRY_RUN=true so no order was placed.",
-    };
+    return { ok: true, mode: "DRY_RUN_SELL", gates, position, decision, would_sell_base_size: baseSize };
   }
 
   const sell = await placeSell(baseSize);
-
-  return {
-    ok: sell.ok,
-    mode: "EXIT_SELL",
-    gates,
-    position,
-    decision,
-    sell,
-  };
+  return { ok: sell.ok, mode: "EXIT_SELL", gates, position, decision, sell };
 }
 
 // ---------- handlers ----------
@@ -438,13 +338,7 @@ export async function POST(req: Request) {
       PULSE_EXITS_ENABLED: truthy(process.env.PULSE_EXITS_ENABLED),
       PULSE_EXITS_DRY_RUN: truthy(process.env.PULSE_EXITS_DRY_RUN),
     };
-    return json(200, {
-      ok: true,
-      status: "PULSE_MANAGER_READY",
-      gates,
-      position,
-      note: "Use GET or POST (default) to execute exit logic (if enabled).",
-    });
+    return json(200, { ok: true, status: "PULSE_MANAGER_READY", gates, position });
   }
 
   const result = await runManager();
