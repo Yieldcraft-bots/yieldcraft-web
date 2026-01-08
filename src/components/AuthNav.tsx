@@ -11,81 +11,55 @@ type SessState = "loading" | "authed" | "guest";
 export default function AuthNav() {
   const router = useRouter();
   const pathname = usePathname();
-
   const [state, setState] = useState<SessState>("loading");
 
   useEffect(() => {
     let mounted = true;
 
     async function init() {
-      try {
-        const { data } = await supabase.auth.getSession();
-        if (!mounted) return;
-        setState(data?.session ? "authed" : "guest");
-      } catch {
-        if (!mounted) return;
-        setState("guest");
-      }
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      setState(data?.session ? "authed" : "guest");
     }
 
     init();
 
-    // Keep nav in sync if session changes (login/logout in another tab)
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       if (!mounted) return;
       setState(session ? "authed" : "guest");
     });
 
     return () => {
       mounted = false;
-      sub?.subscription?.unsubscribe();
+      sub?.subscription.unsubscribe();
     };
   }, []);
 
   const handleLogout = async () => {
-    try {
-      await supabase.auth.signOut();
-    } finally {
-      // If you're on an authed page, get them out cleanly.
-      if (
-        pathname?.startsWith("/dashboard") ||
-        pathname?.startsWith("/admin") ||
-        pathname?.startsWith("/live")
-      ) {
-        router.replace("/login");
-      } else {
-        router.push("/");
-      }
-      router.refresh();
-    }
+    await supabase.auth.signOut();
+    router.replace("/login");
+    router.refresh();
   };
 
-  // Prevent layout jump while checking
+  // Avoid layout jump
   if (state === "loading") {
-    return (
-      <span className="inline-flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full bg-white/30" />
-        <span className="text-sm text-white/60">…</span>
-      </span>
-    );
+    return <span className="text-sm text-white/50">…</span>;
   }
 
-  // Logged OUT
+  // 🔓 Logged OUT
   if (state === "guest") {
     return (
       <div className="flex items-center gap-2">
-        {/* Login = calm secondary */}
         <Link
           href="/login"
-          className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10 hover:border-white/25"
+          className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 hover:bg-white/10 transition"
         >
           Login
         </Link>
 
-        {/* Join = primary (SIGNUP) */}
         <Link
           href="/login?mode=signup"
-          className="inline-flex items-center justify-center rounded-xl bg-yellow-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_12px_40px_rgba(250,204,21,0.22)] transition hover:brightness-110"
+          className="rounded-xl bg-yellow-400 px-4 py-2 text-sm font-semibold text-black shadow hover:brightness-110 transition"
         >
           Join
         </Link>
@@ -93,29 +67,33 @@ export default function AuthNav() {
     );
   }
 
-  // Logged IN
+  // 🔐 Logged IN
   return (
     <div className="flex items-center gap-2">
       <Link
         href="/live"
-        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
-        title="Live Trading Snapshot"
+        className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 hover:bg-white/10 transition"
       >
         Live
       </Link>
 
       <Link
         href="/dashboard"
-        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
+        className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 hover:bg-white/10 transition"
       >
         Dashboard
       </Link>
 
+      <Link
+        href="/account"
+        className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 hover:bg-white/10 transition"
+      >
+        Account
+      </Link>
+
       <button
-        type="button"
         onClick={handleLogout}
-        className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10"
-        title="Sign out"
+        className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-400 hover:bg-red-500/20 transition"
       >
         Logout
       </button>
