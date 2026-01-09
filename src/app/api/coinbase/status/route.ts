@@ -2,14 +2,8 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
-type Body = {
-  api_key_name: string;
-  private_key: string;
-  key_alg?: string; // default "ed25519"
-};
-
-function supabaseFromCookies() {
-  const cookieStore = cookies();
+async function supabaseFromCookies() {
+  const cookieStore = await cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -19,66 +13,49 @@ function supabaseFromCookies() {
         get(name: string) {
           return cookieStore.get(name)?.value;
         },
-        set() {
-          // Not needed for this route; auth session cookie already exists.
-        },
-        remove() {
-          // Not needed.
-        },
+        set() {},
+        remove() {},
       },
     }
   );
 }
 
-export async function POST(req: Request) {
+export async function GET() {
   try {
-    const supabase = supabaseFromCookies();
+    const supabase = await supabaseFromCookies();
 
     const { data: auth, error: authError } = await supabase.auth.getUser();
     const user = auth?.user;
 
     if (!user || authError) {
       return NextResponse.json(
-        { ok: false, error: "Not authenticated" },
+        { connected: false, error: "Not authenticated" },
         { status: 401 }
       );
     }
 
-    const body = (await req.json()) as Partial<Body>;
-    const api_key_name = (body.api_key_name ?? "").trim();
-    const private_key = (body.private_key ?? "").trim();
-    const key_alg = (body.key_alg ?? "ed25519").trim();
+    const { data: keys, error: keyError } = await supabase
+      .from("coinbase_keys")
+      .select("api_key_name, private_key, key_alg")
+      .eq("user_id", user.id)
+      .single();
 
-    if (!api_key_name || !private_key) {
-      return NextResponse.json(
-        { ok: false, error: "Missing api_key_name or private_key" },
-        { status: 400 }
-      );
+    if (keyError || !keys) {
+      return NextResponse.json({ connected: false, reason: "no_keys" });
     }
 
-    const { error: upsertError } = await supabase.from("coinbase_keys").upsert(
-      {
-        user_id: user.id,
-        api_key_name,
-        private_key,
-        key_alg,
-      },
-      { onConflict: "user_id" }
-    );
-
-    if (upsertError) {
-      console.error("upsert coinbase_keys error", upsertError);
-      return NextResponse.json(
-        { ok: false, error: "Failed to save keys" },
-        { status: 500 }
-      );
+    if (!keys.api_key_name?.trim() || !keys.private_key?.trim()) {
+      return NextResponse.json({ connected: false, reason: "invalid_keys" });
     }
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      connected: true,
+      alg: keys.key_alg ?? "unknown",
+    });
   } catch (err) {
-    console.error("coinbase/save-keys error", err);
+    console.error("coinbase/status error", err);
     return NextResponse.json(
-      { ok: false, error: "server_error" },
+      { connected: false, error: "server_error" },
       { status: 500 }
     );
   }

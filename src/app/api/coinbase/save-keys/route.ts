@@ -8,8 +8,8 @@ type Body = {
   key_alg?: string; // default "ed25519"
 };
 
-function supabaseFromCookies() {
-  const cookieStore = cookies();
+async function supabaseFromCookies() {
+  const cookieStore = await cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -28,7 +28,7 @@ function supabaseFromCookies() {
 
 export async function POST(req: Request) {
   try {
-    const supabase = supabaseFromCookies();
+    const supabase = await supabaseFromCookies();
 
     const { data: auth, error: authError } = await supabase.auth.getUser();
     const user = auth?.user;
