@@ -1,23 +1,37 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs";
-import type { Database } from "@/types/supabase";
+import { createServerClient } from "@supabase/ssr";
 
 type Body = {
   api_key_name: string;
   private_key: string;
-  key_alg?: string; // "ed25519" | "ES256" etc (default ed25519)
+  key_alg?: string; // default "ed25519"
 };
+
+function supabaseFromCookies() {
+  const cookieStore = cookies();
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+        set() {},
+        remove() {},
+      },
+    }
+  );
+}
 
 export async function POST(req: Request) {
   try {
-    const supabase = createRouteHandlerClient<Database>({ cookies });
+    const supabase = supabaseFromCookies();
 
-    // 1) Auth check
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser();
+    const { data: auth, error: authError } = await supabase.auth.getUser();
+    const user = auth?.user;
 
     if (!user || authError) {
       return NextResponse.json(
@@ -26,9 +40,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 2) Parse + validate input
     const body = (await req.json()) as Partial<Body>;
-
     const api_key_name = (body.api_key_name ?? "").trim();
     const private_key = (body.private_key ?? "").trim();
     const key_alg = (body.key_alg ?? "ed25519").trim();
@@ -40,7 +52,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 3) Upsert into coinbase_keys scoped to this user (RLS enforces ownership)
     const { error: upsertError } = await supabase.from("coinbase_keys").upsert(
       {
         user_id: user.id,
@@ -52,6 +63,7 @@ export async function POST(req: Request) {
     );
 
     if (upsertError) {
+      console.error("upsert coinbase_keys error", upsertError);
       return NextResponse.json(
         { ok: false, error: "Failed to save keys" },
         { status: 500 }
