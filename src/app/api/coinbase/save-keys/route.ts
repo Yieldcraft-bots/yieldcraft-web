@@ -8,13 +8,19 @@ type Body = {
   key_alg?: string; // default "ed25519"
 };
 
-async function supabaseFromCookies() {
+async function supabaseFromRequest(req: Request) {
   const cookieStore = await cookies();
+
+  const authHeader = req.headers.get("authorization") || "";
+  const hasBearer = authHeader.toLowerCase().startsWith("bearer ");
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      global: hasBearer
+        ? { headers: { Authorization: authHeader } }
+        : undefined,
       cookies: {
         get(name: string) {
           return cookieStore.get(name)?.value;
@@ -28,7 +34,7 @@ async function supabaseFromCookies() {
 
 export async function POST(req: Request) {
   try {
-    const supabase = await supabaseFromCookies();
+    const supabase = await supabaseFromRequest(req);
 
     const { data: auth, error: authError } = await supabase.auth.getUser();
     const user = auth?.user;
