@@ -42,7 +42,7 @@ function normEmail(v: any): string {
   return (typeof v === "string" ? v : "").trim().toLowerCase();
 }
 
-// 🔑 Local per-user marker (temporary until we store keys per user server-side)
+// 🔑 Local per-user marker (fallback only)
 const USER_COINBASE_LINK_FLAG = "yc_user_coinbase_linked_v1";
 
 export default function DashboardPage() {
@@ -92,10 +92,10 @@ export default function DashboardPage() {
 
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
+  // Fallback only (local indicator). Real source of truth is /api/coinbase/status (Bearer token).
   const readUserCoinbaseFlag = useCallback(() => {
     try {
       const v = window.localStorage.getItem(USER_COINBASE_LINK_FLAG);
-      // "ok" only if explicitly set true
       const ok = v === "true";
       setUserCoinbaseConn(ok ? "ok" : "no");
     } catch {
@@ -162,9 +162,6 @@ export default function DashboardPage() {
       router.replace("/login");
       return;
     }
-
-    // ✅ 1b) Per-user Coinbase link indicator (temporary local marker)
-    if (mountedRef.current) readUserCoinbaseFlag();
 
     // 2) Read-only health probe
     try {
@@ -251,6 +248,44 @@ export default function DashboardPage() {
       if (!mountedRef.current) return;
       setPlatformEngineConn("no");
       setPlatformEngineMeta({ authOk: false });
+    }
+
+    // ✅ 4.5) YOUR COINBASE (PER-USER) — reliable multi-user check
+    // Uses Bearer token so the API can identify the correct user every time.
+    try {
+      if (!accessToken) throw new Error("missing_access_token");
+
+      const r = await fetch("/api/coinbase/status", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      let j: any = null;
+      try {
+        j = await r.json();
+      } catch {
+        j = null;
+      }
+
+      const ok = !!(r.ok && j && j.connected === true);
+
+      if (!mountedRef.current) return;
+
+      setUserCoinbaseConn(ok ? "ok" : "no");
+
+      // Optional: if they’re connected, set the local fallback flag too
+      try {
+        if (ok) window.localStorage.setItem(USER_COINBASE_LINK_FLAG, "true");
+      } catch {
+        // ignore
+      }
+    } catch {
+      if (!mountedRef.current) return;
+
+      // Fallback (local-only), but DO NOT pretend it’s real if the API fails.
+      // This keeps some continuity if someone connected keys earlier on this device,
+      // but the source of truth remains server-side.
+      readUserCoinbaseFlag();
     }
 
     // 5) Read-only trading gates (does NOT place orders)
@@ -418,19 +453,19 @@ export default function DashboardPage() {
                 PLAN ACCESS: {planP.label}
               </span>
 
-              {/* ✅ NEW: per-user status */}
+              {/* ✅ YOUR COINBASE = per-user status (server-verified via Bearer token) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   userKeysP.wrap,
                 ].join(" ")}
-                title="This is YOUR connection status. It turns green after you complete Connect Keys."
+                title="YOUR Coinbase connection status. Verified server-side using your session token."
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
                 YOUR COINBASE: {userKeysP.label}
               </span>
 
-              {/* ✅ Renamed: platform engine keys */}
+              {/* ✅ PLATFORM ENGINE keys */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
@@ -673,8 +708,8 @@ export default function DashboardPage() {
               <p className="mt-2 text-lg font-semibold">Your Coinbase Link</p>
               <p className="mt-1 text-sm text-slate-300">
                 {userCoinbaseConn === "ok"
-                  ? "You completed the Connect Keys setup on this device."
-                  : "You have not connected Coinbase yet. Click “Connect Keys” to finish setup."}
+                  ? "Server verified: your Coinbase keys are saved."
+                  : "Not connected yet. Click “Connect Keys” to finish setup."}
               </p>
 
               <div className="mt-4 flex flex-wrap gap-3">
@@ -687,7 +722,7 @@ export default function DashboardPage() {
               </div>
 
               <p className="mt-3 text-[11px] text-slate-500">
-                Note: This indicator is temporary (local-only). Next upgrade will store encrypted per-user exchange linkage server-side.
+                This indicator is server-verified via <code className="text-slate-200">/api/coinbase/status</code> using your session token.
               </p>
             </div>
 
