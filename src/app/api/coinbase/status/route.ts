@@ -1,53 +1,40 @@
-// src/app/api/coinbase/status/route.ts
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 
 export const runtime = "nodejs";
 
-function getBearerToken(req: Request) {
-  const h = req.headers.get("authorization") || "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m?.[1] || null;
-}
-
-export async function GET(req: Request) {
+export async function GET() {
   try {
-    const token = getBearerToken(req);
-    if (!token) {
+    const cookieStore = cookies(); // ❗ DO NOT await
+
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value;
+          },
+          set() {},
+          remove() {},
+        },
+      }
+    );
+
+    const { data, error } = await supabase.auth.getUser();
+
+    if (error || !data?.user) {
       return NextResponse.json(
         { connected: false, error: "Not authenticated" },
         { status: 401 }
       );
     }
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-    const service = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-
-    // 1) Verify user from the Bearer token (RLS-safe identity)
-    const supaAuth = createClient(url, anon, {
-      auth: { persistSession: false },
-    });
-
-    const { data: userRes, error: userErr } = await supaAuth.auth.getUser(token);
-    const user = userRes?.user;
-
-    if (userErr || !user) {
-      return NextResponse.json(
-        { connected: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    // 2) Read keys using service role (bypasses RLS), but scoped to THIS user.id
-    const supaDb = createClient(url, service, {
-      auth: { persistSession: false },
-    });
-
-    const { data: keys, error: keyError } = await supaDb
+    const { data: keys, error: keyError } = await supabase
       .from("coinbase_keys")
       .select("api_key_name, private_key, key_alg")
-      .eq("user_id", user.id)
+      .eq("user_id", data.user.id)
       .maybeSingle();
 
     if (keyError || !keys) {
