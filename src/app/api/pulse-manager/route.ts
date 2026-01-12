@@ -44,6 +44,11 @@ function fmtBaseSize(x: number) {
   const v = Math.max(0, x);
   return v.toFixed(8).replace(/\.?0+$/, "");
 }
+function fmtQuoteSizeUsd(x: number) {
+  const v = Math.max(0, x);
+  // Coinbase likes string decimals; keep 2dp for USD
+  return v.toFixed(2);
+}
 
 function okAuth(req: Request) {
   const secret = process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "";
@@ -145,7 +150,6 @@ async function fetchEntryFromFills(): Promise<
   const px = Number(buy?.price || buy?.fill_price || 0);
   const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
 
-  // Keep for reporting only (don’t trust it for candles params)
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
   if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
@@ -161,7 +165,6 @@ async function fetchPeakWindow(): Promise<
   const end = new Date();
   const start = new Date(end.getTime() - 2 * 3600 * 1000); // last 2 hours
 
-  // ✅ Coinbase candles expects UNIX timestamps (seconds) as strings
   const startTs = String(Math.floor(start.getTime() / 1000));
   const endTs = String(Math.floor(end.getTime() / 1000));
 
@@ -194,30 +197,29 @@ async function fetchPeakWindow(): Promise<
   return { ok: true, peak, last, startTs, endTs };
 }
 
-// ---------- place SELL via pulse-trade ----------
-async function placeSell(baseSize: string) {
-  const site =
-    (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
-      /\/$/,
-      ""
-    );
-  const url = `${site}/api/pulse-trade`;
-
+// ---------- call pulse-trade (BUY/SELL) ----------
+function siteBaseUrl() {
+  return (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
+    /\/$/,
+    ""
+  );
+}
+function authHeadersForInternalCall() {
   const cronSecret = (process.env.CRON_SECRET || "").trim();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (cronSecret) {
     headers["x-cron-secret"] = cronSecret;
     headers["Authorization"] = `Bearer ${cronSecret}`;
   }
+  return headers;
+}
 
+async function callPulseTrade(payload: any) {
+  const url = `${siteBaseUrl()}/api/pulse-trade`;
   const res = await fetch(url, {
     method: "POST",
-    headers,
-    body: JSON.stringify({
-      action: "place_order",
-      side: "SELL",
-      base_size: baseSize,
-    }),
+    headers: authHeadersForInternalCall(),
+    body: JSON.stringify(payload),
     cache: "no-store",
   });
 
@@ -228,11 +230,26 @@ async function placeSell(baseSize: string) {
   } catch {
     parsed = null;
   }
-
   return { ok: res.ok, status: res.status, data: parsed ?? text };
 }
 
-// ---------- main runner ----------
+async function placeSell(baseSize: string) {
+  return callPulseTrade({
+    action: "place_order",
+    side: "SELL",
+    base_size: baseSize,
+  });
+}
+
+async function placeBuy(quoteSize: string) {
+  return callPulseTrade({
+    action: "place_order",
+    side: "BUY",
+    quote_size: quoteSize,
+  });
+}
+
+// ---------- main runner (exit manager only) ----------
 async function runManager() {
   const botEnabled = truthy(process.env.BOT_ENABLED);
   const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
@@ -323,8 +340,11 @@ export async function POST(req: Request) {
   } catch {
     body = null;
   }
-  const action = String(body?.action || "run").toLowerCase();
 
+  const action = String(body?.action || "run").toLowerCase();
+  const side = String(body?.side || "").toUpperCase();
+
+  // Status (unchanged)
   if (action === "status") {
     const position = await fetchBtcPosition();
     const gates = {
@@ -333,10 +353,99 @@ export async function POST(req: Request) {
       PULSE_TRADE_ARMED: truthy(process.env.PULSE_TRADE_ARMED),
       PULSE_EXITS_ENABLED: truthy(process.env.PULSE_EXITS_ENABLED),
       PULSE_EXITS_DRY_RUN: truthy(process.env.PULSE_EXITS_DRY_RUN),
+      LIVE_ALLOWED:
+        truthy(process.env.BOT_ENABLED) &&
+        truthy(process.env.COINBASE_TRADING_ENABLED) &&
+        truthy(process.env.PULSE_TRADE_ARMED),
     };
     return json(200, { ok: true, status: "PULSE_MANAGER_READY", gates, position });
   }
 
+  // NEW: explicit dry run for entries/exits (no Coinbase call)
+  if (action === "dry_run_order") {
+    const quoteSize = fmtQuoteSizeUsd(num(body?.quote_size ?? body?.quoteSize ?? 0, 0));
+    const baseSize = String(body?.base_size ?? body?.baseSize ?? "");
+
+    const position = await fetchBtcPosition();
+    const gates = {
+      BOT_ENABLED: truthy(process.env.BOT_ENABLED),
+      COINBASE_TRADING_ENABLED: truthy(process.env.COINBASE_TRADING_ENABLED),
+      PULSE_TRADE_ARMED: truthy(process.env.PULSE_TRADE_ARMED),
+      LIVE_ALLOWED:
+        truthy(process.env.BOT_ENABLED) &&
+        truthy(process.env.COINBASE_TRADING_ENABLED) &&
+        truthy(process.env.PULSE_TRADE_ARMED),
+    };
+
+    if (!gates.LIVE_ALLOWED) return json(200, { ok: true, mode: "NOOP_GATES", gates, position });
+
+    if (side === "BUY") {
+      if (!quoteSize || Number(quoteSize) <= 0) return json(400, { ok: false, error: "missing_quote_size" });
+      return json(200, {
+        ok: true,
+        mode: "DRY_RUN_BUY",
+        product_id: PRODUCT_ID,
+        would_call: "/api/pulse-trade",
+        payload: { action: "place_order", side: "BUY", quote_size: quoteSize },
+        gates,
+        position,
+      });
+    }
+
+    if (side === "SELL") {
+      if (!baseSize) return json(400, { ok: false, error: "missing_base_size" });
+      return json(200, {
+        ok: true,
+        mode: "DRY_RUN_SELL",
+        product_id: PRODUCT_ID,
+        would_call: "/api/pulse-trade",
+        payload: { action: "place_order", side: "SELL", base_size: baseSize },
+        gates,
+        position,
+      });
+    }
+
+    return json(400, { ok: false, error: "missing_or_invalid_side", side });
+  }
+
+  // NEW: explicit order placement for BUY/SELL via pulse-trade
+  if (action === "place_order") {
+    const quoteSize = fmtQuoteSizeUsd(num(body?.quote_size ?? body?.quoteSize ?? 0, 0));
+    const baseSize = String(body?.base_size ?? body?.baseSize ?? "");
+
+    const position = await fetchBtcPosition();
+    const gates = {
+      BOT_ENABLED: truthy(process.env.BOT_ENABLED),
+      COINBASE_TRADING_ENABLED: truthy(process.env.COINBASE_TRADING_ENABLED),
+      PULSE_TRADE_ARMED: truthy(process.env.PULSE_TRADE_ARMED),
+      LIVE_ALLOWED:
+        truthy(process.env.BOT_ENABLED) &&
+        truthy(process.env.COINBASE_TRADING_ENABLED) &&
+        truthy(process.env.PULSE_TRADE_ARMED),
+    };
+
+    if (!gates.LIVE_ALLOWED) return json(200, { ok: true, mode: "NOOP_GATES", gates, position });
+
+    if (side === "BUY") {
+      if (!quoteSize || Number(quoteSize) <= 0) return json(400, { ok: false, error: "missing_quote_size" });
+      // Optional: block double-buy if already in position
+      if (position.ok && position.has_position) {
+        return json(200, { ok: true, mode: "SKIP_BUY_ALREADY_IN_POSITION", gates, position });
+      }
+      const buy = await placeBuy(quoteSize);
+      return json(buy.ok ? 200 : 500, { ok: buy.ok, mode: "ENTRY_BUY", gates, position, buy });
+    }
+
+    if (side === "SELL") {
+      if (!baseSize) return json(400, { ok: false, error: "missing_base_size" });
+      const sell = await placeSell(baseSize);
+      return json(sell.ok ? 200 : 500, { ok: sell.ok, mode: "EXIT_SELL", gates, position, sell });
+    }
+
+    return json(400, { ok: false, error: "missing_or_invalid_side", side });
+  }
+
+  // Default: run exit manager
   const result = await runManager();
   return json(result.ok ? 200 : 500, result);
 }
