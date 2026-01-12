@@ -4,12 +4,12 @@ import { createServerClient } from "@supabase/ssr";
 
 export const runtime = "nodejs";
 
-function supabaseRouteClient() {
-  const cookieStore = cookies();
+async function supabaseRouteClient() {
+  const cookieStore = await cookies(); // ✅ async in your setup
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!, // server-only
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
       cookies: {
         get(name: string) {
@@ -28,7 +28,7 @@ function supabaseRouteClient() {
 
 export async function GET() {
   try {
-    const supabase = supabaseRouteClient();
+    const supabase = await supabaseRouteClient();
 
     const { data: auth, error: authError } = await supabase.auth.getUser();
     const user = auth?.user;
