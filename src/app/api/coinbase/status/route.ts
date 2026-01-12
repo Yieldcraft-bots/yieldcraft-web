@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
+export const runtime = "nodejs";
+
 async function supabaseFromRequest(req: Request) {
   const cookieStore = await cookies();
 
@@ -11,11 +13,10 @@ async function supabaseFromRequest(req: Request) {
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    // ✅ IMPORTANT: server-side key for reliability in API routes
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
-      global: hasBearer
-        ? { headers: { Authorization: authHeader } }
-        : undefined,
+      global: hasBearer ? { headers: { Authorization: authHeader } } : undefined,
       cookies: {
         get(name: string) {
           return cookieStore.get(name)?.value;
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
       .from("coinbase_keys")
       .select("api_key_name, private_key, key_alg")
       .eq("user_id", user.id)
-      .single();
+      .maybeSingle();
 
     if (keyError || !keys) {
       return NextResponse.json({ connected: false, reason: "no_keys" });
