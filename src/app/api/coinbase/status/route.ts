@@ -6,15 +6,18 @@ export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const cookieStore = cookies(); // ❗ DO NOT await
+    // ✅ In your Next version, cookies() is async → must await
+    const cookieStore = await cookies();
+    type CookieStore = Awaited<ReturnType<typeof cookies>>;
 
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      // ✅ Use anon key for session cookie auth (service role not needed here)
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
           get(name: string) {
-            return cookieStore.get(name)?.value;
+            return (cookieStore as CookieStore).get(name)?.value;
           },
           set() {},
           remove() {},
