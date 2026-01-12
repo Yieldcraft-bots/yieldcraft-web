@@ -4,16 +4,16 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { supabase } from "../lib/supabaseClient";
+import { supabase } from "../../lib/supabaseClient";
 
 type Status = "idle" | "verifying" | "ok" | "error";
 
 function isProbablyOrgPath(v: string) {
-  return /^organizations\/.+/i.test(v.trim());
+  return /^organizations\/.+/i.test((v || "").trim());
 }
 
 function isProbablyPem(v: string) {
-  const s = v.trim();
+  const s = (v || "").trim();
   return s.includes("BEGIN") && s.includes("PRIVATE KEY");
 }
 
@@ -24,104 +24,94 @@ export default function ConnectKeysPage() {
   const [apiKeyName, setApiKeyName] = useState("");
   const [privateKeyPem, setPrivateKeyPem] = useState("");
   const [showPem, setShowPem] = useState(false);
+
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState("");
 
   const coinbaseApiUrl = "https://www.coinbase.com/settings/api";
 
-  // Keep the button disabled unless it looks valid
   const canSubmit = useMemo(() => {
-    const a = apiKeyName.trim();
-    const p = privateKeyPem.trim();
-    if (!a || !p) return false;
-    if (!isProbablyOrgPath(a)) return false;
-    if (!isProbablyPem(p)) return false;
+    if (!apiKeyName.trim() || !privateKeyPem.trim()) return false;
+    if (!isProbablyOrgPath(apiKeyName)) return false;
+    if (!isProbablyPem(privateKeyPem)) return false;
     return true;
   }, [apiKeyName, privateKeyPem]);
 
-  // Force login (so we have a user + token)
+  // Require login (so we can send Bearer token for multi-user)
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
-      if (!data?.session) router.replace("/login");
+      if (!data?.session?.access_token) router.replace("/login");
     })();
   }, [router]);
 
   async function verifyAndContinue() {
     setErrorMsg("");
 
-    const a = apiKeyName.trim();
-    const p = privateKeyPem.trim();
-
-    if (!a) {
+    if (!apiKeyName.trim()) {
       setStatus("error");
       setErrorMsg("Paste the API Key Name from Coinbase.");
       return;
     }
-    if (!p) {
+    if (!privateKeyPem.trim()) {
       setStatus("error");
       setErrorMsg("Paste the Private Key from Coinbase.");
       return;
     }
-    if (!isProbablyOrgPath(a)) {
+    if (!isProbablyOrgPath(apiKeyName)) {
       setStatus("error");
       setErrorMsg("API Key Name must start with organizations/…");
       return;
     }
-    if (!isProbablyPem(p)) {
+    if (!isProbablyPem(privateKeyPem)) {
       setStatus("error");
-      setErrorMsg("Private key must be a PEM block (-----BEGIN PRIVATE KEY----- …).");
+      setErrorMsg("Private key must look like a PEM block (BEGIN PRIVATE KEY).");
       return;
     }
 
     setStatus("verifying");
 
     try {
-      // ✅ get session + token
       const { data } = await supabase.auth.getSession();
-      const session = data?.session ?? null;
+      const token = data?.session?.access_token || "";
 
-      if (!session?.access_token) {
+      if (!token) {
         setStatus("error");
         setErrorMsg("Not signed in. Please log in again.");
         router.replace("/login");
         return;
       }
 
-      // ✅ call the correct multi-user endpoint + send Bearer token
+      // ✅ IMPORTANT: send Bearer token so server can resolve user_id (multi-user fix)
       const res = await fetch("/api/coinbase/save-keys", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         cache: "no-store",
         body: JSON.stringify({
-          // server expects these names
-          api_key_name: a,
-          private_key: p,
-          // optional label - safe to include, server can ignore if not used
           label: label.trim() || "Coinbase",
+          api_key_name: apiKeyName.trim(),
+          private_key: privateKeyPem.trim(),
         }),
       });
 
-      const dataJson = await res.json().catch(() => null);
+      const dataRes = await res.json().catch(() => null);
 
-      if (!res.ok || !dataJson?.ok) {
-        const msg =
-          dataJson?.error ||
-          dataJson?.reason ||
-          dataJson?.details ||
-          `Verification failed (HTTP ${res.status}).`;
+      if (!res.ok || !dataRes?.ok) {
         setStatus("error");
-        setErrorMsg(msg);
+        setErrorMsg(
+          dataRes?.error ||
+            dataRes?.reason ||
+            `Verification failed (HTTP ${res.status}).`
+        );
         return;
       }
 
       setStatus("ok");
-
-      // Go back to dashboard after success
-      setTimeout(() => router.replace("/dashboard"), 500);
+      // back to dashboard so it can re-check status
+      router.replace("/dashboard");
     } catch {
       setStatus("error");
       setErrorMsg("Network error. Please try again.");
@@ -131,9 +121,13 @@ export default function ConnectKeysPage() {
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
       <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 backdrop-blur-xl">
-        <h1 className="text-3xl font-bold text-white">Connect Coinbase in under 5 minutes</h1>
+        <h1 className="text-3xl font-bold text-white">
+          Connect Coinbase in under 5 minutes
+        </h1>
 
-        <p className="mt-2 text-sm text-slate-400">Trading stays OFF until you explicitly enable it.</p>
+        <p className="mt-2 text-sm text-slate-400">
+          Trading stays OFF until you explicitly enable it.
+        </p>
 
         {/* WHY */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
@@ -147,7 +141,9 @@ export default function ConnectKeysPage() {
 
         {/* STEP 1 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
-          <p className="font-semibold text-white">Step 1: Open Coinbase API settings</p>
+          <p className="font-semibold text-white">
+            Step 1: Open Coinbase API settings
+          </p>
 
           <a
             href={coinbaseApiUrl}
@@ -161,25 +157,36 @@ export default function ConnectKeysPage() {
 
         {/* STEP 2 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
-          <p className="font-semibold text-white">Step 2: Copy from Coinbase (IMPORTANT)</p>
+          <p className="font-semibold text-white">
+            Step 2: Copy from Coinbase (IMPORTANT)
+          </p>
 
           <div className="mt-3 space-y-2 text-sm text-slate-300">
             <p>
               Coinbase will show each value with a small{" "}
-              <span className="font-semibold text-white">copy icon ⧉</span> on the right.
+              <span className="font-semibold text-white">copy icon ⧉</span> on
+              the right.
             </p>
 
-            <p className="font-semibold text-emerald-300">👉 CLICK THE COPY ICON.</p>
+            <p className="font-semibold text-emerald-300">
+              👉 CLICK THE COPY ICON.
+            </p>
 
-            <p className="text-rose-300">❌ Do NOT highlight or drag-select the text.</p>
+            <p className="text-rose-300">
+              ❌ Do NOT highlight or drag-select the text.
+            </p>
 
             <ul className="mt-3 list-disc pl-5">
               <li>
-                Copy <b>API Key Name</b> (starts with <code className="text-sky-300">organizations/</code>)
+                Copy <b>API Key Name</b> (starts with{" "}
+                <code className="text-sky-300">organizations/</code>)
               </li>
               <li>
                 Copy <b>Private Key</b> (starts with{" "}
-                <code className="text-sky-300">-----BEGIN PRIVATE KEY-----</code>)
+                <code className="text-sky-300">
+                  -----BEGIN PRIVATE KEY-----
+                </code>
+                )
               </li>
             </ul>
           </div>
@@ -203,32 +210,34 @@ export default function ConnectKeysPage() {
               className="w-full rounded-xl bg-slate-950/40 px-4 py-3 text-white"
               placeholder="Paste API Key Name here (organizations/...)"
             />
-            {apiKeyName.trim() && !isProbablyOrgPath(apiKeyName) ? (
-              <p className="text-xs text-rose-300">Must start with “organizations/…”</p>
-            ) : null}
 
             <textarea
               value={privateKeyPem}
               onChange={(e) => setPrivateKeyPem(e.target.value)}
               rows={showPem ? 6 : 4}
               className="w-full rounded-xl bg-slate-950/40 px-4 py-3 text-white"
-              placeholder="Paste Private Key here (PEM)"
-              style={{ WebkitTextSecurity: showPem ? "none" : "disc" } as any}
+              placeholder="Paste Private Key here"
               spellCheck={false}
+              style={{ WebkitTextSecurity: showPem ? "none" : "disc" } as any}
             />
-            {privateKeyPem.trim() && !isProbablyPem(privateKeyPem) ? (
-              <p className="text-xs text-rose-300">Must be a PEM private key block.</p>
-            ) : null}
 
-            <button onClick={() => setShowPem((s) => !s)} className="text-xs text-slate-300 underline">
+            <button
+              type="button"
+              onClick={() => setShowPem((s) => !s)}
+              className="text-xs text-slate-300 underline"
+            >
               {showPem ? "Hide key" : "Show key"}
             </button>
           </div>
 
-          {status === "error" && <p className="mt-3 text-sm text-rose-300">{errorMsg}</p>}
+          {status === "error" && (
+            <p className="mt-3 text-sm text-rose-300">{errorMsg}</p>
+          )}
 
           {status === "ok" && (
-            <p className="mt-3 text-sm text-emerald-300">✔ Coinbase connected. Returning to dashboard…</p>
+            <p className="mt-3 text-sm text-emerald-300">
+              ✔ Coinbase connected. Returning to dashboard…
+            </p>
           )}
 
           <button
