@@ -4,8 +4,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-
-// ✅ IMPORTANT: match the filename exactly
 import { supabase } from "../../lib/supabaseClient";
 
 type Conn = "ok" | "no" | "checking";
@@ -49,16 +47,12 @@ export default function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
-  // Keep both the canonical email and the "display" email (provider vs password can differ)
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [displayEmail, setDisplayEmail] = useState<string | null>(null);
 
-  // - accountConn: SIGNED IN status (auth/session)
-  // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
 
-  // Plan entitlements (read-only via /api/entitlements using Bearer token)
   const [planConn, setPlanConn] = useState<Conn>("checking");
   const [entitlements, setEntitlements] = useState<Entitlements>({
     pulse: false,
@@ -67,9 +61,6 @@ export default function DashboardPage() {
     created_at: null,
   });
 
-  // ✅ Split exchange into TWO concepts:
-  // 1) platformEngineConn = server env Coinbase auth (platform-level)
-  // 2) userCoinbaseConn   = per-user Coinbase keys saved (multi-user)
   const [platformEngineConn, setPlatformEngineConn] = useState<Conn>("checking");
   const [platformEngineMeta, setPlatformEngineMeta] = useState<{
     authOk: boolean;
@@ -77,10 +68,10 @@ export default function DashboardPage() {
     mode?: string;
   }>({ authOk: false });
 
+  // ✅ THIS is now multi-user (server-verified)
   const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
-  const [userCoinbaseAlg, setUserCoinbaseAlg] = useState<string | null>(null);
+  const [userCoinbaseMeta, setUserCoinbaseMeta] = useState<{ alg?: string }>({});
 
-  // Trading status (read-only from /api/pulse-trade GET)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -97,13 +88,12 @@ export default function DashboardPage() {
     setPlanConn("checking");
     setPlatformEngineConn("checking");
     setUserCoinbaseConn("checking");
-    setUserCoinbaseAlg(null);
     setTradeConn("checking");
     setLastCheck(new Date());
 
     let accessToken: string | null = null;
 
-    // 1) Check auth session (Supabase)
+    // 1) Auth session (Supabase)
     try {
       const { data } = await supabase.auth.getSession();
       const session = data?.session ?? null;
@@ -151,19 +141,16 @@ export default function DashboardPage() {
       return;
     }
 
-    // 2) Read-only health probe
+    // 2) Health probe
     try {
       const res = await fetch("/api/health", { cache: "no-store" });
-
       let json: any = null;
       try {
         json = await res.json();
       } catch {
         json = null;
       }
-
       const healthy = !!(res.ok && json && json.ok === true);
-
       if (!mountedRef.current) return;
       setHealthConn(healthy ? "ok" : "no");
     } catch {
@@ -171,7 +158,7 @@ export default function DashboardPage() {
       setHealthConn("no");
     }
 
-    // 3) Plan entitlements (Bearer token -> RLS-safe)
+    // 3) Plan entitlements
     try {
       if (!accessToken) throw new Error("missing_access_token");
 
@@ -209,35 +196,7 @@ export default function DashboardPage() {
       setPlanConn("no");
     }
 
-    // ✅ 4) YOUR COINBASE (per-user) via /api/coinbase/status using Bearer token
-    try {
-      if (!accessToken) throw new Error("missing_access_token");
-
-      const r = await fetch("/api/coinbase/status", {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      let j: any = null;
-      try {
-        j = await r.json();
-      } catch {
-        j = null;
-      }
-
-      const ok = !!(r.ok && j && j.connected === true);
-
-      if (!mountedRef.current) return;
-
-      setUserCoinbaseConn(ok ? "ok" : "no");
-      setUserCoinbaseAlg(ok ? (j.alg ?? "unknown") : null);
-    } catch {
-      if (!mountedRef.current) return;
-      setUserCoinbaseConn("no");
-      setUserCoinbaseAlg(null);
-    }
-
-    // 5) PLATFORM ENGINE keys probe (server env Coinbase auth)
+    // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
     try {
       const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
 
@@ -266,7 +225,35 @@ export default function DashboardPage() {
       setPlatformEngineMeta({ authOk: false });
     }
 
-    // 6) Read-only trading gates (does NOT place orders)
+    // ✅ 5) USER Coinbase status (multi-user, server-verified)
+    try {
+      if (!accessToken) throw new Error("missing_access_token");
+
+      const r = await fetch("/api/coinbase/status", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      let j: any = null;
+      try {
+        j = await r.json();
+      } catch {
+        j = null;
+      }
+
+      const ok = !!(r.ok && j && j.connected === true);
+
+      if (!mountedRef.current) return;
+
+      setUserCoinbaseConn(ok ? "ok" : "no");
+      setUserCoinbaseMeta({ alg: j?.alg });
+    } catch {
+      if (!mountedRef.current) return;
+      setUserCoinbaseConn("no");
+      setUserCoinbaseMeta({});
+    }
+
+    // 6) Trading gates (read-only)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
 
@@ -316,7 +303,6 @@ export default function DashboardPage() {
       minute: "2-digit",
     });
 
-  // Admin UI gating (display only)
   const isAdmin = useMemo(() => {
     const target = "dk@dwklein.com";
     return normEmail(userEmail) === target || normEmail(displayEmail) === target;
@@ -398,68 +384,36 @@ export default function DashboardPage() {
                 Dashboard · Control Panel (Read-Only)
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  accP.wrap,
-                ].join(" ")}
-                title="This reflects whether you are signed in (Supabase session)."
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", accP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", accP.dot].join(" ")} />
                 SIGNED IN: {accP.label}
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  healthP.wrap,
-                ].join(" ")}
-                title="Read-only /api/health probe (site/backend reachable)."
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", healthP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  planP.wrap,
-                ].join(" ")}
-                title="Read-only entitlement check via /api/entitlements using your session Bearer token."
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", planP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", planP.dot].join(" ")} />
                 PLAN ACCESS: {planP.label}
               </span>
 
+              {/* ✅ Now truly multi-user */}
               <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  userKeysP.wrap,
-                ].join(" ")}
-                title="This is YOUR connection status (per-user). It turns green when your keys are saved."
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", userKeysP.wrap].join(" ")}
+                title={userCoinbaseConn === "ok" ? `Verified keys saved (alg: ${userCoinbaseMeta.alg ?? "unknown"})` : "No saved keys found for this user yet."}
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
                 YOUR COINBASE: {userKeysP.label}
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  platP.wrap,
-                ].join(" ")}
-                title="Platform engine Coinbase auth (server env). This is NOT user-specific."
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", platP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", platP.dot].join(" ")} />
                 PLATFORM ENGINE: {platP.label}
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  tradeP.wrap,
-                ].join(" ")}
-                title="Read-only check of /api/pulse-trade gates (does NOT place trades)."
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", tradeP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
                 TRADING STATUS: {tradeP.label}
               </span>
@@ -472,7 +426,6 @@ export default function DashboardPage() {
                 type="button"
                 onClick={runCheck}
                 className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/70"
-                title="Re-check (read-only)."
               >
                 Re-check
               </button>
@@ -481,7 +434,6 @@ export default function DashboardPage() {
                 <Link
                   href="/admin"
                   className="rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/15"
-                  title="Admin Mission Control (you only)"
                 >
                   Admin Mission Control →
                 </Link>
@@ -498,29 +450,18 @@ export default function DashboardPage() {
                 </p>
 
                 <div className="mt-5 flex flex-wrap items-center gap-3">
-                  <Link
-                    href="/connect-keys"
-                    className="rounded-full bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300"
-                  >
+                  <Link href="/connect-keys" className="rounded-full bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300">
                     Connect Keys
                   </Link>
-                  <Link
-                    href="/quick-start"
-                    className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
-                  >
+                  <Link href="/quick-start" className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60">
                     Quick Start
                   </Link>
-                  <Link
-                    href="/pricing"
-                    className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
-                  >
+                  <Link href="/pricing" className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60">
                     Plans
                   </Link>
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">
-                  This dashboard is read-only by design. It does not enable trading from here.
-                </p>
+                <p className="mt-3 text-xs text-slate-500">This dashboard is read-only by design. It does not enable trading from here.</p>
               </div>
 
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
@@ -535,14 +476,15 @@ export default function DashboardPage() {
                   <p className="font-semibold text-slate-100">Important</p>
                   <p className="mt-1 text-slate-400">
                     “PLATFORM ENGINE” = server connectivity (us).<br />
-                    “YOUR COINBASE” = your personal setup completion (you).
+                    “YOUR COINBASE” = your personal setup completion (server-verified).
                   </p>
-                  {userCoinbaseConn === "ok" && userCoinbaseAlg ? (
-                    <p className="mt-2 text-[11px] text-slate-400">
-                      Your keys alg: <span className="text-slate-200">{userCoinbaseAlg}</span>
-                    </p>
-                  ) : null}
                 </div>
+
+                {shownEmail ? (
+                  <p className="mt-4 text-[11px] text-slate-500">
+                    Signed in as: <span className="text-slate-200">{shownEmail}</span>
+                  </p>
+                ) : null}
               </aside>
             </div>
           </div>
