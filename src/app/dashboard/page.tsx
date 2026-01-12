@@ -42,9 +42,6 @@ function normEmail(v: any): string {
   return (typeof v === "string" ? v : "").trim().toLowerCase();
 }
 
-// 🔑 Local per-user marker (fallback only)
-const USER_COINBASE_LINK_FLAG = "yc_user_coinbase_linked_v1";
-
 export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
@@ -52,16 +49,12 @@ export default function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
-  // Keep both the canonical email and the "display" email (provider vs password can differ)
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [displayEmail, setDisplayEmail] = useState<string | null>(null);
 
-  // - accountConn: SIGNED IN status (auth/session)
-  // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
 
-  // Plan entitlements (read-only via /api/entitlements using Bearer token)
   const [planConn, setPlanConn] = useState<Conn>("checking");
   const [entitlements, setEntitlements] = useState<Entitlements>({
     pulse: false,
@@ -70,9 +63,7 @@ export default function DashboardPage() {
     created_at: null,
   });
 
-  // ✅ Split exchange into TWO concepts:
-  // 1) platformEngineConn = server env Coinbase auth (applies to whole platform)
-  // 2) userCoinbaseConn   = user completed "Connect Keys" flow (per-user)
+  // ✅ Platform engine = server env Coinbase auth
   const [platformEngineConn, setPlatformEngineConn] = useState<Conn>("checking");
   const [platformEngineMeta, setPlatformEngineMeta] = useState<{
     authOk: boolean;
@@ -80,9 +71,9 @@ export default function DashboardPage() {
     mode?: string;
   }>({ authOk: false });
 
+  // ✅ User Coinbase = per-user keys exist in DB (RLS) via /api/coinbase/status + Bearer
   const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
 
-  // Trading status (read-only from /api/pulse-trade GET)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -91,17 +82,6 @@ export default function DashboardPage() {
   });
 
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
-
-  // Fallback only (local indicator). Real source of truth is /api/coinbase/status (Bearer token).
-  const readUserCoinbaseFlag = useCallback(() => {
-    try {
-      const v = window.localStorage.getItem(USER_COINBASE_LINK_FLAG);
-      const ok = v === "true";
-      setUserCoinbaseConn(ok ? "ok" : "no");
-    } catch {
-      setUserCoinbaseConn("no");
-    }
-  }, []);
 
   const runCheck = useCallback(async () => {
     setChecking(true);
@@ -166,16 +146,13 @@ export default function DashboardPage() {
     // 2) Read-only health probe
     try {
       const res = await fetch("/api/health", { cache: "no-store" });
-
       let json: any = null;
       try {
         json = await res.json();
       } catch {
         json = null;
       }
-
       const healthy = !!(res.ok && json && json.ok === true);
-
       if (!mountedRef.current) return;
       setHealthConn(healthy ? "ok" : "no");
     } catch {
@@ -221,6 +198,30 @@ export default function DashboardPage() {
       setPlanConn("no");
     }
 
+    // ✅ 3b) USER Coinbase (per-user keys exist)
+    try {
+      if (!accessToken) throw new Error("missing_access_token");
+
+      const r = await fetch("/api/coinbase/status", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      let j: any = null;
+      try {
+        j = await r.json();
+      } catch {
+        j = null;
+      }
+
+      const ok = !!(r.ok && j && j.connected === true);
+      if (!mountedRef.current) return;
+      setUserCoinbaseConn(ok ? "ok" : "no");
+    } catch {
+      if (!mountedRef.current) return;
+      setUserCoinbaseConn("no");
+    }
+
     // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
     try {
       const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
@@ -250,44 +251,6 @@ export default function DashboardPage() {
       setPlatformEngineMeta({ authOk: false });
     }
 
-    // ✅ 4.5) YOUR COINBASE (PER-USER) — reliable multi-user check
-    // Uses Bearer token so the API can identify the correct user every time.
-    try {
-      if (!accessToken) throw new Error("missing_access_token");
-
-      const r = await fetch("/api/coinbase/status", {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      let j: any = null;
-      try {
-        j = await r.json();
-      } catch {
-        j = null;
-      }
-
-      const ok = !!(r.ok && j && j.connected === true);
-
-      if (!mountedRef.current) return;
-
-      setUserCoinbaseConn(ok ? "ok" : "no");
-
-      // Optional: if they’re connected, set the local fallback flag too
-      try {
-        if (ok) window.localStorage.setItem(USER_COINBASE_LINK_FLAG, "true");
-      } catch {
-        // ignore
-      }
-    } catch {
-      if (!mountedRef.current) return;
-
-      // Fallback (local-only), but DO NOT pretend it’s real if the API fails.
-      // This keeps some continuity if someone connected keys earlier on this device,
-      // but the source of truth remains server-side.
-      readUserCoinbaseFlag();
-    }
-
     // 5) Read-only trading gates (does NOT place orders)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
@@ -300,7 +263,7 @@ export default function DashboardPage() {
       }
 
       const gates = j?.gates || {};
-      const parsed: TradeGates = {
+      const parsed = {
         COINBASE_TRADING_ENABLED: truthy(gates.COINBASE_TRADING_ENABLED),
         PULSE_TRADE_ARMED: truthy(gates.PULSE_TRADE_ARMED),
         LIVE_ALLOWED: truthy(gates.LIVE_ALLOWED),
@@ -319,7 +282,7 @@ export default function DashboardPage() {
 
     if (!mountedRef.current) return;
     setChecking(false);
-  }, [router, readUserCoinbaseFlag]);
+  }, [router]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -338,7 +301,6 @@ export default function DashboardPage() {
       minute: "2-digit",
     });
 
-  // Admin UI gating (display only)
   const isAdmin = useMemo(() => {
     const target = "dk@dwklein.com";
     return normEmail(userEmail) === target || normEmail(displayEmail) === target;
@@ -453,19 +415,17 @@ export default function DashboardPage() {
                 PLAN ACCESS: {planP.label}
               </span>
 
-              {/* ✅ YOUR COINBASE = per-user status (server-verified via Bearer token) */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   userKeysP.wrap,
                 ].join(" ")}
-                title="YOUR Coinbase connection status. Verified server-side using your session token."
+                title="This is YOUR connection status. It turns green when your keys exist in the database for your user."
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
                 YOUR COINBASE: {userKeysP.label}
               </span>
 
-              {/* ✅ PLATFORM ENGINE keys */}
               <span
                 className={[
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
@@ -568,245 +528,8 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Status Grid */}
       <section className="bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-10">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-semibold">Status</h2>
-              <p className="mt-1 text-sm text-slate-400">
-                If something is unknown, we show it as “Not connected / Not verified”.
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-4 lg:grid-cols-3">
-            {/* Account */}
-            <div
-              className={[
-                "rounded-3xl border bg-slate-900/40 p-5",
-                accountConn === "ok"
-                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
-                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Account</p>
-                <span
-                  className={[
-                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    accountConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
-                  ].join(" ")}
-                >
-                  {accountConn === "ok" ? "GREEN" : "RED"}
-                </span>
-              </div>
-              <p className="mt-2 text-lg font-semibold">Signed In</p>
-              <p className="mt-1 text-sm text-slate-300">Session verified. You can continue setup.</p>
-              {shownEmail ? (
-                <p className="mt-2 text-xs text-slate-500">
-                  Signed in as: <span className="text-slate-200">{shownEmail}</span>
-                </p>
-              ) : null}
-            </div>
-
-            {/* Engine */}
-            <div
-              className={[
-                "rounded-3xl border bg-slate-900/40 p-5",
-                tradeGates.LIVE_ALLOWED
-                  ? "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]"
-                  : "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Engine</p>
-                <span className={["rounded-full px-2 py-0.5 text-[11px] font-semibold", armedLabel.badge].join(" ")}>
-                  {armedLabel.title}
-                </span>
-              </div>
-              <p className="mt-2 text-lg font-semibold">Armed State</p>
-              <p className="mt-1 text-sm text-slate-300">
-                {tradeGates.LIVE_ALLOWED
-                  ? "Armed (hot). Live execution is allowed if called."
-                  : "Locked (safe). Live execution is blocked until explicitly armed."}
-              </p>
-
-              <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/35 p-3 text-xs text-slate-300">
-                <div className="flex flex-wrap gap-x-3 gap-y-1">
-                  <span>
-                    COINBASE_TRADING_ENABLED:{" "}
-                    <span className={tradeGates.COINBASE_TRADING_ENABLED ? "text-emerald-200" : "text-rose-200"}>
-                      {tradeGates.COINBASE_TRADING_ENABLED ? "true" : "false"}
-                    </span>
-                  </span>
-                  <span>
-                    PULSE_TRADE_ARMED:{" "}
-                    <span className={tradeGates.PULSE_TRADE_ARMED ? "text-emerald-200" : "text-rose-200"}>
-                      {tradeGates.PULSE_TRADE_ARMED ? "true" : "false"}
-                    </span>
-                  </span>
-                  <span>
-                    LIVE_ALLOWED:{" "}
-                    <span className={tradeGates.LIVE_ALLOWED ? "text-rose-200" : "text-emerald-200"}>
-                      {tradeGates.LIVE_ALLOWED ? "true" : "false"}
-                    </span>
-                  </span>
-                </div>
-                <p className="mt-2 text-[11px] text-slate-400">
-                  Read-only status from <code className="text-slate-200">/api/pulse-trade</code>. No trades are placed here.
-                </p>
-              </div>
-            </div>
-
-            {/* Health */}
-            <div
-              className={[
-                "rounded-3xl border bg-slate-900/40 p-5",
-                healthConn === "ok"
-                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
-                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Health</p>
-                <span
-                  className={[
-                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    healthConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
-                  ].join(" ")}
-                >
-                  {healthConn === "ok" ? "GREEN" : "RED"}
-                </span>
-              </div>
-              <p className="mt-2 text-lg font-semibold">/api/health</p>
-              <p className="mt-1 text-sm text-slate-300">
-                {healthConn === "ok" ? "Health probe verified (ok:true)." : "Health probe failed or not reachable."}
-              </p>
-            </div>
-
-            {/* User Coinbase */}
-            <div
-              className={[
-                "rounded-3xl border bg-slate-900/40 p-5 lg:col-span-3",
-                userCoinbaseConn === "ok"
-                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
-                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Your Connection</p>
-                <span
-                  className={[
-                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    userCoinbaseConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
-                  ].join(" ")}
-                >
-                  {userCoinbaseConn === "ok" ? "CONNECTED" : "NOT CONNECTED"}
-                </span>
-              </div>
-              <p className="mt-2 text-lg font-semibold">Your Coinbase Link</p>
-              <p className="mt-1 text-sm text-slate-300">
-                {userCoinbaseConn === "ok"
-                  ? "Server verified: your Coinbase keys are saved."
-                  : "Not connected yet. Click “Connect Keys” to finish setup."}
-              </p>
-
-              <div className="mt-4 flex flex-wrap gap-3">
-                <Link
-                  href="/connect-keys"
-                  className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300"
-                >
-                  Connect Keys →
-                </Link>
-              </div>
-
-              <p className="mt-3 text-[11px] text-slate-500">
-                This indicator is server-verified via <code className="text-slate-200">/api/coinbase/status</code> using your session token.
-              </p>
-            </div>
-
-            {/* Platform Engine */}
-            <div
-              className={[
-                "rounded-3xl border bg-slate-900/40 p-5 lg:col-span-3",
-                platformEngineConn === "ok"
-                  ? "border-emerald-500/25 shadow-[0_0_0_1px_rgba(16,185,129,0.10)]"
-                  : "border-rose-500/25 shadow-[0_0_0_1px_rgba(244,63,94,0.10)]",
-              ].join(" ")}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Platform Engine</p>
-                <span
-                  className={[
-                    "rounded-full px-2 py-0.5 text-[11px] font-semibold",
-                    platformEngineConn === "ok" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200",
-                  ].join(" ")}
-                >
-                  {platformEngineConn === "ok" ? "VERIFIED" : "NOT VERIFIED"}
-                </span>
-              </div>
-              <p className="mt-2 text-lg font-semibold">Coinbase Engine Auth (Server)</p>
-              <p className="mt-1 text-sm text-slate-300">
-                {platformEngineConn === "ok"
-                  ? "Platform Coinbase auth verified (server-side)."
-                  : "Platform Coinbase auth failed. Review env keys / IP allowlist."}
-              </p>
-
-              <div className="mt-3 rounded-2xl border border-slate-800 bg-slate-950/35 p-3 text-xs text-slate-300">
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <span>
-                    auth_ok:{" "}
-                    <span className={platformEngineMeta.authOk ? "text-emerald-200" : "text-rose-200"}>
-                      {platformEngineMeta.authOk ? "true" : "false"}
-                    </span>
-                  </span>
-                  <span>
-                    status: <span className="text-slate-200">{platformEngineMeta.authStatus ?? "—"}</span>
-                  </span>
-                  <span>
-                    mode: <span className="text-slate-200">{platformEngineMeta.mode ?? "—"}</span>
-                  </span>
-                </div>
-                <p className="mt-2 text-[11px] text-slate-400">
-                  Data comes from <code className="text-slate-200">/api/pulse-heartbeat</code>. This is platform-level verification.
-                </p>
-              </div>
-            </div>
-
-            {/* Principle */}
-            <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-5 lg:col-span-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">The YieldCraft principle</p>
-              <p className="mt-3 text-sm text-slate-200">
-                Long-term wins come from showing up with a system — not trying to be right every day.
-              </p>
-              <p className="mt-2 text-xs text-slate-400">Small inputs. Strict rules. Patient execution.</p>
-
-              <div className="mt-4 flex flex-wrap gap-3">
-                <Link
-                  href="/"
-                  className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/20 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
-                >
-                  ← Back to homepage
-                </Link>
-                <Link
-                  href="/live"
-                  className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/20 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
-                >
-                  Live Snapshot →
-                </Link>
-                {isAdmin && (
-                  <Link
-                    href="/admin"
-                    className="inline-flex items-center justify-center rounded-full border border-emerald-500/25 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-500/15"
-                  >
-                    Admin Mission Control →
-                  </Link>
-                )}
-              </div>
-            </div>
-          </div>
-
           <div className="mt-6 rounded-3xl border border-slate-800 bg-slate-900/30 p-5">
             <p className="text-sm font-semibold">What this dashboard will become</p>
             <ul className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
