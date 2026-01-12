@@ -1,11 +1,25 @@
+// src/app/connect-keys/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { supabase } from "../lib/supabaseClient";
 
 type Status = "idle" | "verifying" | "ok" | "error";
 
+function isProbablyOrgPath(v: string) {
+  return /^organizations\/.+/i.test(v.trim());
+}
+
+function isProbablyPem(v: string) {
+  const s = v.trim();
+  return s.includes("BEGIN") && s.includes("PRIVATE KEY");
+}
+
 export default function ConnectKeysPage() {
+  const router = useRouter();
+
   const [label, setLabel] = useState("Coinbase");
   const [apiKeyName, setApiKeyName] = useState("");
   const [privateKeyPem, setPrivateKeyPem] = useState("");
@@ -15,46 +29,99 @@ export default function ConnectKeysPage() {
 
   const coinbaseApiUrl = "https://www.coinbase.com/settings/api";
 
+  // Keep the button disabled unless it looks valid
+  const canSubmit = useMemo(() => {
+    const a = apiKeyName.trim();
+    const p = privateKeyPem.trim();
+    if (!a || !p) return false;
+    if (!isProbablyOrgPath(a)) return false;
+    if (!isProbablyPem(p)) return false;
+    return true;
+  }, [apiKeyName, privateKeyPem]);
+
+  // Force login (so we have a user + token)
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!data?.session) router.replace("/login");
+    })();
+  }, [router]);
+
   async function verifyAndContinue() {
     setErrorMsg("");
 
-    if (!apiKeyName.trim()) {
+    const a = apiKeyName.trim();
+    const p = privateKeyPem.trim();
+
+    if (!a) {
       setStatus("error");
       setErrorMsg("Paste the API Key Name from Coinbase.");
       return;
     }
-
-    if (!privateKeyPem.trim()) {
+    if (!p) {
       setStatus("error");
       setErrorMsg("Paste the Private Key from Coinbase.");
+      return;
+    }
+    if (!isProbablyOrgPath(a)) {
+      setStatus("error");
+      setErrorMsg("API Key Name must start with organizations/…");
+      return;
+    }
+    if (!isProbablyPem(p)) {
+      setStatus("error");
+      setErrorMsg("Private key must be a PEM block (-----BEGIN PRIVATE KEY----- …).");
       return;
     }
 
     setStatus("verifying");
 
     try {
-      const res = await fetch("/api/connect-keys", {
+      // ✅ get session + token
+      const { data } = await supabase.auth.getSession();
+      const session = data?.session ?? null;
+
+      if (!session?.access_token) {
+        setStatus("error");
+        setErrorMsg("Not signed in. Please log in again.");
+        router.replace("/login");
+        return;
+      }
+
+      // ✅ call the correct multi-user endpoint + send Bearer token
+      const res = await fetch("/api/coinbase/save-keys", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        cache: "no-store",
         body: JSON.stringify({
-          label,
-          coinbase_api_key_name: apiKeyName.trim(),
-          coinbase_private_key: privateKeyPem.trim(),
+          // server expects these names
+          api_key_name: a,
+          private_key: p,
+          // optional label - safe to include, server can ignore if not used
+          label: label.trim() || "Coinbase",
         }),
       });
 
-      const data = await res.json();
+      const dataJson = await res.json().catch(() => null);
 
-      if (!res.ok || !data?.ok) {
+      if (!res.ok || !dataJson?.ok) {
+        const msg =
+          dataJson?.error ||
+          dataJson?.reason ||
+          dataJson?.details ||
+          `Verification failed (HTTP ${res.status}).`;
         setStatus("error");
-        setErrorMsg(
-          data?.error ||
-            "Verification failed. Make sure permissions are View + Trade."
-        );
+        setErrorMsg(msg);
         return;
       }
 
       setStatus("ok");
+
+      // Go back to dashboard after success
+      setTimeout(() => router.replace("/dashboard"), 500);
     } catch {
       setStatus("error");
       setErrorMsg("Network error. Please try again.");
@@ -64,13 +131,9 @@ export default function ConnectKeysPage() {
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
       <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 backdrop-blur-xl">
-        <h1 className="text-3xl font-bold text-white">
-          Connect Coinbase in under 5 minutes
-        </h1>
+        <h1 className="text-3xl font-bold text-white">Connect Coinbase in under 5 minutes</h1>
 
-        <p className="mt-2 text-sm text-slate-400">
-          Trading stays OFF until you explicitly enable it.
-        </p>
+        <p className="mt-2 text-sm text-slate-400">Trading stays OFF until you explicitly enable it.</p>
 
         {/* WHY */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
@@ -84,9 +147,7 @@ export default function ConnectKeysPage() {
 
         {/* STEP 1 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
-          <p className="font-semibold text-white">
-            Step 1: Open Coinbase API settings
-          </p>
+          <p className="font-semibold text-white">Step 1: Open Coinbase API settings</p>
 
           <a
             href={coinbaseApiUrl}
@@ -98,40 +159,27 @@ export default function ConnectKeysPage() {
           </a>
         </div>
 
-        {/* STEP 2 – THIS IS THE IMPORTANT PART */}
+        {/* STEP 2 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
-          <p className="font-semibold text-white">
-            Step 2: Copy from Coinbase (IMPORTANT)
-          </p>
+          <p className="font-semibold text-white">Step 2: Copy from Coinbase (IMPORTANT)</p>
 
-          <div className="mt-3 text-sm text-slate-300 space-y-2">
+          <div className="mt-3 space-y-2 text-sm text-slate-300">
             <p>
               Coinbase will show each value with a small{" "}
-              <span className="font-semibold text-white">
-                copy icon ⧉
-              </span>{" "}
-              on the right.
+              <span className="font-semibold text-white">copy icon ⧉</span> on the right.
             </p>
 
-            <p className="font-semibold text-emerald-300">
-              👉 CLICK THE COPY ICON.
-            </p>
+            <p className="font-semibold text-emerald-300">👉 CLICK THE COPY ICON.</p>
 
-            <p className="text-rose-300">
-              ❌ Do NOT highlight or drag-select the text.
-            </p>
+            <p className="text-rose-300">❌ Do NOT highlight or drag-select the text.</p>
 
             <ul className="mt-3 list-disc pl-5">
               <li>
-                Copy <b>API Key Name</b> (starts with{" "}
-                <code className="text-sky-300">organizations/</code>)
+                Copy <b>API Key Name</b> (starts with <code className="text-sky-300">organizations/</code>)
               </li>
               <li>
                 Copy <b>Private Key</b> (starts with{" "}
-                <code className="text-sky-300">
-                  -----BEGIN PRIVATE KEY-----
-                </code>
-                )
+                <code className="text-sky-300">-----BEGIN PRIVATE KEY-----</code>)
               </li>
             </ul>
           </div>
@@ -139,9 +187,7 @@ export default function ConnectKeysPage() {
 
         {/* STEP 3 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
-          <p className="font-semibold text-white">
-            Step 3: Paste below and verify
-          </p>
+          <p className="font-semibold text-white">Step 3: Paste below and verify</p>
 
           <div className="mt-4 space-y-3">
             <input
@@ -155,40 +201,45 @@ export default function ConnectKeysPage() {
               value={apiKeyName}
               onChange={(e) => setApiKeyName(e.target.value)}
               className="w-full rounded-xl bg-slate-950/40 px-4 py-3 text-white"
-              placeholder="Paste API Key Name here"
+              placeholder="Paste API Key Name here (organizations/...)"
             />
+            {apiKeyName.trim() && !isProbablyOrgPath(apiKeyName) ? (
+              <p className="text-xs text-rose-300">Must start with “organizations/…”</p>
+            ) : null}
 
             <textarea
               value={privateKeyPem}
               onChange={(e) => setPrivateKeyPem(e.target.value)}
               rows={showPem ? 6 : 4}
               className="w-full rounded-xl bg-slate-950/40 px-4 py-3 text-white"
-              placeholder="Paste Private Key here"
+              placeholder="Paste Private Key here (PEM)"
               style={{ WebkitTextSecurity: showPem ? "none" : "disc" } as any}
+              spellCheck={false}
             />
+            {privateKeyPem.trim() && !isProbablyPem(privateKeyPem) ? (
+              <p className="text-xs text-rose-300">Must be a PEM private key block.</p>
+            ) : null}
 
-            <button
-              onClick={() => setShowPem((s) => !s)}
-              className="text-xs text-slate-300 underline"
-            >
+            <button onClick={() => setShowPem((s) => !s)} className="text-xs text-slate-300 underline">
               {showPem ? "Hide key" : "Show key"}
             </button>
           </div>
 
-          {status === "error" && (
-            <p className="mt-3 text-sm text-rose-300">{errorMsg}</p>
-          )}
+          {status === "error" && <p className="mt-3 text-sm text-rose-300">{errorMsg}</p>}
 
           {status === "ok" && (
-            <p className="mt-3 text-sm text-emerald-300">
-              ✔ Coinbase connected. Trading is still OFF.
-            </p>
+            <p className="mt-3 text-sm text-emerald-300">✔ Coinbase connected. Returning to dashboard…</p>
           )}
 
           <button
             onClick={verifyAndContinue}
-            disabled={status === "verifying"}
-            className="mt-6 w-full rounded-full bg-gradient-to-r from-sky-500 to-cyan-400 px-6 py-3 font-semibold text-slate-950"
+            disabled={!canSubmit || status === "verifying"}
+            className={[
+              "mt-6 w-full rounded-full px-6 py-3 font-semibold",
+              !canSubmit || status === "verifying"
+                ? "bg-slate-800 text-slate-400 cursor-not-allowed"
+                : "bg-gradient-to-r from-sky-500 to-cyan-400 text-slate-950",
+            ].join(" ")}
           >
             {status === "verifying" ? "Verifying..." : "Verify & Continue →"}
           </button>
