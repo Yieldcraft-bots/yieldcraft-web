@@ -1,38 +1,41 @@
+// src/app/api/coinbase/status/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-function supabaseFromRequest(req: Request) {
-  const cookieStore = cookies(); // ✅ NOT async (fixes Vercel build)
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+const SUPABASE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-  // If the browser sends Authorization: Bearer <token>, use it
-  const authHeader = req.headers.get("authorization") || "";
-  const hasBearer = authHeader.toLowerCase().startsWith("bearer ");
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!, // server-side key for API route reliability
-    {
-      global: hasBearer ? { headers: { Authorization: authHeader } } : undefined,
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set() {},
-        remove() {},
-      },
-    }
-  );
+function getBearerToken(req: Request): string | null {
+  const h = req.headers.get("authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || null;
 }
 
 export async function GET(req: Request) {
   try {
-    const supabase = supabaseFromRequest(req);
+    const token = getBearerToken(req);
 
-    const { data: auth, error: authError } = await supabase.auth.getUser();
-    const user = auth?.user;
+    // This endpoint is meant to be called by the app (Dashboard) with a Bearer token.
+    if (!token) {
+      return NextResponse.json(
+        { connected: false, error: "Missing bearer token" },
+        { status: 401 }
+      );
+    }
+
+    // 1) Verify user from the JWT using the ANON key
+    const authClient = createClient(SUPABASE_URL, SUPABASE_ANON, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data: authData, error: authError } = await authClient.auth.getUser(
+      token
+    );
+
+    const user = authData?.user ?? null;
 
     if (!user || authError) {
       return NextResponse.json(
@@ -41,7 +44,12 @@ export async function GET(req: Request) {
       );
     }
 
-    const { data: keys, error: keyError } = await supabase
+    // 2) Read coinbase_keys using SERVICE ROLE (RLS-safe)
+    const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
+    const { data: keys, error: keyError } = await adminClient
       .from("coinbase_keys")
       .select("api_key_name, private_key, key_alg")
       .eq("user_id", user.id)
