@@ -1,86 +1,104 @@
+// src/app/api/coinbase/save-keys/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@supabase/supabase-js";
 
-type Body = {
-  api_key_name: string;
-  private_key: string;
-  key_alg?: string; // default "ed25519"
-};
+function getBearerToken(req: Request) {
+  const h = req.headers.get("authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || "";
+}
 
-async function supabaseFromRequest(req: Request) {
-  const cookieStore = await cookies();
-
-  const authHeader = req.headers.get("authorization") || "";
-  const hasBearer = authHeader.toLowerCase().startsWith("bearer ");
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      global: hasBearer
-        ? { headers: { Authorization: authHeader } }
-        : undefined,
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set() {},
-        remove() {},
-      },
-    }
-  );
+function cleanString(v: any) {
+  return (typeof v === "string" ? v : "").trim();
 }
 
 export async function POST(req: Request) {
   try {
-    const supabase = await supabaseFromRequest(req);
-
-    const { data: auth, error: authError } = await supabase.auth.getUser();
-    const user = auth?.user;
-
-    if (!user || authError) {
+    const token = getBearerToken(req);
+    if (!token) {
       return NextResponse.json(
         { ok: false, error: "Not authenticated" },
         { status: 401 }
       );
     }
 
-    const body = (await req.json()) as Partial<Body>;
-    const api_key_name = (body.api_key_name ?? "").trim();
-    const private_key = (body.private_key ?? "").trim();
-    const key_alg = (body.key_alg ?? "ed25519").trim();
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    if (!api_key_name || !private_key) {
+    if (!url || !serviceKey) {
       return NextResponse.json(
-        { ok: false, error: "Missing api_key_name or private_key" },
-        { status: 400 }
-      );
-    }
-
-    const { error: upsertError } = await supabase.from("coinbase_keys").upsert(
-      {
-        user_id: user.id,
-        api_key_name,
-        private_key,
-        key_alg,
-      },
-      { onConflict: "user_id" }
-    );
-
-    if (upsertError) {
-      console.error("upsert coinbase_keys error", upsertError);
-      return NextResponse.json(
-        { ok: false, error: "Failed to save keys" },
+        { ok: false, error: "Server misconfigured" },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({ ok: true });
-  } catch (err) {
-    console.error("coinbase/save-keys error", err);
+    const supabaseAdmin = createClient(url, serviceKey, {
+      auth: { persistSession: false },
+    });
+
+    // ✅ Resolve the user from the Bearer token (no cookies needed)
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    const userId = userData?.user?.id || null;
+
+    if (userErr || !userId) {
+      return NextResponse.json(
+        { ok: false, error: "Not authenticated" },
+        { status: 401 }
+      );
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const api_key_name = cleanString(body?.api_key_name);
+    const private_key = cleanString(body?.private_key);
+    const key_alg = cleanString(body?.key_alg) || null;
+
+    if (!api_key_name || !private_key) {
+      return NextResponse.json(
+        { ok: false, error: "Missing key fields" },
+        { status: 400 }
+      );
+    }
+
+    // light validation (don’t be too strict)
+    if (!api_key_name.startsWith("organizations/")) {
+      return NextResponse.json(
+        { ok: false, error: "API Key Name must start with organizations/" },
+        { status: 400 }
+      );
+    }
+    if (!private_key.includes("BEGIN")) {
+      return NextResponse.json(
+        { ok: false, error: "Private key does not look valid" },
+        { status: 400 }
+      );
+    }
+
+    // ✅ Upsert keys for THIS user
+    // Table assumed: coinbase_keys (user_id pk/unique)
+    const { error: upsertErr } = await supabaseAdmin
+      .from("coinbase_keys")
+      .upsert(
+        {
+          user_id: userId,
+          api_key_name,
+          private_key,
+          key_alg,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+
+    if (upsertErr) {
+      return NextResponse.json(
+        { ok: false, error: "DB write failed", details: upsertErr.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ ok: true, connected: true });
+  } catch (err: any) {
     return NextResponse.json(
-      { ok: false, error: "server_error" },
+      { ok: false, error: "server_error", details: err?.message || String(err) },
       { status: 500 }
     );
   }
