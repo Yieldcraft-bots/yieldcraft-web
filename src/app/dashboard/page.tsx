@@ -49,12 +49,16 @@ export default function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
+  // Keep both the canonical email and the "display" email (provider vs password can differ)
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [displayEmail, setDisplayEmail] = useState<string | null>(null);
 
+  // - accountConn: SIGNED IN status (auth/session)
+  // - healthConn: read-only /api/health probe (site/backend reachable)
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
 
+  // Plan entitlements (read-only via /api/entitlements using Bearer token)
   const [planConn, setPlanConn] = useState<Conn>("checking");
   const [entitlements, setEntitlements] = useState<Entitlements>({
     pulse: false,
@@ -63,7 +67,9 @@ export default function DashboardPage() {
     created_at: null,
   });
 
-  // ✅ Platform engine = server env Coinbase auth
+  // ✅ Split exchange into TWO concepts:
+  // 1) platformEngineConn = server env Coinbase auth (platform-level)
+  // 2) userCoinbaseConn   = per-user Coinbase keys saved (multi-user)
   const [platformEngineConn, setPlatformEngineConn] = useState<Conn>("checking");
   const [platformEngineMeta, setPlatformEngineMeta] = useState<{
     authOk: boolean;
@@ -71,9 +77,10 @@ export default function DashboardPage() {
     mode?: string;
   }>({ authOk: false });
 
-  // ✅ User Coinbase = per-user keys exist in DB (RLS) via /api/coinbase/status + Bearer
   const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
+  const [userCoinbaseAlg, setUserCoinbaseAlg] = useState<string | null>(null);
 
+  // Trading status (read-only from /api/pulse-trade GET)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -90,6 +97,7 @@ export default function DashboardPage() {
     setPlanConn("checking");
     setPlatformEngineConn("checking");
     setUserCoinbaseConn("checking");
+    setUserCoinbaseAlg(null);
     setTradeConn("checking");
     setLastCheck(new Date());
 
@@ -146,13 +154,16 @@ export default function DashboardPage() {
     // 2) Read-only health probe
     try {
       const res = await fetch("/api/health", { cache: "no-store" });
+
       let json: any = null;
       try {
         json = await res.json();
       } catch {
         json = null;
       }
+
       const healthy = !!(res.ok && json && json.ok === true);
+
       if (!mountedRef.current) return;
       setHealthConn(healthy ? "ok" : "no");
     } catch {
@@ -198,7 +209,7 @@ export default function DashboardPage() {
       setPlanConn("no");
     }
 
-    // ✅ 3b) USER Coinbase (per-user keys exist)
+    // ✅ 4) YOUR COINBASE (per-user) via /api/coinbase/status using Bearer token
     try {
       if (!accessToken) throw new Error("missing_access_token");
 
@@ -215,14 +226,18 @@ export default function DashboardPage() {
       }
 
       const ok = !!(r.ok && j && j.connected === true);
+
       if (!mountedRef.current) return;
+
       setUserCoinbaseConn(ok ? "ok" : "no");
+      setUserCoinbaseAlg(ok ? (j.alg ?? "unknown") : null);
     } catch {
       if (!mountedRef.current) return;
       setUserCoinbaseConn("no");
+      setUserCoinbaseAlg(null);
     }
 
-    // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
+    // 5) PLATFORM ENGINE keys probe (server env Coinbase auth)
     try {
       const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
 
@@ -251,7 +266,7 @@ export default function DashboardPage() {
       setPlatformEngineMeta({ authOk: false });
     }
 
-    // 5) Read-only trading gates (does NOT place orders)
+    // 6) Read-only trading gates (does NOT place orders)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
 
@@ -263,7 +278,7 @@ export default function DashboardPage() {
       }
 
       const gates = j?.gates || {};
-      const parsed = {
+      const parsed: TradeGates = {
         COINBASE_TRADING_ENABLED: truthy(gates.COINBASE_TRADING_ENABLED),
         PULSE_TRADE_ARMED: truthy(gates.PULSE_TRADE_ARMED),
         LIVE_ALLOWED: truthy(gates.LIVE_ALLOWED),
@@ -301,6 +316,7 @@ export default function DashboardPage() {
       minute: "2-digit",
     });
 
+  // Admin UI gating (display only)
   const isAdmin = useMemo(() => {
     const target = "dk@dwklein.com";
     return normEmail(userEmail) === target || normEmail(displayEmail) === target;
@@ -420,7 +436,7 @@ export default function DashboardPage() {
                   "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
                   userKeysP.wrap,
                 ].join(" ")}
-                title="This is YOUR connection status. It turns green when your keys exist in the database for your user."
+                title="This is YOUR connection status (per-user). It turns green when your keys are saved."
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
                 YOUR COINBASE: {userKeysP.label}
@@ -521,24 +537,14 @@ export default function DashboardPage() {
                     “PLATFORM ENGINE” = server connectivity (us).<br />
                     “YOUR COINBASE” = your personal setup completion (you).
                   </p>
+                  {userCoinbaseConn === "ok" && userCoinbaseAlg ? (
+                    <p className="mt-2 text-[11px] text-slate-400">
+                      Your keys alg: <span className="text-slate-200">{userCoinbaseAlg}</span>
+                    </p>
+                  ) : null}
                 </div>
               </aside>
             </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="bg-slate-950">
-        <div className="mx-auto max-w-6xl px-6 py-10">
-          <div className="mt-6 rounded-3xl border border-slate-800 bg-slate-900/30 p-5">
-            <p className="text-sm font-semibold">What this dashboard will become</p>
-            <ul className="mt-3 grid gap-2 text-sm text-slate-300 sm:grid-cols-2">
-              <li>• Connection checks (clear green lights)</li>
-              <li>• Read-only heartbeat + last tick timestamp</li>
-              <li>• Trade log viewer + daily rollups</li>
-              <li>• Risk settings with safe defaults</li>
-            </ul>
-            <p className="mt-3 text-xs text-slate-500">Built to protect stability: website updates first, execution isolated.</p>
           </div>
         </div>
       </section>
