@@ -14,13 +14,16 @@ function getBearer(req: Request): string | null {
 
 export async function GET(req: Request) {
   try {
-    // ✅ We authenticate USERS via Bearer token (works for multi-user + avoids cookie headaches)
+    // Authenticate user via Bearer token (multi-user safe; avoids cookies)
     const token = getBearer(req);
     if (!token) {
-      return NextResponse.json({ connected: false, error: "Not authenticated" }, { status: 401 });
+      return NextResponse.json(
+        { connected: false, error: "Not authenticated" },
+        { status: 401 }
+      );
     }
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
     const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!url || !service) {
@@ -34,41 +37,51 @@ export async function GET(req: Request) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Validate the token and get user id
+    // Validate token and get user id
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     const userId = userData?.user?.id || null;
 
     if (userErr || !userId) {
-      return NextResponse.json({ connected: false, error: "Not authenticated" }, { status: 401 });
+      return NextResponse.json(
+        { connected: false, error: "Not authenticated" },
+        { status: 401 }
+      );
     }
 
-    // ✅ Look up this user's saved Coinbase keys
-    // Table expected: user_exchange_keys
-    // Columns expected: user_id, exchange, api_key_name, private_key, key_alg
+    // ✅ Look up THIS user's saved Coinbase keys (correct table)
     const { data: keys, error: keyError } = await admin
-      .from("user_exchange_keys")
-      .select("api_key_name, private_key, key_alg")
+      .from("coinbase_keys")
+      .select("api_key_name, private_key, key_alg, updated_at")
       .eq("user_id", userId)
-      .eq("exchange", "coinbase")
       .maybeSingle();
 
     if (keyError || !keys) {
-      return NextResponse.json({ connected: false, reason: "no_keys" }, { status: 200 });
+      return NextResponse.json(
+        { connected: false, reason: "no_keys" },
+        { status: 200 }
+      );
     }
 
     if (!keys.api_key_name?.trim() || !keys.private_key?.trim()) {
-      return NextResponse.json({ connected: false, reason: "invalid_keys" }, { status: 200 });
+      return NextResponse.json(
+        { connected: false, reason: "invalid_keys" },
+        { status: 200 }
+      );
     }
 
     return NextResponse.json(
       {
         connected: true,
         alg: keys.key_alg ?? "unknown",
+        updated_at: keys.updated_at ?? null,
       },
       { status: 200 }
     );
   } catch (err) {
     console.error("coinbase/status error", err);
-    return NextResponse.json({ connected: false, error: "server_error" }, { status: 500 });
+    return NextResponse.json(
+      { connected: false, error: "server_error" },
+      { status: 500 }
+    );
   }
 }
