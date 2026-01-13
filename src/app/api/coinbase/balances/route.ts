@@ -1,20 +1,12 @@
 // src/app/api/coinbase/balances/route.ts
-// Coinbase balances + equity snapshot (multi-user)
-// Auth: Supabase access token in Authorization: Bearer <token>
-// Keys: stored per-user in public.coinbase_keys (api_key_name, private_key, key_alg)
-
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import jwt from "jsonwebtoken";
 import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ---------- tiny helpers ----------
-function json(status: number, body: any) {
-  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
-}
+// -------------------- auth helpers --------------------
 
 function getBearer(req: Request): string | null {
   const h = req.headers.get("authorization") || req.headers.get("Authorization");
@@ -24,188 +16,229 @@ function getBearer(req: Request): string | null {
 }
 
 function normalizePem(pem: string) {
-  let p = String(pem || "").trim();
-  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
-    p = p.slice(1, -1);
-  }
-  // handle env-style escaped newlines + windows newlines
-  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+  return String(pem || "")
+    .trim()
+    .replace(/^"+|"+$/g, "")
+    .replace(/^'+|'+$/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\\n/g, "\n");
 }
 
-function safeJsonParse(text: string) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
+function b64url(input: Buffer | string) {
+  const buf = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  return buf
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
-function asNum(v: any) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+function b64urlJson(obj: any) {
+  return b64url(Buffer.from(JSON.stringify(obj)));
 }
 
-function coalesceAccounts(payload: any): any[] {
-  // Coinbase AT usually returns { accounts: [...] }
-  if (Array.isArray(payload?.accounts)) return payload.accounts;
-  if (Array.isArray(payload?.data)) return payload.data;
-  if (Array.isArray(payload)) return payload;
-  return [];
-}
+// -------------------- Coinbase JWT (ES256) --------------------
+// Coinbase AT expects:
+// header: { alg:"ES256", kid:<apiKeyName>, nonce:<hex>, typ:"JWT" }
+// payload: { iss:"cdp", nbf, exp, uri:"METHOD api.coinbase.com/PATH" }
 
-function pickCurrencyCode(a: any): string {
-  return String(
-    a?.currency ??
-      a?.available_balance?.currency ??
-      a?.balance?.currency ??
-      a?.hold?.currency ??
-      ""
-  ).toUpperCase();
-}
-
-function pickAvailableValue(a: any): number {
-  const v =
-    a?.available_balance?.value ??
-    a?.available_balance ??
-    a?.balance?.value ??
-    a?.balance ??
-    a?.available ??
-    "0";
-  return asNum(v);
-}
-
-// ---------- CDP JWT signer (matches your working pulse-trade) ----------
-function buildCdpJwt(opts: {
+function buildCdpJwtES256(opts: {
   apiKeyName: string;
   privateKeyPem: string;
-  alg: "ES256" | "EdDSA";
   method: "GET" | "POST";
-  path: string; // "/api/v3/brokerage/accounts"
+  path: string; // e.g. "/api/v3/brokerage/accounts"
 }) {
+  const apiKeyName = String(opts.apiKeyName || "").trim();
+  const privateKeyPem = normalizePem(String(opts.privateKeyPem || ""));
+
+  if (!apiKeyName) throw new Error("missing_api_key_name");
+  if (!privateKeyPem) throw new Error("missing_private_key");
+
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
-  const uri = `${opts.method} api.coinbase.com${opts.path}`;
 
-  // IMPORTANT:
-  // - iss MUST be "cdp"
-  // - sub must be apiKeyName
-  // - header kid must be apiKeyName
-  // - header nonce required
-  return jwt.sign(
-    { iss: "cdp", sub: opts.apiKeyName, nbf: now, exp: now + 60, uri },
-    opts.privateKeyPem as any,
-    { algorithm: opts.alg, header: { kid: opts.apiKeyName, nonce } as any }
-  );
+  const header = {
+    alg: "ES256",
+    kid: apiKeyName,
+    nonce,
+    typ: "JWT",
+  };
+
+  const payload = {
+    iss: "cdp",
+    nbf: now,
+    exp: now + 60,
+    uri: `${opts.method} api.coinbase.com${opts.path}`,
+  };
+
+  const input = `${b64urlJson(header)}.${b64urlJson(payload)}`;
+
+  // ECDSA P-256 SHA-256
+  const sign = crypto.createSign("SHA256");
+  sign.update(input);
+  sign.end();
+
+  const sig = sign
+    .sign({ key: privateKeyPem, dsaEncoding: "ieee-p1363" })
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+  return `${input}.${sig}`;
 }
 
-async function coinbaseGet(jwtToken: string, path: string) {
+async function coinbaseFetch(jwt: string, path: string) {
   const res = await fetch(`https://api.coinbase.com${path}`, {
     method: "GET",
-    headers: { Authorization: `Bearer ${jwtToken}` },
+    headers: { Authorization: `Bearer ${jwt}` },
     cache: "no-store",
   });
+
   const text = await res.text();
-  const parsed = safeJsonParse(text);
-  return { ok: res.ok, status: res.status, json: parsed, text };
+  let json: any = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    // keep text
+  }
+
+  return { ok: res.ok, status: res.status, json, text };
 }
 
-// ---------- route ----------
+// -------------------- route --------------------
+
 export async function GET(req: Request) {
   try {
-    // 1) Require user session (multi-user)
+    // 1) require bearer (supabase user session token)
     const token = getBearer(req);
-    if (!token) return json(401, { ok: false, error: "Not authenticated" });
+    if (!token) {
+      return NextResponse.json(
+        { ok: false, error: "Not authenticated" },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
 
+    // 2) supabase admin client (service role)
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
     const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !service) return json(500, { ok: false, error: "server_misconfigured" });
+
+    if (!url || !service) {
+      return NextResponse.json(
+        { ok: false, error: "server_misconfigured" },
+        { status: 500, headers: { "Cache-Control": "no-store" } }
+      );
+    }
 
     const admin = createClient(url, service, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // 2) Resolve user id from bearer token
+    // 3) resolve user from bearer
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     const userId = userData?.user?.id || null;
-    if (userErr || !userId) return json(401, { ok: false, error: "Not authenticated" });
 
-    // 3) Load this user's Coinbase key
+    if (userErr || !userId) {
+      return NextResponse.json(
+        { ok: false, error: "Not authenticated" },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    // 4) load THIS USER's coinbase keys
+    // Expected table + columns (same pattern as your status endpoint):
+    // user_exchange_keys: user_id, exchange, api_key_name, private_key, key_alg
     const { data: keys, error: keyErr } = await admin
-      .from("coinbase_keys")
-      .select("api_key_name, private_key, key_alg, updated_at")
+      .from("user_exchange_keys")
+      .select("api_key_name, private_key, key_alg")
       .eq("user_id", userId)
+      .eq("exchange", "coinbase")
       .maybeSingle();
 
     if (keyErr || !keys?.api_key_name || !keys?.private_key) {
-      return json(200, { ok: false, error: "no_keys" });
+      return NextResponse.json(
+        { ok: false, error: "no_keys" },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const alg = String(keys.key_alg || "ES256").toUpperCase();
+    if (alg.includes("ED25519") || alg.includes("EDDSA")) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "key_alg_not_supported_yet",
+          details: "This balances endpoint currently supports ES256 only.",
+          alg,
+        },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
     }
 
     const apiKeyName = String(keys.api_key_name).trim();
     const privateKeyPem = normalizePem(String(keys.private_key));
-    const algRaw = String(keys.key_alg || "ES256").trim();
-    const alg: "ES256" | "EdDSA" = algRaw.toUpperCase() === "EDDSA" ? "EdDSA" : "ES256";
 
-    // 4) Fetch accounts (this is what was 401'ing)
+    // 5) fetch accounts
     const accountsPath = "/api/v3/brokerage/accounts";
-    const jwt1 = buildCdpJwt({
+    const jwt1 = buildCdpJwtES256({
       apiKeyName,
       privateKeyPem,
-      alg,
       method: "GET",
       path: accountsPath,
     });
 
-    const acct = await coinbaseGet(jwt1, accountsPath);
+    const acct = await coinbaseFetch(jwt1, accountsPath);
+
     if (!acct.ok) {
-      return json(200, {
-        ok: false,
-        error: "coinbase_accounts_failed",
-        status: acct.status,
-        details: acct.json ?? acct.text,
-        alg,
-        api_key_name_last4: apiKeyName.slice(-4),
-      });
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "coinbase_accounts_failed",
+          status: acct.status,
+          details: acct.json ?? acct.text,
+        },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
     }
 
-    const accounts = coalesceAccounts(acct.json);
+    const accounts = (acct.json as any)?.accounts || [];
+    const arr: any[] = Array.isArray(accounts) ? accounts : [];
 
-    // 5) Compute balances (best-effort)
     let usdAvailable = 0;
     let btcAvailable = 0;
 
-    for (const a of accounts) {
-      const c = pickCurrencyCode(a);
-      const v = pickAvailableValue(a);
-      if (c === "USD") usdAvailable += v;
-      if (c === "BTC") btcAvailable += v;
+    for (const a of arr) {
+      const cur = String(a?.currency || "").toUpperCase();
+      const v = Number(a?.available_balance?.value ?? 0);
+
+      if (cur === "USD" && Number.isFinite(v)) usdAvailable += v;
+      if (cur === "BTC" && Number.isFinite(v)) btcAvailable += v;
     }
 
-    // 6) Fetch BTC-USD price (best-effort)
+    // 6) fetch BTC-USD price (best-effort)
     const productPath = "/api/v3/brokerage/products/BTC-USD";
-    const jwt2 = buildCdpJwt({
+    const jwt2 = buildCdpJwtES256({
       apiKeyName,
       privateKeyPem,
-      alg,
       method: "GET",
       path: productPath,
     });
 
-    const prod = await coinbaseGet(jwt2, productPath);
-    let btcPrice = 0;
-    if (prod.ok) {
-      const p =
-        prod.json?.price ??
-        prod.json?.product?.price ??
-        prod.json?.data?.price ??
-        prod.json?.products?.[0]?.price ??
-        "0";
-      btcPrice = asNum(p);
-    }
+    const prod = await coinbaseFetch(jwt2, productPath);
 
+    const priceRaw =
+      (prod.json as any)?.price ??
+      (prod.json as any)?.product?.price ??
+      (prod.json as any)?.data?.price ??
+      "0";
+
+    const btcPrice = Number(priceRaw) || 0;
     const equityUsd = usdAvailable + btcAvailable * btcPrice;
 
-    // 7) Optional snapshot write (won't break balances if table missing)
     const nowIso = new Date().toISOString();
+
+    // 7) write snapshot (optional, but useful for sizing)
+    // If your table has a different unique constraint, adjust onConflict accordingly.
     try {
       await admin.from("user_account_snapshot").upsert(
         {
@@ -218,25 +251,30 @@ export async function GET(req: Request) {
           last_checked_at: nowIso,
           updated_at: nowIso,
         },
-        // If your table uses a different conflict target, change this to match.
         { onConflict: "user_id" }
       );
     } catch {
-      // ignore snapshot errors (balances must still work)
+      // ignore snapshot errors — balances must still return
     }
 
-    // 8) Return
-    return json(200, {
-      ok: true,
-      exchange: "coinbase",
-      alg,
-      available_usd: usdAvailable,
-      btc_balance: btcAvailable,
-      btc_price_usd: btcPrice,
-      equity_usd: equityUsd,
-      last_checked_at: nowIso,
-    });
+    // 8) return
+    return NextResponse.json(
+      {
+        ok: true,
+        exchange: "coinbase",
+        alg: "ES256",
+        available_usd: usdAvailable,
+        btc_balance: btcAvailable,
+        btc_price_usd: btcPrice,
+        equity_usd: equityUsd,
+        last_checked_at: nowIso,
+      },
+      { status: 200, headers: { "Cache-Control": "no-store" } }
+    );
   } catch (err: any) {
-    return json(500, { ok: false, error: "server_error", details: err?.message || String(err) });
+    return NextResponse.json(
+      { ok: false, error: "server_error", details: err?.message || String(err) },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
   }
 }
