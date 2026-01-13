@@ -12,6 +12,14 @@ function cleanString(v: any) {
   return (typeof v === "string" ? v : "").trim();
 }
 
+function normalizePem(pem: string) {
+  // Accept pasted keys that contain literal "\n" sequences and/or quotes
+  return cleanString(pem)
+    .replace(/^"+|"+$/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\\n/g, "\n");
+}
+
 export async function POST(req: Request) {
   try {
     const token = getBearerToken(req);
@@ -33,10 +41,10 @@ export async function POST(req: Request) {
     }
 
     const supabaseAdmin = createClient(url, serviceKey, {
-      auth: { persistSession: false },
+      auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // ✅ Resolve the user from the Bearer token (no cookies needed)
+    // Resolve the user from the Bearer token (no cookies needed)
     const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
     const userId = userData?.user?.id || null;
 
@@ -49,7 +57,7 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const api_key_name = cleanString(body?.api_key_name);
-    const private_key = cleanString(body?.private_key);
+    const private_key = normalizePem(body?.private_key);
     const key_alg = cleanString(body?.key_alg) || null;
 
     if (!api_key_name || !private_key) {
@@ -59,7 +67,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // light validation (don’t be too strict)
+    // Light validation (don’t be too strict)
     if (!api_key_name.startsWith("organizations/")) {
       return NextResponse.json(
         { ok: false, error: "API Key Name must start with organizations/" },
@@ -73,8 +81,8 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Upsert keys for THIS user
-    // Table assumed: coinbase_keys (user_id pk/unique)
+    // Upsert keys for THIS user
+    // Assumes: coinbase_keys has UNIQUE constraint on user_id
     const { error: upsertErr } = await supabaseAdmin
       .from("coinbase_keys")
       .upsert(
