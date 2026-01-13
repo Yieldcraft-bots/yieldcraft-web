@@ -1,6 +1,7 @@
 // src/app/api/coinbase/balances/route.ts
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import jwt from "jsonwebtoken";
 import crypto from "crypto";
 
 export const runtime = "nodejs";
@@ -14,73 +15,47 @@ function getBearer(req: Request): string | null {
 }
 
 function normalizePem(pem: string) {
-  return String(pem || "")
-    .trim()
-    .replace(/^"+|"+$/g, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\\n/g, "\n");
+  let p = String(pem || "").trim();
+  if (
+    (p.startsWith('"') && p.endsWith('"')) ||
+    (p.startsWith("'") && p.endsWith("'"))
+  ) {
+    p = p.slice(1, -1);
+  }
+  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
 }
 
-/**
- * Coinbase Advanced Trade — Ed25519 (EdDSA) JWT signer
- */
-function buildCoinbaseJwt({
-  apiKeyName,
-  privateKeyPem,
-  method,
-  path,
-}: {
+// CDP JWT builder (matches your working pulse-trade logic)
+function buildCdpJwt(opts: {
   apiKeyName: string;
   privateKeyPem: string;
-  method: string;
-  path: string;
+  method: "GET" | "POST";
+  path: string; // "/api/v3/brokerage/accounts"
+  alg?: "ES256" | "EdDSA";
 }) {
+  const apiKeyName = opts.apiKeyName.trim();
+  const privateKey = normalizePem(opts.privateKeyPem);
+
   const now = Math.floor(Date.now() / 1000);
-  const exp = now + 60;
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const uri = `${opts.method} api.coinbase.com${opts.path}`;
 
-  const header = {
-    alg: "EdDSA",
-    kid: apiKeyName,
-    nonce: crypto.randomBytes(16).toString("hex"),
-    typ: "JWT",
-  };
+  const algorithm = opts.alg || "ES256";
 
-  const payload = {
-    iss: "cdp",
-    nbf: now,
-    exp,
-    uri: `${method.toUpperCase()} api.coinbase.com${path}`,
-  };
-
-  const base64url = (obj: any) =>
-    Buffer.from(JSON.stringify(obj))
-      .toString("base64")
-      .replace(/=/g, "")
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_");
-
-  const input = `${base64url(header)}.${base64url(payload)}`;
-
-  const signature = crypto
-    .sign(null, Buffer.from(input), {
-      key: privateKeyPem,
-      dsaEncoding: "ieee-p1363",
-    })
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-
-  return `${input}.${signature}`;
+  // IMPORTANT:
+  // - payload includes: iss=cdp, sub=apiKeyName, nbf/exp, uri
+  // - header includes: kid=apiKeyName, nonce
+  return jwt.sign(
+    { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri },
+    privateKey as any,
+    { algorithm: algorithm as any, header: { kid: apiKeyName, nonce } as any }
+  );
 }
 
-async function coinbaseFetch(jwt: string, path: string) {
+async function coinbaseGet(jwtToken: string, path: string) {
   const res = await fetch(`https://api.coinbase.com${path}`, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${jwtToken}` },
     cache: "no-store",
   });
 
@@ -88,19 +63,23 @@ async function coinbaseFetch(jwt: string, path: string) {
   let json: any = null;
   try {
     json = JSON.parse(text);
-  } catch {}
+  } catch {
+    // keep as text
+  }
 
   return { ok: res.ok, status: res.status, json, text };
 }
 
 export async function GET(req: Request) {
   try {
+    // 1) Require logged-in user (Bearer token from Supabase session)
     const token = getBearer(req);
     if (!token) {
       return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
     }
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    // 2) Service role client
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
     const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !service) {
       return NextResponse.json({ ok: false, error: "server_misconfigured" }, { status: 500 });
@@ -110,39 +89,100 @@ export async function GET(req: Request) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const { data: userData } = await admin.auth.getUser(token);
-    const userId = userData?.user?.id;
-    if (!userId) {
+    // 3) Resolve userId from Bearer token
+    const { data: userData, error: userErr } = await admin.auth.getUser(token);
+    const userId = userData?.user?.id || null;
+    if (userErr || !userId) {
       return NextResponse.json({ ok: false, error: "Not authenticated" }, { status: 401 });
     }
 
-    const { data: keys } = await admin
+    // 4) Load this user's Coinbase keys from Supabase
+    // Table: coinbase_keys
+    // Columns: user_id, api_key_name, private_key, key_alg
+    const { data: keys, error: keyErr } = await admin
       .from("coinbase_keys")
-      .select("api_key_name, private_key")
+      .select("api_key_name, private_key, key_alg")
       .eq("user_id", userId)
       .maybeSingle();
 
-    if (!keys?.api_key_name || !keys?.private_key) {
+    if (keyErr || !keys?.api_key_name || !keys?.private_key) {
       return NextResponse.json({ ok: false, error: "no_keys" }, { status: 200 });
     }
 
-    const jwt = buildCoinbaseJwt({
-      apiKeyName: keys.api_key_name.trim(),
-      privateKeyPem: normalizePem(keys.private_key),
+    const apiKeyName = String(keys.api_key_name).trim();
+    const privateKeyPem = normalizePem(String(keys.private_key));
+
+    // Optional: support EdDSA if you ever store key_alg = "ed25519" / "EdDSA"
+    const rawAlg = String(keys.key_alg || "").toLowerCase();
+    const alg: "ES256" | "EdDSA" =
+      rawAlg.includes("eddsa") || rawAlg.includes("ed25519") ? "EdDSA" : "ES256";
+
+    // 5) Call Coinbase accounts
+    const accountsPath = "/api/v3/brokerage/accounts";
+    const jwt1 = buildCdpJwt({
+      apiKeyName,
+      privateKeyPem,
       method: "GET",
-      path: "/api/v3/brokerage/accounts",
+      path: accountsPath,
+      alg,
     });
 
-    const acct = await coinbaseFetch(jwt, "/api/v3/brokerage/accounts");
+    const acct = await coinbaseGet(jwt1, accountsPath);
+
     if (!acct.ok) {
       return NextResponse.json(
-        { ok: false, error: "coinbase_accounts_failed", status: acct.status, details: acct.json ?? acct.text },
+        {
+          ok: false,
+          error: "coinbase_accounts_failed",
+          status: acct.status,
+          details: acct.json ?? acct.text,
+        },
         { status: 200 }
       );
     }
 
-    return NextResponse.json({ ok: true, accounts: acct.json });
+    // 6) Parse balances (best-effort)
+    const accounts = (acct.json as any)?.accounts || [];
+    let usdAvailable = 0;
+    let btcAvailable = 0;
+
+    for (const a of accounts) {
+      const cur = String(a?.currency || "");
+      const v = Number(a?.available_balance?.value ?? 0);
+      if (!Number.isFinite(v)) continue;
+      if (cur === "USD") usdAvailable += v;
+      if (cur === "BTC") btcAvailable += v;
+    }
+
+    // 7) Fetch BTC-USD price (optional, but useful)
+    const productPath = "/api/v3/brokerage/products/BTC-USD";
+    const jwt2 = buildCdpJwt({
+      apiKeyName,
+      privateKeyPem,
+      method: "GET",
+      path: productPath,
+      alg,
+    });
+
+    const prod = await coinbaseGet(jwt2, productPath);
+    const btcPrice = Number((prod.json as any)?.price ?? (prod.json as any)?.product?.price ?? 0) || 0;
+
+    const equityUsd = usdAvailable + btcAvailable * btcPrice;
+
+    return NextResponse.json(
+      {
+        ok: true,
+        exchange: "coinbase",
+        alg,
+        available_usd: usdAvailable,
+        btc_balance: btcAvailable,
+        btc_price_usd: btcPrice,
+        equity_usd: equityUsd,
+      },
+      { status: 200 }
+    );
   } catch (err: any) {
+    console.error("coinbase/balances error", err);
     return NextResponse.json(
       { ok: false, error: "server_error", details: err?.message || String(err) },
       { status: 500 }
