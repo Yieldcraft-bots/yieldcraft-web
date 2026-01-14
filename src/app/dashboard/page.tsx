@@ -32,12 +32,42 @@ type Entitlements = {
   created_at?: string | null;
 };
 
+type BalancesOk = {
+  ok: true;
+  exchange: "coinbase";
+  available_usd: number | null;
+  btc_balance: number | null;
+  btc_price_usd: number | null;
+  equity_usd: number | null;
+  last_checked_at?: string | null;
+  updated_at?: string | null;
+};
+
+type BalancesErr = {
+  ok: false;
+  error: string;
+  status?: number;
+  details?: any;
+};
+
+type BalancesResp = BalancesOk | BalancesErr;
+
 function truthy(v: any) {
   return v === true || v === "true" || v === 1 || v === "1";
 }
 
 function normEmail(v: any): string {
   return (typeof v === "string" ? v : "").trim().toLowerCase();
+}
+
+function fmtMoney(n: number | null | undefined) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
+
+function fmtNum(n: number | null | undefined, digits = 8) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return n.toFixed(digits);
 }
 
 export default function DashboardPage() {
@@ -68,9 +98,13 @@ export default function DashboardPage() {
     mode?: string;
   }>({ authOk: false });
 
-  // ✅ THIS is now multi-user (server-verified)
+  // ✅ multi-user (server-verified)
   const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
   const [userCoinbaseMeta, setUserCoinbaseMeta] = useState<{ alg?: string }>({});
+
+  // ✅ Balances (read-only)
+  const [balancesConn, setBalancesConn] = useState<Conn>("checking");
+  const [balances, setBalances] = useState<BalancesResp | null>(null);
 
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
@@ -88,6 +122,7 @@ export default function DashboardPage() {
     setPlanConn("checking");
     setPlatformEngineConn("checking");
     setUserCoinbaseConn("checking");
+    setBalancesConn("checking");
     setTradeConn("checking");
     setLastCheck(new Date());
 
@@ -118,6 +153,7 @@ export default function DashboardPage() {
         setPlanConn("no");
         setPlatformEngineConn("no");
         setUserCoinbaseConn("no");
+        setBalancesConn("no");
         setTradeConn("no");
         setChecking(false);
         router.replace("/login");
@@ -135,6 +171,7 @@ export default function DashboardPage() {
       setPlanConn("no");
       setPlatformEngineConn("no");
       setUserCoinbaseConn("no");
+      setBalancesConn("no");
       setTradeConn("no");
       setChecking(false);
       router.replace("/login");
@@ -253,6 +290,48 @@ export default function DashboardPage() {
       setUserCoinbaseMeta({});
     }
 
+    // ✅ 5b) USER Balances (read-only, server-verified)
+    // Only attempt if keys exist (YOUR COINBASE = ok). Otherwise show "no".
+    try {
+      if (!accessToken) throw new Error("missing_access_token");
+
+      // Don’t hammer balances if user has no keys.
+      // If status call above failed, this may still fail; that’s fine.
+      const r = await fetch("/api/coinbase/balances", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      let j: any = null;
+      try {
+        j = await r.json();
+      } catch {
+        j = null;
+      }
+
+      if (!mountedRef.current) return;
+
+      if (r.ok && j && j.ok === true) {
+        setBalancesConn("ok");
+        setBalances(j as BalancesOk);
+      } else {
+        setBalancesConn("no");
+        setBalances({
+          ok: false,
+          error: j?.error || "balances_failed",
+          status: j?.status || r.status,
+          details: j?.details,
+        } as BalancesErr);
+      }
+    } catch (e: any) {
+      if (!mountedRef.current) return;
+      setBalancesConn("no");
+      setBalances({
+        ok: false,
+        error: e?.message || "balances_failed",
+      } as BalancesErr);
+    }
+
     // 6) Trading gates (read-only)
     try {
       const r = await fetch("/api/pulse-trade", { cache: "no-store" });
@@ -351,6 +430,7 @@ export default function DashboardPage() {
   const planP = pill(planConn);
   const platP = pill(platformEngineConn);
   const userKeysP = pill(userCoinbaseConn);
+  const balP = pill(balancesConn);
   const tradeP = pill(tradeConn);
 
   const armedLabel = tradeGates.LIVE_ALLOWED
@@ -373,6 +453,73 @@ export default function DashboardPage() {
       : "Unable to read plan entitlements (check login / RLS / API).";
 
   const shownEmail = displayEmail ?? userEmail ?? null;
+
+  const balancesBox = (() => {
+    // If user hasn’t connected keys yet
+    if (userCoinbaseConn !== "ok") {
+      return (
+        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
+          <p className="font-semibold text-slate-100">Coinbase Balances</p>
+          <p className="mt-1 text-slate-400">Connect keys to view balances.</p>
+        </div>
+      );
+    }
+
+    // Connected, but balances probe failed
+    if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
+      const msg =
+        (balances as any)?.error ||
+        (balances as any)?.details ||
+        "Unable to fetch balances (check Coinbase key permissions).";
+
+      return (
+        <div className="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 p-4 text-xs text-rose-100">
+          <p className="font-semibold">Coinbase Balances</p>
+          <p className="mt-1 opacity-90">{String(msg)}</p>
+          <p className="mt-2 text-rose-200/80">
+            Common cause: API key missing required scopes (View/Trade) or wrong portfolio.
+          </p>
+        </div>
+      );
+    }
+
+    const ok = balances as BalancesOk;
+
+    return (
+      <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
+        <div className="flex items-center justify-between">
+          <p className="font-semibold text-slate-100">Coinbase Balances</p>
+          <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold", balP.wrap].join(" ")}>
+            <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
+            BALANCES: {balP.label}
+          </span>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          <div className="flex justify-between">
+            <span className="text-slate-400">Available USD</span>
+            <span className="font-mono text-slate-100">{fmtMoney(ok.available_usd)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">BTC Balance</span>
+            <span className="font-mono text-slate-100">{fmtNum(ok.btc_balance, 8)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">BTC Price</span>
+            <span className="font-mono text-slate-100">{fmtMoney(ok.btc_price_usd)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-400">Equity (USD)</span>
+            <span className="font-mono text-slate-100">{fmtMoney(ok.equity_usd)}</span>
+          </div>
+
+          <p className="mt-2 text-[11px] text-slate-500">
+            Last check: <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
+          </p>
+        </div>
+      </div>
+    );
+  })();
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -402,10 +549,23 @@ export default function DashboardPage() {
               {/* ✅ Now truly multi-user */}
               <span
                 className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", userKeysP.wrap].join(" ")}
-                title={userCoinbaseConn === "ok" ? `Verified keys saved (alg: ${userCoinbaseMeta.alg ?? "unknown"})` : "No saved keys found for this user yet."}
+                title={
+                  userCoinbaseConn === "ok"
+                    ? `Verified keys saved (alg: ${userCoinbaseMeta.alg ?? "unknown"})`
+                    : "No saved keys found for this user yet."
+                }
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
                 YOUR COINBASE: {userKeysP.label}
+              </span>
+
+              {/* ✅ BALANCES pill */}
+              <span
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", balP.wrap].join(" ")}
+                title="Read-only balances snapshot"
+              >
+                <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
+                BALANCES: {balP.label}
               </span>
 
               <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", platP.wrap].join(" ")}>
@@ -450,18 +610,29 @@ export default function DashboardPage() {
                 </p>
 
                 <div className="mt-5 flex flex-wrap items-center gap-3">
-                  <Link href="/connect-keys" className="rounded-full bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300">
+                  <Link
+                    href="/connect-keys"
+                    className="rounded-full bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300"
+                  >
                     Connect Keys
                   </Link>
-                  <Link href="/quick-start" className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60">
+                  <Link
+                    href="/quick-start"
+                    className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
+                  >
                     Quick Start
                   </Link>
-                  <Link href="/pricing" className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60">
+                  <Link
+                    href="/pricing"
+                    className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
+                  >
                     Plans
                   </Link>
                 </div>
 
-                <p className="mt-3 text-xs text-slate-500">This dashboard is read-only by design. It does not enable trading from here.</p>
+                <p className="mt-3 text-xs text-slate-500">
+                  This dashboard is read-only by design. It does not enable trading from here.
+                </p>
               </div>
 
               <aside className="rounded-3xl border border-slate-800 bg-slate-900/45 p-5">
@@ -472,11 +643,15 @@ export default function DashboardPage() {
                   Trading is <span className={armedLabel.tone}>{armedLabel.title}</span> unless you explicitly arm it.
                 </div>
 
+                {/* ✅ Balances UI (no DevTools needed) */}
+                {balancesBox}
+
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
                   <p className="font-semibold text-slate-100">Important</p>
                   <p className="mt-1 text-slate-400">
                     “PLATFORM ENGINE” = server connectivity (us).<br />
-                    “YOUR COINBASE” = your personal setup completion (server-verified).
+                    “YOUR COINBASE” = your personal setup completion (server-verified).<br />
+                    “BALANCES” = read-only account snapshot (server-verified).
                   </p>
                 </div>
 
