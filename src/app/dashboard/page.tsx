@@ -74,6 +74,11 @@ export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
 
+  // Auto-refresh safety
+  const AUTO_REFRESH_MS = 60_000;
+  const intervalRef = useRef<number | null>(null);
+  const inFlightRef = useRef(false);
+
   const [checking, setChecking] = useState(true);
   const [authed, setAuthed] = useState(false);
 
@@ -116,6 +121,10 @@ export default function DashboardPage() {
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const runCheck = useCallback(async () => {
+    // Prevent overlapping runs (auto-refresh + manual click)
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+
     setChecking(true);
     setAccountConn("checking");
     setHealthConn("checking");
@@ -128,27 +137,46 @@ export default function DashboardPage() {
 
     let accessToken: string | null = null;
 
-    // 1) Auth session (Supabase)
     try {
-      const { data } = await supabase.auth.getSession();
-      const session = data?.session ?? null;
-      const ok = !!session;
+      // 1) Auth session (Supabase)
+      try {
+        const { data } = await supabase.auth.getSession();
+        const session = data?.session ?? null;
+        const ok = !!session;
 
-      if (!mountedRef.current) return;
+        if (!mountedRef.current) return;
 
-      setAuthed(ok);
-      setAccountConn(ok ? "ok" : "no");
+        setAuthed(ok);
+        setAccountConn(ok ? "ok" : "no");
 
-      const email = session?.user?.email ?? null;
-      const metaEmail =
-        (session?.user as any)?.user_metadata?.email ??
-        (session?.user as any)?.user_metadata?.preferred_email ??
-        null;
+        const email = session?.user?.email ?? null;
+        const metaEmail =
+          (session?.user as any)?.user_metadata?.email ??
+          (session?.user as any)?.user_metadata?.preferred_email ??
+          null;
 
-      setUserEmail(email as string | null);
-      setDisplayEmail((metaEmail ?? email) as string | null);
+        setUserEmail(email as string | null);
+        setDisplayEmail((metaEmail ?? email) as string | null);
 
-      if (!ok) {
+        if (!ok) {
+          setHealthConn("no");
+          setPlanConn("no");
+          setPlatformEngineConn("no");
+          setUserCoinbaseConn("no");
+          setBalancesConn("no");
+          setTradeConn("no");
+          setChecking(false);
+          router.replace("/login");
+          return;
+        }
+
+        accessToken = session?.access_token ?? null;
+      } catch {
+        if (!mountedRef.current) return;
+        setAuthed(false);
+        setUserEmail(null);
+        setDisplayEmail(null);
+        setAccountConn("no");
         setHealthConn("no");
         setPlanConn("no");
         setPlatformEngineConn("no");
@@ -160,216 +188,231 @@ export default function DashboardPage() {
         return;
       }
 
-      accessToken = session?.access_token ?? null;
-    } catch {
-      if (!mountedRef.current) return;
-      setAuthed(false);
-      setUserEmail(null);
-      setDisplayEmail(null);
-      setAccountConn("no");
-      setHealthConn("no");
-      setPlanConn("no");
-      setPlatformEngineConn("no");
-      setUserCoinbaseConn("no");
-      setBalancesConn("no");
-      setTradeConn("no");
-      setChecking(false);
-      router.replace("/login");
-      return;
-    }
-
-    // 2) Health probe
-    try {
-      const res = await fetch("/api/health", { cache: "no-store" });
-      let json: any = null;
+      // 2) Health probe
       try {
-        json = await res.json();
+        const res = await fetch("/api/health", { cache: "no-store" });
+        let json: any = null;
+        try {
+          json = await res.json();
+        } catch {
+          json = null;
+        }
+        const healthy = !!(res.ok && json && json.ok === true);
+        if (!mountedRef.current) return;
+        setHealthConn(healthy ? "ok" : "no");
       } catch {
-        json = null;
-      }
-      const healthy = !!(res.ok && json && json.ok === true);
-      if (!mountedRef.current) return;
-      setHealthConn(healthy ? "ok" : "no");
-    } catch {
-      if (!mountedRef.current) return;
-      setHealthConn("no");
-    }
-
-    // 3) Plan entitlements
-    try {
-      if (!accessToken) throw new Error("missing_access_token");
-
-      const r = await fetch("/api/entitlements", {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      let j: any = null;
-      try {
-        j = await r.json();
-      } catch {
-        j = null;
+        if (!mountedRef.current) return;
+        setHealthConn("no");
       }
 
-      const ok = !!(r.ok && j && j.ok === true && j.entitlements);
+      // 3) Plan entitlements
+      try {
+        if (!accessToken) throw new Error("missing_access_token");
 
-      if (!mountedRef.current) return;
-
-      if (ok) {
-        setEntitlements({
-          pulse: !!j.entitlements.pulse,
-          recon: !!j.entitlements.recon,
-          atlas: !!j.entitlements.atlas,
-          created_at: j.entitlements.created_at ?? null,
+        const r = await fetch("/api/entitlements", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
         });
-        setPlanConn("ok");
-      } else {
+
+        let j: any = null;
+        try {
+          j = await r.json();
+        } catch {
+          j = null;
+        }
+
+        const ok = !!(r.ok && j && j.ok === true && j.entitlements);
+
+        if (!mountedRef.current) return;
+
+        if (ok) {
+          setEntitlements({
+            pulse: !!j.entitlements.pulse,
+            recon: !!j.entitlements.recon,
+            atlas: !!j.entitlements.atlas,
+            created_at: j.entitlements.created_at ?? null,
+          });
+          setPlanConn("ok");
+        } else {
+          setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
+          setPlanConn("no");
+        }
+      } catch {
+        if (!mountedRef.current) return;
         setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
         setPlanConn("no");
       }
-    } catch {
-      if (!mountedRef.current) return;
-      setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
-      setPlanConn("no");
-    }
 
-    // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
-    try {
-      const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
-
-      let j: ExchangeProbe | null = null;
+      // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
       try {
-        j = (await r.json()) as ExchangeProbe;
+        const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
+
+        let j: ExchangeProbe | null = null;
+        try {
+          j = (await r.json()) as ExchangeProbe;
+        } catch {
+          j = null;
+        }
+
+        const authOk = !!(j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200);
+        const ok = !!(r.ok && j && j.ok === true && authOk);
+
+        if (!mountedRef.current) return;
+
+        setPlatformEngineMeta({
+          authOk,
+          authStatus: j?.coinbase_auth?.status ?? j?.status,
+          mode: j?.mode,
+        });
+
+        setPlatformEngineConn(ok ? "ok" : "no");
       } catch {
-        j = null;
+        if (!mountedRef.current) return;
+        setPlatformEngineConn("no");
+        setPlatformEngineMeta({ authOk: false });
       }
 
-      const authOk = !!(j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200);
-      const ok = !!(r.ok && j && j.ok === true && authOk);
-
-      if (!mountedRef.current) return;
-
-      setPlatformEngineMeta({
-        authOk,
-        authStatus: j?.coinbase_auth?.status ?? j?.status,
-        mode: j?.mode,
-      });
-
-      setPlatformEngineConn(ok ? "ok" : "no");
-    } catch {
-      if (!mountedRef.current) return;
-      setPlatformEngineConn("no");
-      setPlatformEngineMeta({ authOk: false });
-    }
-
-    // ✅ 5) USER Coinbase status (multi-user, server-verified)
-    try {
-      if (!accessToken) throw new Error("missing_access_token");
-
-      const r = await fetch("/api/coinbase/status", {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      let j: any = null;
+      // ✅ 5) USER Coinbase status (multi-user, server-verified)
       try {
-        j = await r.json();
+        if (!accessToken) throw new Error("missing_access_token");
+
+        const r = await fetch("/api/coinbase/status", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        let j: any = null;
+        try {
+          j = await r.json();
+        } catch {
+          j = null;
+        }
+
+        const ok = !!(r.ok && j && j.connected === true);
+
+        if (!mountedRef.current) return;
+
+        setUserCoinbaseConn(ok ? "ok" : "no");
+        setUserCoinbaseMeta({ alg: j?.alg });
       } catch {
-        j = null;
+        if (!mountedRef.current) return;
+        setUserCoinbaseConn("no");
+        setUserCoinbaseMeta({});
       }
 
-      const ok = !!(r.ok && j && j.connected === true);
-
-      if (!mountedRef.current) return;
-
-      setUserCoinbaseConn(ok ? "ok" : "no");
-      setUserCoinbaseMeta({ alg: j?.alg });
-    } catch {
-      if (!mountedRef.current) return;
-      setUserCoinbaseConn("no");
-      setUserCoinbaseMeta({});
-    }
-
-    // ✅ 5b) USER Balances (read-only, server-verified)
-    // Only attempt if keys exist (YOUR COINBASE = ok). Otherwise show "no".
-    try {
-      if (!accessToken) throw new Error("missing_access_token");
-
-      // Don’t hammer balances if user has no keys.
-      // If status call above failed, this may still fail; that’s fine.
-      const r = await fetch("/api/coinbase/balances", {
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      let j: any = null;
+      // ✅ 5b) USER Balances (read-only, server-verified)
       try {
-        j = await r.json();
-      } catch {
-        j = null;
-      }
+        if (!accessToken) throw new Error("missing_access_token");
 
-      if (!mountedRef.current) return;
+        const r = await fetch("/api/coinbase/balances", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
 
-      if (r.ok && j && j.ok === true) {
-        setBalancesConn("ok");
-        setBalances(j as BalancesOk);
-      } else {
+        let j: any = null;
+        try {
+          j = await r.json();
+        } catch {
+          j = null;
+        }
+
+        if (!mountedRef.current) return;
+
+        if (r.ok && j && j.ok === true) {
+          setBalancesConn("ok");
+          setBalances(j as BalancesOk);
+        } else {
+          setBalancesConn("no");
+          setBalances({
+            ok: false,
+            error: j?.error || "balances_failed",
+            status: j?.status || r.status,
+            details: j?.details,
+          } as BalancesErr);
+        }
+      } catch (e: any) {
+        if (!mountedRef.current) return;
         setBalancesConn("no");
         setBalances({
           ok: false,
-          error: j?.error || "balances_failed",
-          status: j?.status || r.status,
-          details: j?.details,
+          error: e?.message || "balances_failed",
         } as BalancesErr);
       }
-    } catch (e: any) {
-      if (!mountedRef.current) return;
-      setBalancesConn("no");
-      setBalances({
-        ok: false,
-        error: e?.message || "balances_failed",
-      } as BalancesErr);
-    }
 
-    // 6) Trading gates (read-only)
-    try {
-      const r = await fetch("/api/pulse-trade", { cache: "no-store" });
-
-      let j: any = null;
+      // 6) Trading gates (read-only)
       try {
-        j = await r.json();
+        const r = await fetch("/api/pulse-trade", { cache: "no-store" });
+
+        let j: any = null;
+        try {
+          j = await r.json();
+        } catch {
+          j = null;
+        }
+
+        const gates = j?.gates || {};
+        const parsed: TradeGates = {
+          COINBASE_TRADING_ENABLED: truthy(gates.COINBASE_TRADING_ENABLED),
+          PULSE_TRADE_ARMED: truthy(gates.PULSE_TRADE_ARMED),
+          LIVE_ALLOWED: truthy(gates.LIVE_ALLOWED),
+        };
+
+        if (!mountedRef.current) return;
+
+        setTradeGates(parsed);
+
+        const ok = !!(r.ok && j && j.ok === true);
+        setTradeConn(ok ? "ok" : "no");
       } catch {
-        j = null;
+        if (!mountedRef.current) return;
+        setTradeConn("no");
       }
 
-      const gates = j?.gates || {};
-      const parsed: TradeGates = {
-        COINBASE_TRADING_ENABLED: truthy(gates.COINBASE_TRADING_ENABLED),
-        PULSE_TRADE_ARMED: truthy(gates.PULSE_TRADE_ARMED),
-        LIVE_ALLOWED: truthy(gates.LIVE_ALLOWED),
-      };
-
       if (!mountedRef.current) return;
-
-      setTradeGates(parsed);
-
-      const ok = !!(r.ok && j && j.ok === true);
-      setTradeConn(ok ? "ok" : "no");
-    } catch {
-      if (!mountedRef.current) return;
-      setTradeConn("no");
+      setChecking(false);
+    } finally {
+      inFlightRef.current = false;
     }
-
-    if (!mountedRef.current) return;
-    setChecking(false);
   }, [router]);
 
   useEffect(() => {
     mountedRef.current = true;
     runCheck();
+
     return () => {
       mountedRef.current = false;
+    };
+  }, [runCheck]);
+
+  // ✅ Auto-refresh every 60s (paused when tab hidden)
+  useEffect(() => {
+    const clear = () => {
+      if (intervalRef.current) {
+        window.clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalRef.current = window.setInterval(() => {
+        // Only auto-refresh if tab is visible
+        if (document.visibilityState === "visible") runCheck();
+      }, AUTO_REFRESH_MS);
+    };
+
+    const onVis = () => {
+      if (document.visibilityState === "visible") start();
+      else clear();
+    };
+
+    start();
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, [runCheck]);
 
@@ -489,7 +532,9 @@ export default function DashboardPage() {
       <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
         <div className="flex items-center justify-between">
           <p className="font-semibold text-slate-100">Coinbase Balances</p>
-          <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold", balP.wrap].join(" ")}>
+          <span
+            className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold", balP.wrap].join(" ")}
+          >
             <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
             BALANCES: {balP.label}
           </span>
@@ -515,6 +560,7 @@ export default function DashboardPage() {
 
           <p className="mt-2 text-[11px] text-slate-500">
             Last check: <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
+            <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
           </p>
         </div>
       </div>
@@ -580,6 +626,7 @@ export default function DashboardPage() {
 
               <span className="text-xs text-slate-400">
                 Last check: <span className="text-slate-200">{lastCheck ? fmt(lastCheck) : "—"}</span>
+                <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
               </span>
 
               <button
