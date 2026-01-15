@@ -24,7 +24,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import { getUserCoinbaseKeys } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 
@@ -60,6 +59,12 @@ function safeJsonParse(text: string) {
   } catch {
     return null;
   }
+}
+
+function requireEnv(name: string) {
+  const v = process.env[name];
+  if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
+  return v.trim();
 }
 
 function optEnv(name: string) {
@@ -112,32 +117,17 @@ function fmtBaseSize(x: number) {
   return v.toFixed(8).replace(/\.?0+$/, "");
 }
 
+function fmtQuote(x: number) {
+  const v = Math.max(0, x);
+  return v.toFixed(2).replace(/\.?0+$/, "");
+}
+
 // -------------------- Coinbase JWT (CDP) --------------------
 // NOTE: host-style uri: "METHOD api.coinbase.com/path"
 
-// Uses per-user keys when userId is provided; falls back to env keys (keeps current bot working).
-async function buildCdpJwt(
-  method: "GET" | "POST",
-  path: string,
-  userId?: string | null
-) {
-  // default to env keys
-  let apiKeyName = (process.env.COINBASE_API_KEY_NAME || "").trim();
-  let privateKey = (process.env.COINBASE_PRIVATE_KEY || "").trim();
-
-  // if userId provided, try to load keys from DB
-  if (userId) {
-    const k = await getUserCoinbaseKeys(userId);
-    if (k?.apiKeyName && k?.privateKey) {
-      apiKeyName = k.apiKeyName;
-      privateKey = k.privateKey;
-    }
-  }
-
-  if (!apiKeyName) throw new Error("Missing Coinbase apiKeyName (env or DB).");
-  if (!privateKey) throw new Error("Missing Coinbase privateKey (env or DB).");
-
-  const pk = normalizePem(privateKey);
+function buildCdpJwt(method: "GET" | "POST", path: string) {
+  const apiKeyName = requireEnv("COINBASE_API_KEY_NAME");
+  const privateKey = normalizePem(requireEnv("COINBASE_PRIVATE_KEY"));
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
@@ -145,17 +135,17 @@ async function buildCdpJwt(
 
   return jwt.sign(
     { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri },
-    pk as any,
+    privateKey as any,
     { algorithm: "ES256", header: { kid: apiKeyName, nonce } as any }
   );
 }
 
 // -------------------- POSITION SNAPSHOT (READ-ONLY) --------------------
 
-async function fetchBtcPosition(userId?: string | null) {
+async function fetchBtcPosition() {
   const path = "/api/v3/brokerage/accounts";
   try {
-    const token = await buildCdpJwt("GET", path, userId);
+    const token = buildCdpJwt("GET", path);
 
     const res = await fetch(`https://api.coinbase.com${path}`, {
       method: "GET",
@@ -199,12 +189,12 @@ async function fetchBtcPosition(userId?: string | null) {
 
 // -------------------- ORDER BOOK (for maker) --------------------
 
-async function fetchBestAskBid(product_id: string, userId?: string | null) {
+async function fetchBestAskBid(product_id: string) {
   const path = `/api/v3/brokerage/products/${encodeURIComponent(
     product_id
   )}/book?limit=1`;
   try {
-    const token = await buildCdpJwt("GET", path, userId);
+    const token = buildCdpJwt("GET", path);
     const res = await fetch(`https://api.coinbase.com${path}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
@@ -241,10 +231,10 @@ function bpsAdjust(price: number, bps: number, direction: "down" | "up") {
 }
 
 // Build a unified status payload so GET + POST(status) match
-async function buildStatusPayload(userId?: string | null) {
+async function buildStatusPayload() {
   const { tradingEnabled, armed, liveAllowed } = gates();
   const orderMode = getOrderMode();
-  const position = await fetchBtcPosition(userId);
+  const position = await fetchBtcPosition();
 
   return {
     ok: true,
@@ -259,15 +249,13 @@ async function buildStatusPayload(userId?: string | null) {
     // manager-friendly flat fields
     positionBase: position.ok ? Number(position.base_available || 0) : 0,
     hasPosition: position.ok ? Boolean(position.has_position) : false,
-    userId: userId || null,
   };
 }
 
 // -------------------- GET --------------------
 
 export async function GET(_req: NextRequest) {
-  // GET is env-key status (no user context)
-  const body = await buildStatusPayload(null);
+  const body = await buildStatusPayload();
   return json(200, body);
 }
 
@@ -281,14 +269,12 @@ export async function POST(req: Request) {
     return jsonError("Invalid JSON body.", 400);
   }
 
-  const user_id = body?.user_id ? String(body.user_id) : null;
-
   const action = (body?.action || "status") as Action;
   const { tradingEnabled, armed, liveAllowed } = gates();
   const orderMode = getOrderMode();
 
   if (action === "status") {
-    const statusBody = await buildStatusPayload(user_id);
+    const statusBody = await buildStatusPayload();
     return json(200, statusBody);
   }
 
@@ -308,13 +294,12 @@ export async function POST(req: Request) {
     }
   }
 
-  const position = await fetchBtcPosition(user_id);
+  const position = await fetchBtcPosition();
 
   // If we can't read position, block LIVE (but still allow DRY_RUN)
   if (!position.ok && action === "place_order") {
     return jsonError("LIVE blocked: cannot verify BTC position snapshot.", 503, {
       position,
-      user_id,
     });
   }
 
@@ -328,7 +313,6 @@ export async function POST(req: Request) {
       return jsonError('SELL requires base_size > 0 (e.g., "0.00002").', 400, {
         got: { base_size },
         position,
-        user_id,
       });
     }
   }
@@ -337,14 +321,12 @@ export async function POST(req: Request) {
   if (side === "BUY" && position.ok && position.has_position) {
     return jsonError("BUY blocked: BTC position already exists.", 409, {
       position,
-      user_id,
     });
   }
 
   if (side === "SELL" && position.ok && !position.has_position) {
     return jsonError("SELL blocked: no BTC position to exit.", 409, {
       position,
-      user_id,
     });
   }
 
@@ -370,11 +352,10 @@ export async function POST(req: Request) {
     // - Coinbase limit wants base_size, so BUY must compute base_size from quote_size/limit_price
     const offsetBps = num(optEnv("MAKER_OFFSET_BPS"), 1.0);
 
-    const book = await fetchBestAskBid(product_id, user_id);
+    const book = await fetchBestAskBid(product_id);
     if (!book.ok) {
       return jsonError("Maker mode blocked: cannot fetch order book.", 503, {
         book,
-        user_id,
       });
     }
 
@@ -385,7 +366,6 @@ export async function POST(req: Request) {
     if (!refPrice || refPrice <= 0) {
       return jsonError("Maker mode blocked: invalid reference price.", 503, {
         book,
-        user_id,
       });
     }
 
@@ -399,7 +379,6 @@ export async function POST(req: Request) {
         refPrice,
         limitPrice,
         offsetBps,
-        user_id,
       });
     }
 
@@ -414,7 +393,6 @@ export async function POST(req: Request) {
           quote_size,
           limitPrice,
           computed,
-          user_id,
         });
       }
       makerBaseSize = fmtBaseSize(computed);
@@ -452,14 +430,15 @@ export async function POST(req: Request) {
       position,
       gates: { tradingEnabled, armed, liveAllowed },
       payload,
-      user_id,
     });
   }
 
   if (!liveAllowed) {
     return jsonError("LIVE blocked by gates.", 403, {
-      gates: { COINBASE_TRADING_ENABLED: tradingEnabled, PULSE_TRADE_ARMED: armed },
-      user_id,
+      gates: {
+        COINBASE_TRADING_ENABLED: tradingEnabled,
+        PULSE_TRADE_ARMED: armed,
+      },
     });
   }
 
@@ -468,11 +447,10 @@ export async function POST(req: Request) {
   let token: string;
 
   try {
-    token = await buildCdpJwt("POST", path, user_id);
+    token = buildCdpJwt("POST", path);
   } catch (e: any) {
-    return jsonError("JWT build failed (missing/invalid env or DB key).", 500, {
+    return jsonError("JWT build failed (missing/invalid env).", 500, {
       error: String(e?.message || e),
-      user_id,
     });
   }
 
@@ -495,6 +473,5 @@ export async function POST(req: Request) {
     position,
     payload,
     coinbase: parsed ?? text,
-    user_id,
   });
 }
