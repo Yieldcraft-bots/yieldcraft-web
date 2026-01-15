@@ -40,6 +40,13 @@ function normalizePem(pem: string) {
   }
   return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
 }
+function safeJsonParse(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
 function minPositionBaseBtc() {
   const raw = (process.env.PULSE_MIN_POSITION_BASE_BTC || "").trim();
   const n = raw ? Number(raw) : NaN;
@@ -54,8 +61,19 @@ function fmtQuoteSizeUsd(x: number) {
   const v = Math.max(0, x);
   return v.toFixed(2);
 }
+function nowIso() {
+  return new Date().toISOString();
+}
+function msSince(iso?: string | null) {
+  if (!iso) return Number.POSITIVE_INFINITY;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
+  return Date.now() - t;
+}
 
+// ---------- auth ----------
 function okAuth(req: Request) {
+  // accept either CRON_SECRET or PULSE_MANAGER_SECRET
   const secret = (process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "").trim();
   if (!secret) return false;
 
@@ -98,13 +116,7 @@ async function cbFetch(path: string) {
     cache: "no-store",
   });
   const text = await res.text();
-  let parsed: any = null;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = null;
-  }
-  return { ok: res.ok, status: res.status, json: parsed, text };
+  return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
 }
 
 // ---------- position ----------
@@ -134,31 +146,8 @@ async function fetchBtcPosition() {
   };
 }
 
-// ---------- last fill time (cooldown) ----------
-async function fetchLastFillTime(): Promise<
-  | { ok: true; lastFillIso: string; side: "BUY" | "SELL" | "UNKNOWN" }
-  | { ok: false; error: any }
-> {
-  const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
-    PRODUCT_ID
-  )}&limit=1&sort_by=TRADE_TIME`;
-
-  const r = await cbFetch(path);
-  if (!r.ok) return { ok: false, error: r.json ?? r.text };
-
-  const fills = (r.json as any)?.fills || [];
-  if (!Array.isArray(fills) || fills.length === 0) {
-    return { ok: true, lastFillIso: "", side: "UNKNOWN" };
-  }
-
-  const f = fills[0];
-  const t = String(f?.trade_time || f?.created_time || f?.time || "");
-  const side = String(f?.side || "").toUpperCase();
-  return { ok: true, lastFillIso: t, side: side === "BUY" || side === "SELL" ? side : "UNKNOWN" };
-}
-
-// ---------- entry price from fills ----------
-async function fetchEntryFromFills(): Promise<
+// ---------- last BUY fill (for entry price + cooldown) ----------
+async function fetchLastBuyFill(): Promise<
   | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
   | { ok: false; error: any }
 > {
@@ -169,11 +158,13 @@ async function fetchEntryFromFills(): Promise<
   const r = await cbFetch(path);
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
-  const fills = (r.json as any)?.fills || [];
-  if (!Array.isArray(fills) || fills.length === 0) return { ok: false, error: "no_fills_found" };
+  const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
+  if (!Array.isArray(fills) || fills.length === 0)
+    return { ok: false, error: "no_fills_found" };
 
   const buy =
-    fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") || fills[0];
+    fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") ||
+    fills[0];
   if (!buy) return { ok: false, error: "no_buy_fill_found" };
 
   const px = Number(buy?.price || buy?.fill_price || 0);
@@ -182,16 +173,16 @@ async function fetchEntryFromFills(): Promise<
 
   if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
 
-  return { ok: true, entryPrice: px, entryTime: t || new Date().toISOString(), entryQty: qty };
+  return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
 }
 
-// ---------- peak price via candles (UNIX seconds) ----------
+// ---------- peak price via candles ----------
 async function fetchPeakWindow(): Promise<
   | { ok: true; peak: number; last: number; startTs: string; endTs: string }
   | { ok: false; error: any }
 > {
   const end = new Date();
-  const start = new Date(end.getTime() - 2 * 3600 * 1000); // last 2 hours
+  const start = new Date(end.getTime() - 2 * 3600 * 1000);
 
   const startTs = String(Math.floor(start.getTime() / 1000));
   const endTs = String(Math.floor(end.getTime() / 1000));
@@ -207,7 +198,8 @@ async function fetchPeakWindow(): Promise<
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const candles = (r.json as any)?.candles || [];
-  if (!Array.isArray(candles) || candles.length === 0) return { ok: false, error: "no_candles" };
+  if (!Array.isArray(candles) || candles.length === 0)
+    return { ok: false, error: "no_candles" };
 
   let peak = 0;
   let last = 0;
@@ -225,7 +217,7 @@ async function fetchPeakWindow(): Promise<
   return { ok: true, peak, last, startTs, endTs };
 }
 
-// ---------- call pulse-trade (BUY/SELL) ----------
+// ---------- call pulse-trade ----------
 function siteBaseUrl() {
   return (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
     /\/$/,
@@ -235,13 +227,10 @@ function siteBaseUrl() {
 function authHeadersForInternalCall() {
   const cronSecret = (process.env.CRON_SECRET || "").trim();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (cronSecret) {
-    headers["x-cron-secret"] = cronSecret;
-    headers["Authorization"] = `Bearer ${cronSecret}`;
-  }
+  // pulse-trade doesn't require auth, but leaving header is fine
+  if (cronSecret) headers["x-cron-secret"] = cronSecret;
   return headers;
 }
-
 async function callPulseTrade(payload: any) {
   const url = `${siteBaseUrl()}/api/pulse-trade`;
   const res = await fetch(url, {
@@ -252,48 +241,38 @@ async function callPulseTrade(payload: any) {
   });
 
   const text = await res.text();
-  let parsed: any = null;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    parsed = null;
-  }
-  return { ok: res.ok, status: res.status, data: parsed ?? text };
+  return { ok: res.ok, status: res.status, data: safeJsonParse(text) ?? text };
 }
-
 async function placeSell(baseSize: string) {
-  return callPulseTrade({
-    action: "place_order",
-    side: "SELL",
-    base_size: baseSize,
-  });
+  return callPulseTrade({ action: "place_order", side: "SELL", base_size: baseSize });
 }
-
 async function placeBuy(quoteSize: string) {
-  return callPulseTrade({
-    action: "place_order",
-    side: "BUY",
-    quote_size: quoteSize,
-  });
+  return callPulseTrade({ action: "place_order", side: "BUY", quote_size: quoteSize });
 }
 
-// ---------- main runner (entries + exits; conservative) ----------
+// ---------- main runner (entries + exits) ----------
 async function runManager() {
   const botEnabled = truthy(process.env.BOT_ENABLED);
   const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
   const armed = truthy(process.env.PULSE_TRADE_ARMED);
 
-  // exits
+  const entriesEnabled = truthy(process.env.PULSE_ENTRIES_ENABLED);
+  const entriesDryRun = truthy(process.env.PULSE_ENTRIES_DRY_RUN);
+
   const exitsEnabled = truthy(process.env.PULSE_EXITS_ENABLED);
   const exitsDryRun = truthy(process.env.PULSE_EXITS_DRY_RUN);
 
-  // entries (OFF by default)
-  const entriesEnabled = truthy(process.env.PULSE_ENTRIES_ENABLED);
-  const entriesDryRun = truthy(process.env.PULSE_ENTRIES_DRY_RUN);
+  const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
+
+  // exits params
+  const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
+  const trailArmBps = num(process.env.TRAIL_ARM_BPS, 150);
+  const trailOffsetBps = num(process.env.TRAIL_OFFSET_BPS, 50);
+
+  // entry size
   const entryQuoteUsd = fmtQuoteSizeUsd(num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0));
 
-  // cooldown (defaults to 60s)
-  const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
+  const position = await fetchBtcPosition();
 
   const gates = {
     BOT_ENABLED: botEnabled,
@@ -306,150 +285,97 @@ async function runManager() {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  if (!gates.LIVE_ALLOWED) return { ok: true, mode: "NOOP_GATES", gates };
+  if (!gates.LIVE_ALLOWED) return { ok: true, mode: "NOOP_GATES", gates, position };
+  if (!position.ok) return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
 
-  // cooldown check from last fill time
-  const lastFill = await fetchLastFillTime();
-  let cooldown = { ok: lastFill.ok, lastFillIso: "", sinceMs: -1, cooldownMs, inCooldown: false };
-  if (lastFill.ok && lastFill.lastFillIso) {
-    const t = Date.parse(lastFill.lastFillIso);
-    if (Number.isFinite(t)) {
-      const sinceMs = Date.now() - t;
-      cooldown = {
-        ok: true,
-        lastFillIso: lastFill.lastFillIso,
-        sinceMs,
-        cooldownMs,
-        inCooldown: sinceMs >= 0 && sinceMs < cooldownMs,
-      };
-    }
-  }
+  // ---- COOLDOWN: use last BUY fill time if available ----
+  const lastBuy = await fetchLastBuyFill();
+  const lastFillIso = lastBuy.ok ? lastBuy.entryTime : null;
+  const sinceMs = msSince(lastFillIso);
+  const cooldownOk = sinceMs >= cooldownMs;
 
-  if (cooldown.inCooldown) {
-    // Still return position snapshot so you can see state
-    const position = await fetchBtcPosition();
-    return { ok: true, mode: "HOLD_COOLDOWN", gates, cooldown, position };
-  }
+  const cooldown = {
+    lastFillIso,
+    sinceMs: Number.isFinite(sinceMs) ? sinceMs : null,
+    cooldownMs,
+    cooldownOk,
+  };
 
-  const position = await fetchBtcPosition();
-  if (!position.ok) {
-    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
-  }
+  // ---- ENTRY: if no position and entries enabled ----
+  if (!position.has_position) {
+    if (!entriesEnabled) return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
+    if (!cooldownOk) return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
 
-  // --- EXIT PATH (only if in position) ---
-  if (position.has_position) {
-    if (!exitsEnabled) return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, cooldown, position };
-
-    const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
-    const trailArmBps = num(process.env.TRAIL_ARM_BPS, 150);
-    const trailOffsetBps = num(process.env.TRAIL_OFFSET_BPS, 50);
-
-    const entry = await fetchEntryFromFills();
-    if (!entry.ok) {
-      return { ok: false, mode: "BLOCKED", gates, cooldown, position, error: "cannot_read_entry", entry };
-    }
-
-    const peak = await fetchPeakWindow();
-    if (!peak.ok) {
-      return { ok: false, mode: "BLOCKED", gates, cooldown, position, error: "cannot_read_peak", peak };
-    }
-
-    const entryPrice = entry.entryPrice;
-    const current = peak.last;
-    const peakPrice = peak.peak;
-
-    const pnlBps = ((current - entryPrice) / entryPrice) * 10_000;
-    const drawdownFromPeakBps = ((peakPrice - current) / peakPrice) * 10_000;
-
-    const shouldTakeProfit = pnlBps >= profitTargetBps;
-    const trailArmed = pnlBps >= trailArmBps;
-    const shouldTrailStop = trailArmed && drawdownFromPeakBps >= trailOffsetBps;
-
-    const decision = {
-      entryPrice,
-      entryTime: entry.entryTime,
-      candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
-      current,
-      peakPrice,
-      pnlBps: Number(pnlBps.toFixed(2)),
-      drawdownFromPeakBps: Number(drawdownFromPeakBps.toFixed(2)),
-      profitTargetBps,
-      trailArmBps,
-      trailOffsetBps,
-      shouldTakeProfit,
-      trailArmed,
-      shouldTrailStop,
-    };
-
-    if (!shouldTakeProfit && !shouldTrailStop) {
-      return { ok: true, mode: "HOLD", gates, cooldown, position, decision };
-    }
-
-    const baseSize = fmtBaseSize(position.base_available);
-
-    if (exitsDryRun) {
+    if (entriesDryRun) {
       return {
         ok: true,
-        mode: "DRY_RUN_SELL",
+        mode: "DRY_RUN_BUY",
         gates,
-        cooldown,
         position,
-        decision,
-        would_sell_base_size: baseSize,
+        cooldown,
+        would_buy_quote_usd: entryQuoteUsd,
       };
     }
 
-    const sell = await placeSell(baseSize);
-    return { ok: sell.ok, mode: "EXIT_SELL", gates, cooldown, position, decision, sell };
+    const buy = await placeBuy(entryQuoteUsd);
+    return { ok: buy.ok, mode: "ENTRY_BUY", gates, position, cooldown, buy };
   }
 
-  // --- ENTRY PATH (only if NOT in position) ---
-  if (!entriesEnabled) {
-    return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, cooldown, position };
+  // ---- EXIT: if position exists ----
+  if (!exitsEnabled) return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown };
+
+  // entry info for exits
+  if (!lastBuy.ok) {
+    return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_entry", lastBuy };
   }
 
-  if (entriesDryRun) {
-    return {
-      ok: true,
-      mode: "DRY_RUN_BUY",
-      gates,
-      cooldown,
-      position,
-      would_buy_quote_usd: entryQuoteUsd,
-      payload: { action: "place_order", side: "BUY", quote_size: entryQuoteUsd },
-    };
+  const peak = await fetchPeakWindow();
+  if (!peak.ok) return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_peak", peak };
+
+  const entryPrice = lastBuy.entryPrice;
+  const current = peak.last;
+  const peakPrice = peak.peak;
+
+  const pnlBps = ((current - entryPrice) / entryPrice) * 10_000;
+  const drawdownFromPeakBps = ((peakPrice - current) / peakPrice) * 10_000;
+
+  const shouldTakeProfit = pnlBps >= profitTargetBps;
+  const trailArmed = pnlBps >= trailArmBps;
+  const shouldTrailStop = trailArmed && drawdownFromPeakBps >= trailOffsetBps;
+
+  const decision = {
+    entryPrice,
+    entryTime: lastBuy.entryTime,
+    candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
+    current,
+    peakPrice,
+    pnlBps: Number(pnlBps.toFixed(2)),
+    drawdownFromPeakBps: Number(drawdownFromPeakBps.toFixed(2)),
+    profitTargetBps,
+    trailArmBps,
+    trailOffsetBps,
+    shouldTakeProfit,
+    trailArmed,
+    shouldTrailStop,
+  };
+
+  if (!shouldTakeProfit && !shouldTrailStop) {
+    return { ok: true, mode: "HOLD", gates, position, cooldown, decision };
   }
 
-  const buy = await placeBuy(entryQuoteUsd);
-  return { ok: buy.ok, mode: "ENTRY_BUY", gates, cooldown, position, buy };
+  const baseSize = fmtBaseSize(position.base_available);
+
+  if (exitsDryRun) {
+    return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, decision, would_sell_base_size: baseSize };
+  }
+
+  const sell = await placeSell(baseSize);
+  return { ok: sell.ok, mode: "EXIT_SELL", gates, position, cooldown, decision, sell };
 }
 
 // ---------- handlers ----------
 export async function GET(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
-
-  // allow GET ?action=status for quick checks
-  const url = new URL(req.url);
-  const action = (url.searchParams.get("action") || "run").toLowerCase();
-
-  if (action === "status") {
-    const position = await fetchBtcPosition();
-    const gates = {
-      BOT_ENABLED: truthy(process.env.BOT_ENABLED),
-      COINBASE_TRADING_ENABLED: truthy(process.env.COINBASE_TRADING_ENABLED),
-      PULSE_TRADE_ARMED: truthy(process.env.PULSE_TRADE_ARMED),
-      PULSE_ENTRIES_ENABLED: truthy(process.env.PULSE_ENTRIES_ENABLED),
-      PULSE_ENTRIES_DRY_RUN: truthy(process.env.PULSE_ENTRIES_DRY_RUN),
-      PULSE_EXITS_ENABLED: truthy(process.env.PULSE_EXITS_ENABLED),
-      PULSE_EXITS_DRY_RUN: truthy(process.env.PULSE_EXITS_DRY_RUN),
-      LIVE_ALLOWED:
-        truthy(process.env.BOT_ENABLED) &&
-        truthy(process.env.COINBASE_TRADING_ENABLED) &&
-        truthy(process.env.PULSE_TRADE_ARMED),
-    };
-    return json(200, { ok: true, status: "PULSE_MANAGER_READY", gates, position });
-  }
-
   const result = await runManager();
   return json(result.ok ? 200 : 500, result);
 }
@@ -465,7 +391,6 @@ export async function POST(req: Request) {
   }
 
   const action = String(body?.action || "run").toLowerCase();
-  const side = String(body?.side || "").toUpperCase();
 
   if (action === "status") {
     const position = await fetchBtcPosition();
@@ -485,31 +410,7 @@ export async function POST(req: Request) {
     return json(200, { ok: true, status: "PULSE_MANAGER_READY", gates, position });
   }
 
-  // manual override order placement (still uses pulse-trade gates)
-  if (action === "place_order") {
-    const quoteSize = fmtQuoteSizeUsd(num(body?.quote_size ?? body?.quoteSize ?? 0, 0));
-    const baseSize = String(body?.base_size ?? body?.baseSize ?? "");
-
-    const position = await fetchBtcPosition();
-
-    if (side === "BUY") {
-      if (!quoteSize || Number(quoteSize) <= 0) return json(400, { ok: false, error: "missing_quote_size" });
-      if (position.ok && position.has_position) {
-        return json(200, { ok: true, mode: "SKIP_BUY_ALREADY_IN_POSITION", position });
-      }
-      const buy = await placeBuy(quoteSize);
-      return json(buy.ok ? 200 : 500, { ok: buy.ok, mode: "ENTRY_BUY", position, buy });
-    }
-
-    if (side === "SELL") {
-      if (!baseSize) return json(400, { ok: false, error: "missing_base_size" });
-      const sell = await placeSell(baseSize);
-      return json(sell.ok ? 200 : 500, { ok: sell.ok, mode: "EXIT_SELL", position, sell });
-    }
-
-    return json(400, { ok: false, error: "missing_or_invalid_side", side });
-  }
-
+  // default: run
   const result = await runManager();
   return json(result.ok ? 200 : 500, result);
 }
