@@ -71,6 +71,18 @@ function msSince(iso?: string | null) {
   return Date.now() - t;
 }
 
+// ---------- logging (safe) ----------
+function log(runId: string, event: string, data?: any) {
+  // Never log secrets/keys. Keep logs compact and structured.
+  const payload = {
+    t: new Date().toISOString(),
+    runId,
+    event,
+    ...(data ? { data } : {}),
+  };
+  console.log("[pulse-manager]", JSON.stringify(payload));
+}
+
 // ---------- auth ----------
 function okAuth(req: Request) {
   // accept either CRON_SECRET or PULSE_MANAGER_SECRET
@@ -251,7 +263,7 @@ async function placeBuy(quoteSize: string) {
 }
 
 // ---------- main runner (entries + exits) ----------
-async function runManager() {
+async function runManager(runId: string) {
   const botEnabled = truthy(process.env.BOT_ENABLED);
   const tradingEnabled = truthy(process.env.COINBASE_TRADING_ENABLED);
   const armed = truthy(process.env.PULSE_TRADE_ARMED);
@@ -285,8 +297,29 @@ async function runManager() {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  if (!gates.LIVE_ALLOWED) return { ok: true, mode: "NOOP_GATES", gates, position };
-  if (!position.ok) return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
+  // First log: snapshot (safe)
+  log(runId, "START", {
+    gates,
+    position_ok: position.ok,
+    has_position: position.ok ? position.has_position : null,
+    base_available: position.ok ? position.base_available : null,
+    min_pos: (position as any)?.min_pos ?? null,
+    entryQuoteUsd,
+    cooldownMs,
+    profitTargetBps,
+    trailArmBps,
+    trailOffsetBps,
+  });
+
+  if (!gates.LIVE_ALLOWED) {
+    log(runId, "DECISION", { mode: "NOOP_GATES", reason: "LIVE_ALLOWED=false", gates });
+    return { ok: true, mode: "NOOP_GATES", gates, position };
+  }
+
+  if (!position.ok) {
+    log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_position", status: (position as any)?.status });
+    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
+  }
 
   // ---- COOLDOWN: use last BUY fill time if available ----
   const lastBuy = await fetchLastBuyFill();
@@ -301,12 +334,27 @@ async function runManager() {
     cooldownOk,
   };
 
+  log(runId, "COOLDOWN", {
+    lastBuy_ok: lastBuy.ok,
+    lastFillIso,
+    sinceMs: Number.isFinite(sinceMs) ? sinceMs : null,
+    cooldownMs,
+    cooldownOk,
+  });
+
   // ---- ENTRY: if no position and entries enabled ----
   if (!position.has_position) {
-    if (!entriesEnabled) return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
-    if (!cooldownOk) return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
+    if (!entriesEnabled) {
+      log(runId, "DECISION", { mode: "NO_POSITION_ENTRIES_DISABLED", reason: "entries disabled" });
+      return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
+    }
+    if (!cooldownOk) {
+      log(runId, "DECISION", { mode: "NO_POSITION_COOLDOWN", reason: "cooldown active", cooldown });
+      return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
+    }
 
     if (entriesDryRun) {
+      log(runId, "DECISION", { mode: "DRY_RUN_BUY", would_buy_quote_usd: entryQuoteUsd });
       return {
         ok: true,
         mode: "DRY_RUN_BUY",
@@ -317,20 +365,29 @@ async function runManager() {
       };
     }
 
+    log(runId, "ACTION", { mode: "ENTRY_BUY", quote_usd: entryQuoteUsd });
     const buy = await placeBuy(entryQuoteUsd);
+    log(runId, "RESULT", { mode: "ENTRY_BUY", buy_ok: buy.ok, status: buy.status });
     return { ok: buy.ok, mode: "ENTRY_BUY", gates, position, cooldown, buy };
   }
 
   // ---- EXIT: if position exists ----
-  if (!exitsEnabled) return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown };
+  if (!exitsEnabled) {
+    log(runId, "DECISION", { mode: "HOLD_EXITS_DISABLED", reason: "exits disabled" });
+    return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown };
+  }
 
   // entry info for exits
   if (!lastBuy.ok) {
+    log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_entry", error: lastBuy.error });
     return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_entry", lastBuy };
   }
 
   const peak = await fetchPeakWindow();
-  if (!peak.ok) return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_peak", peak };
+  if (!peak.ok) {
+    log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_peak", error: peak.error });
+    return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_peak", peak };
+  }
 
   const entryPrice = lastBuy.entryPrice;
   const current = peak.last;
@@ -346,6 +403,7 @@ async function runManager() {
   const decision = {
     entryPrice,
     entryTime: lastBuy.entryTime,
+    entryQty: Number.isFinite(lastBuy.entryQty) ? lastBuy.entryQty : null,
     candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
     current,
     peakPrice,
@@ -360,28 +418,65 @@ async function runManager() {
   };
 
   if (!shouldTakeProfit && !shouldTrailStop) {
+    log(runId, "DECISION", {
+      mode: "HOLD",
+      reason: "exit conditions not met",
+      decision: {
+        pnlBps: decision.pnlBps,
+        drawdownFromPeakBps: decision.drawdownFromPeakBps,
+        profitTargetBps,
+        trailArmBps,
+        trailOffsetBps,
+        shouldTakeProfit,
+        trailArmed,
+        shouldTrailStop,
+      },
+    });
     return { ok: true, mode: "HOLD", gates, position, cooldown, decision };
   }
 
   const baseSize = fmtBaseSize(position.base_available);
 
   if (exitsDryRun) {
+    log(runId, "DECISION", { mode: "DRY_RUN_SELL", would_sell_base_size: baseSize, decision });
     return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, decision, would_sell_base_size: baseSize };
   }
 
+  log(runId, "ACTION", {
+    mode: "EXIT_SELL",
+    baseSize,
+    reason: shouldTakeProfit ? "take_profit" : "trail_stop",
+    decision: {
+      pnlBps: decision.pnlBps,
+      drawdownFromPeakBps: decision.drawdownFromPeakBps,
+      shouldTakeProfit,
+      shouldTrailStop,
+    },
+  });
+
   const sell = await placeSell(baseSize);
+  log(runId, "RESULT", { mode: "EXIT_SELL", sell_ok: sell.ok, status: sell.status });
   return { ok: sell.ok, mode: "EXIT_SELL", gates, position, cooldown, decision, sell };
 }
 
 // ---------- handlers ----------
 export async function GET(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
-  const result = await runManager();
-  return json(result.ok ? 200 : 500, result);
+
+  const runId = (crypto as any).randomUUID ? (crypto as any).randomUUID() : crypto.randomBytes(8).toString("hex");
+  log(runId, "REQUEST", { method: "GET", url: req.url });
+
+  const result = await runManager(runId);
+  log(runId, "END", { ok: result.ok, mode: (result as any)?.mode });
+
+  return json(result.ok ? 200 : 500, { runId, ...result });
 }
 
 export async function POST(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
+
+  const runId = (crypto as any).randomUUID ? (crypto as any).randomUUID() : crypto.randomBytes(8).toString("hex");
+  log(runId, "REQUEST", { method: "POST", url: req.url });
 
   let body: any = null;
   try {
@@ -407,10 +502,21 @@ export async function POST(req: Request) {
         truthy(process.env.COINBASE_TRADING_ENABLED) &&
         truthy(process.env.PULSE_TRADE_ARMED),
     };
-    return json(200, { ok: true, status: "PULSE_MANAGER_READY", gates, position });
+
+    log(runId, "STATUS", {
+      gates,
+      position_ok: position.ok,
+      has_position: position.ok ? position.has_position : null,
+      base_available: position.ok ? position.base_available : null,
+      min_pos: (position as any)?.min_pos ?? null,
+    });
+
+    return json(200, { ok: true, runId, status: "PULSE_MANAGER_READY", gates, position });
   }
 
   // default: run
-  const result = await runManager();
-  return json(result.ok ? 200 : 500, result);
+  const result = await runManager(runId);
+  log(runId, "END", { ok: result.ok, mode: (result as any)?.mode });
+
+  return json(result.ok ? 200 : 500, { runId, ...result });
 }
