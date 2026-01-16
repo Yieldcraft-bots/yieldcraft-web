@@ -42,6 +42,8 @@ export const metadata: Metadata = {
 const navLinks = [
   { href: "/pricing", label: "Pricing" },
   { href: "/quick-start", label: "Quick Start" },
+  { href: "/bots", label: "Bots" },
+  { href: "/system", label: "System" },
   { href: "/atlas", label: "Atlas" },
   { href: "/affiliate", label: "Affiliate" },
   // Dashboard/Login/Logout handled by <AuthNav />
