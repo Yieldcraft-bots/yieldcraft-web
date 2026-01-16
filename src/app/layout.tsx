@@ -46,7 +46,7 @@ const navLinks = [
   { href: "/system", label: "System" },
   { href: "/atlas", label: "Atlas" },
   { href: "/affiliate", label: "Affiliate" },
-  // Dashboard/Login/Logout handled by <AuthNav />
+  // Live/Dashboard/Account/Logout handled by <AuthNav />
 ];
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -102,13 +102,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <Link
                   key={l.href}
                   href={l.href}
-                  className="text-white/70 transition hover:text-white"
+                  className="whitespace-nowrap text-white/70 transition hover:text-white"
                 >
                   {l.label}
                 </Link>
               ))}
 
-              {/* Login/Join OR Dashboard/Logout */}
+              {/* Login/Join OR Live/Dashboard/Account/Logout */}
               <AuthNav />
             </nav>
 
@@ -116,14 +116,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <div className="flex items-center gap-3">
               <Link
                 href="/pricing"
-                className="hidden rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/10 md:inline-flex"
-              >
-                See Plans
-              </Link>
-
-              <Link
-                href="/pricing"
-                className="inline-flex items-center justify-center rounded-xl bg-yellow-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_12px_40px_rgba(250,204,21,0.22)] transition hover:brightness-110"
+                className="inline-flex items-center justify-center whitespace-nowrap rounded-xl bg-yellow-400 px-4 py-2 text-sm font-semibold text-black shadow-[0_0_0_1px_rgba(0,0,0,0.15),0_12px_40px_rgba(250,204,21,0.22)] transition hover:brightness-110"
               >
                 Subscribe
               </Link>
@@ -137,13 +130,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 <Link
                   key={l.href}
                   href={l.href}
-                  className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80 transition hover:bg-white/10"
+                  className="whitespace-nowrap rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/80 transition hover:bg-white/10"
                 >
                   {l.label}
                 </Link>
               ))}
 
-              {/* Login/Join OR Dashboard/Logout */}
+              {/* Login/Join OR Live/Dashboard/Account/Logout */}
               <AuthNav />
             </div>
           </div>
