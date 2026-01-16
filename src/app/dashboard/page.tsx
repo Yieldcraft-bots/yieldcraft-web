@@ -118,6 +118,14 @@ export default function DashboardPage() {
     LIVE_ALLOWED: false,
   });
 
+  // ✅ NEW: reasons for trading status (for clickable bubble later)
+  const [tradeExplain, setTradeExplain] = useState<{
+    traffic: "green" | "red" | "unknown";
+    blocking: string[];
+    next_steps: string[];
+    rawStatus?: string;
+  }>({ traffic: "unknown", blocking: [], next_steps: [] });
+
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const runCheck = useCallback(async () => {
@@ -139,6 +147,8 @@ export default function DashboardPage() {
 
     try {
       // 1) Auth session (Supabase)
+      let sessionUserId: string | null = null;
+
       try {
         const { data } = await supabase.auth.getSession();
         const session = data?.session ?? null;
@@ -171,6 +181,7 @@ export default function DashboardPage() {
         }
 
         accessToken = session?.access_token ?? null;
+        sessionUserId = session?.user?.id ?? null;
       } catch {
         if (!mountedRef.current) return;
         setAuthed(false);
@@ -339,9 +350,16 @@ export default function DashboardPage() {
         } as BalancesErr);
       }
 
-      // 6) Trading gates (read-only)
+      // ✅ 6) Trading gates (USER-SCOPED; fixes false RED on multi-user)
       try {
-        const r = await fetch("/api/pulse-trade", { cache: "no-store" });
+        if (!sessionUserId) throw new Error("missing_user_id");
+
+        const r = await fetch("/api/pulse-trade", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ action: "status", user_id: sessionUserId }),
+        });
 
         let j: any = null;
         try {
@@ -363,9 +381,51 @@ export default function DashboardPage() {
 
         const ok = !!(r.ok && j && j.ok === true);
         setTradeConn(ok ? "ok" : "no");
+
+        // Build explain payload for a future clickable bubble
+        const blocking: string[] = [];
+        const next_steps: string[] = [];
+
+        if (!ok) {
+          blocking.push(`Status check failed (HTTP ${r.status}).`);
+          next_steps.push("Refresh and try again. If it persists, reconnect Coinbase keys.");
+        }
+
+        // If user keys aren't connected, that will block live trading even if platform is up
+        if (userCoinbaseConn !== "ok") {
+          blocking.push("No Coinbase keys found for your account.");
+          next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
+        }
+
+        if (!parsed.COINBASE_TRADING_ENABLED) {
+          blocking.push("Trading is disabled by platform admin.");
+          next_steps.push("Try again later or contact support.");
+        }
+
+        if (!parsed.PULSE_TRADE_ARMED) {
+          blocking.push("Pulse is not armed (safe mode).");
+          next_steps.push("Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy.");
+        }
+
+        if (!parsed.LIVE_ALLOWED) {
+          blocking.push("Live trading is not allowed by current safety gates.");
+          next_steps.push("Admin must enable required env flags, then re-check status.");
+        }
+
+        setTradeExplain({
+          traffic: blocking.length ? "red" : "green",
+          blocking,
+          next_steps,
+          rawStatus: j?.status,
+        });
       } catch {
         if (!mountedRef.current) return;
         setTradeConn("no");
+        setTradeExplain({
+          traffic: "red",
+          blocking: ["Unable to fetch trading status."],
+          next_steps: ["Refresh and try again. If it persists, contact support."],
+        });
       }
 
       if (!mountedRef.current) return;
@@ -373,7 +433,7 @@ export default function DashboardPage() {
     } finally {
       inFlightRef.current = false;
     }
-  }, [router]);
+  }, [router, userCoinbaseConn]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -619,7 +679,17 @@ export default function DashboardPage() {
                 PLATFORM ENGINE: {platP.label}
               </span>
 
-              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", tradeP.wrap].join(" ")}>
+              {/* ✅ Trading status now reflects REAL per-user pulse-trade status */}
+              <span
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold cursor-help", tradeP.wrap].join(" ")}
+                title={
+                  tradeExplain.traffic === "green"
+                    ? "Trading status verified (per-user)."
+                    : tradeExplain.blocking.length
+                    ? `${tradeExplain.blocking.join(" ")} ${tradeExplain.next_steps.length ? "Next: " + tradeExplain.next_steps.join(" ") : ""}`
+                    : "Trading status unavailable."
+                }
+              >
                 <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
                 TRADING STATUS: {tradeP.label}
               </span>
@@ -698,7 +768,8 @@ export default function DashboardPage() {
                   <p className="mt-1 text-slate-400">
                     “PLATFORM ENGINE” = server connectivity (us).<br />
                     “YOUR COINBASE” = your personal setup completion (server-verified).<br />
-                    “BALANCES” = read-only account snapshot (server-verified).
+                    “BALANCES” = read-only account snapshot (server-verified).<br />
+                    “TRADING STATUS” = per-user pulse-trade status (server-verified).
                   </p>
                 </div>
 
