@@ -1,5 +1,5 @@
 ﻿// src/app/api/pulse-trade/route.ts
-// Pulse Trade — Position-aware Coinbase Advanced Trade execution
+// Pulse Trade — Position-aware Coinbase Advanced Trade execution (PER-USER KEYS)
 //
 // Actions:
 //   - status
@@ -20,16 +20,25 @@
 // - PULSE_ORDER_MODE=market|maker   (default: market)
 // - MAKER_OFFSET_BPS=1.0            (default: 1.0)
 // - MAKER_TIMEOUT_MS=15000          (default: 15000)
+//
+// PER-USER KEYING:
+// - This endpoint uses the requesting user's stored Coinbase keys from Supabase.
+// - Provide user_id (UUID) via:
+//    - GET /api/pulse-trade?user_id=<uuid>   (diagnostic/manual)
+//    - POST { user_id: "<uuid>", ... }      (manager/manual)
+// - DOES NOT RETURN PRIVATE KEY ever.
 
 import { NextResponse, type NextRequest } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import { getUserCoinbaseKeys } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 
 type Side = "BUY" | "SELL";
 type Action = "status" | "dry_run_order" | "place_order";
 type OrderMode = "market" | "maker";
+type JwtAlg = "ES256"; // keep tight for now (your CDP flow is ES256)
 
 // -------------------- helpers --------------------
 
@@ -61,26 +70,37 @@ function safeJsonParse(text: string) {
   }
 }
 
-function requireEnv(name: string) {
-  const v = process.env[name];
-  if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
-  return v.trim();
-}
-
 function optEnv(name: string) {
   const v = process.env[name];
   return v && v.trim() ? v.trim() : null;
 }
 
 function normalizePem(pem: string) {
-  let p = pem.trim();
+  let p = (pem || "").trim();
   if (
     (p.startsWith('"') && p.endsWith('"')) ||
     (p.startsWith("'") && p.endsWith("'"))
   ) {
     p = p.slice(1, -1);
   }
-  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
+}
+
+// If DB stores base64 DER (common: "MHcCAQEE..."), wrap into a PEM that jsonwebtoken accepts.
+// Your Supabase screenshot showed "MHcCAQEE..." which matches DER for EC PRIVATE KEY.
+function toEcPrivateKeyPemFromBase64Der(b64: string) {
+  const clean = (b64 || "").trim().replace(/\s+/g, "");
+  // chunk 64 chars/line
+  const lines = clean.match(/.{1,64}/g) || [];
+  return `-----BEGIN EC PRIVATE KEY-----\n${lines.join("\n")}\n-----END EC PRIVATE KEY-----`;
+}
+
+function normalizePrivateKeyFromDb(raw: string) {
+  const v = (raw || "").trim();
+  if (!v) throw new Error("Missing stored private_key");
+  if (v.includes("BEGIN")) return normalizePem(v);
+  // assume base64 DER
+  return toEcPrivateKeyPemFromBase64Der(v);
 }
 
 function gates() {
@@ -122,30 +142,68 @@ function fmtQuote(x: number) {
   return v.toFixed(2).replace(/\.?0+$/, "");
 }
 
+// Strict UUID check so we don't ever send "TEST" into Supabase UUID column again
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    v
+  );
+}
+
+async function requireUserKeys(userId: string) {
+  if (!userId || !isUuid(userId)) {
+    throw new Error("Invalid user_id (must be UUID).");
+  }
+
+  const keys = await getUserCoinbaseKeys(userId);
+
+  if (!keys) throw new Error("No Coinbase keys found for this user.");
+  if (!keys.apiKeyName) throw new Error("Stored api_key_name missing.");
+  if (!keys.privateKey) throw new Error("Stored private_key missing.");
+
+  // key_alg is currently null in your DB; default to ES256
+  const alg: JwtAlg = "ES256";
+
+  return {
+    userId,
+    apiKeyName: String(keys.apiKeyName),
+    privateKeyPem: normalizePrivateKeyFromDb(String(keys.privateKey)),
+    keyAlg: (keys.keyAlg ? String(keys.keyAlg) : null) as any, // keep for reporting only
+    jwtAlg: alg,
+  };
+}
+
 // -------------------- Coinbase JWT (CDP) --------------------
 // NOTE: host-style uri: "METHOD api.coinbase.com/path"
 
-function buildCdpJwt(method: "GET" | "POST", path: string) {
-  const apiKeyName = requireEnv("COINBASE_API_KEY_NAME");
-  const privateKey = normalizePem(requireEnv("COINBASE_PRIVATE_KEY"));
-
+function buildCdpJwtWithUserKeys(
+  method: "GET" | "POST",
+  path: string,
+  userKeys: { apiKeyName: string; privateKeyPem: string; jwtAlg: JwtAlg }
+) {
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
   const uri = `${method} api.coinbase.com${path}`;
 
   return jwt.sign(
-    { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri },
-    privateKey as any,
-    { algorithm: "ES256", header: { kid: apiKeyName, nonce } as any }
+    { iss: "cdp", sub: userKeys.apiKeyName, nbf: now, exp: now + 60, uri },
+    userKeys.privateKeyPem as any,
+    {
+      algorithm: userKeys.jwtAlg,
+      header: { kid: userKeys.apiKeyName, nonce } as any,
+    }
   );
 }
 
 // -------------------- POSITION SNAPSHOT (READ-ONLY) --------------------
 
-async function fetchBtcPosition() {
+async function fetchBtcPosition(userKeys: {
+  apiKeyName: string;
+  privateKeyPem: string;
+  jwtAlg: JwtAlg;
+}) {
   const path = "/api/v3/brokerage/accounts";
   try {
-    const token = buildCdpJwt("GET", path);
+    const token = buildCdpJwtWithUserKeys("GET", path, userKeys);
 
     const res = await fetch(`https://api.coinbase.com${path}`, {
       method: "GET",
@@ -189,12 +247,15 @@ async function fetchBtcPosition() {
 
 // -------------------- ORDER BOOK (for maker) --------------------
 
-async function fetchBestAskBid(product_id: string) {
+async function fetchBestAskBid(
+  product_id: string,
+  userKeys: { apiKeyName: string; privateKeyPem: string; jwtAlg: JwtAlg }
+) {
   const path = `/api/v3/brokerage/products/${encodeURIComponent(
     product_id
   )}/book?limit=1`;
   try {
-    const token = buildCdpJwt("GET", path);
+    const token = buildCdpJwtWithUserKeys("GET", path, userKeys);
     const res = await fetch(`https://api.coinbase.com${path}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
@@ -231,10 +292,33 @@ function bpsAdjust(price: number, bps: number, direction: "down" | "up") {
 }
 
 // Build a unified status payload so GET + POST(status) match
-async function buildStatusPayload() {
+async function buildStatusPayload(userId: string) {
   const { tradingEnabled, armed, liveAllowed } = gates();
   const orderMode = getOrderMode();
-  const position = await fetchBtcPosition();
+
+  let userKeysMeta: any = null;
+  let position: any = null;
+
+  try {
+    const userKeys = await requireUserKeys(userId);
+    userKeysMeta = {
+      ok: true,
+      user_id: userId,
+      apiKeyNameTail: userKeys.apiKeyName.slice(-6),
+      keyAlg: userKeys.keyAlg ?? null,
+      jwtAlg: userKeys.jwtAlg,
+    };
+
+    position = await fetchBtcPosition(userKeys);
+  } catch (e: any) {
+    userKeysMeta = { ok: false, user_id: userId, error: String(e?.message || e) };
+    position = {
+      ok: false,
+      has_position: false,
+      base_available: 0,
+      error: "cannot_check_position_without_valid_user_keys",
+    };
+  }
 
   return {
     ok: true,
@@ -245,17 +329,21 @@ async function buildStatusPayload() {
       PULSE_TRADE_ARMED: armed,
       LIVE_ALLOWED: liveAllowed,
     },
+    userKeys: userKeysMeta,
     position,
     // manager-friendly flat fields
-    positionBase: position.ok ? Number(position.base_available || 0) : 0,
-    hasPosition: position.ok ? Boolean(position.has_position) : false,
+    positionBase: position?.ok ? Number(position.base_available || 0) : 0,
+    hasPosition: position?.ok ? Boolean(position.has_position) : false,
   };
 }
 
 // -------------------- GET --------------------
 
-export async function GET(_req: NextRequest) {
-  const body = await buildStatusPayload();
+export async function GET(req: NextRequest) {
+  const userId = req.nextUrl.searchParams.get("user_id") || "";
+  if (!userId) return jsonError("Missing query param: user_id", 400);
+
+  const body = await buildStatusPayload(userId);
   return json(200, body);
 }
 
@@ -269,13 +357,34 @@ export async function POST(req: Request) {
     return jsonError("Invalid JSON body.", 400);
   }
 
+  const userId = String(body?.user_id || "");
+  if (!userId) return jsonError("Missing body field: user_id", 400);
+  if (!isUuid(userId)) return jsonError("Invalid user_id (must be UUID).", 400);
+
   const action = (body?.action || "status") as Action;
   const { tradingEnabled, armed, liveAllowed } = gates();
   const orderMode = getOrderMode();
 
   if (action === "status") {
-    const statusBody = await buildStatusPayload();
+    const statusBody = await buildStatusPayload(userId);
     return json(200, statusBody);
+  }
+
+  // Load user keys ONCE for the rest of the request
+  let userKeys: { apiKeyName: string; privateKeyPem: string; jwtAlg: JwtAlg; keyAlg?: any };
+  try {
+    const k = await requireUserKeys(userId);
+    userKeys = {
+      apiKeyName: k.apiKeyName,
+      privateKeyPem: k.privateKeyPem,
+      jwtAlg: k.jwtAlg,
+      keyAlg: k.keyAlg ?? null,
+    };
+  } catch (e: any) {
+    return jsonError("User Coinbase keys not available.", 400, {
+      user_id: userId,
+      error: String(e?.message || e),
+    });
   }
 
   const product_id = "BTC-USD";
@@ -294,7 +403,7 @@ export async function POST(req: Request) {
     }
   }
 
-  const position = await fetchBtcPosition();
+  const position = await fetchBtcPosition(userKeys);
 
   // If we can't read position, block LIVE (but still allow DRY_RUN)
   if (!position.ok && action === "place_order") {
@@ -352,7 +461,7 @@ export async function POST(req: Request) {
     // - Coinbase limit wants base_size, so BUY must compute base_size from quote_size/limit_price
     const offsetBps = num(optEnv("MAKER_OFFSET_BPS"), 1.0);
 
-    const book = await fetchBestAskBid(product_id);
+    const book = await fetchBestAskBid(product_id, userKeys);
     if (!book.ok) {
       return jsonError("Maker mode blocked: cannot fetch order book.", 503, {
         book,
@@ -387,7 +496,6 @@ export async function POST(req: Request) {
     if (side === "BUY") {
       const q = Number(quote_size);
       const computed = q / limitPrice;
-      // safety clamp: never send 0
       if (!Number.isFinite(computed) || computed <= 0) {
         return jsonError("Maker BUY blocked: cannot compute base_size.", 400, {
           quote_size,
@@ -427,6 +535,12 @@ export async function POST(req: Request) {
       ok: true,
       mode: "DRY_RUN",
       orderMode,
+      userKeys: {
+        user_id: userId,
+        apiKeyNameTail: userKeys.apiKeyName.slice(-6),
+        keyAlg: (userKeys as any).keyAlg ?? null,
+        jwtAlg: userKeys.jwtAlg,
+      },
       position,
       gates: { tradingEnabled, armed, liveAllowed },
       payload,
@@ -447,9 +561,9 @@ export async function POST(req: Request) {
   let token: string;
 
   try {
-    token = buildCdpJwt("POST", path);
+    token = buildCdpJwtWithUserKeys("POST", path, userKeys);
   } catch (e: any) {
-    return jsonError("JWT build failed (missing/invalid env).", 500, {
+    return jsonError("JWT build failed (invalid stored user key).", 500, {
       error: String(e?.message || e),
     });
   }
@@ -470,6 +584,12 @@ export async function POST(req: Request) {
     ok: res.ok,
     mode: "LIVE",
     orderMode,
+    userKeys: {
+      user_id: userId,
+      apiKeyNameTail: userKeys.apiKeyName.slice(-6),
+      keyAlg: (userKeys as any).keyAlg ?? null,
+      jwtAlg: userKeys.jwtAlg,
+    },
     position,
     payload,
     coinbase: parsed ?? text,
