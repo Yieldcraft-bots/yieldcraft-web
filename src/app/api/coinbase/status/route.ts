@@ -12,25 +12,23 @@ function getBearer(req: Request): string | null {
   return m?.[1]?.trim() || null;
 }
 
+function json(status: number, body: any) {
+  return NextResponse.json(body, {
+    status,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
 export async function GET(req: Request) {
   try {
-    // Authenticate user via Bearer token (multi-user safe; avoids cookies)
     const token = getBearer(req);
-    if (!token) {
-      return NextResponse.json(
-        { connected: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
+    if (!token) return json(401, { connected: false, reason: "not_authenticated" });
 
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
     const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!url || !service) {
-      return NextResponse.json(
-        { connected: false, error: "server_misconfigured" },
-        { status: 500 }
-      );
+      return json(500, { connected: false, reason: "server_misconfigured" });
     }
 
     const admin = createClient(url, service, {
@@ -40,15 +38,9 @@ export async function GET(req: Request) {
     // Validate token and get user id
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     const userId = userData?.user?.id || null;
+    if (userErr || !userId) return json(401, { connected: false, reason: "not_authenticated" });
 
-    if (userErr || !userId) {
-      return NextResponse.json(
-        { connected: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    // ✅ Look up THIS user's saved Coinbase keys (correct table)
+    // 1) Do we have saved keys?
     const { data: keys, error: keyError } = await admin
       .from("coinbase_keys")
       .select("api_key_name, private_key, key_alg, updated_at")
@@ -56,32 +48,51 @@ export async function GET(req: Request) {
       .maybeSingle();
 
     if (keyError || !keys) {
-      return NextResponse.json(
-        { connected: false, reason: "no_keys" },
-        { status: 200 }
-      );
+      return json(200, { connected: false, reason: "no_keys" });
     }
 
     if (!keys.api_key_name?.trim() || !keys.private_key?.trim()) {
-      return NextResponse.json(
-        { connected: false, reason: "invalid_keys" },
-        { status: 200 }
-      );
+      return json(200, { connected: false, reason: "invalid_keys" });
     }
 
-    return NextResponse.json(
-      {
-        connected: true,
+    // 2) REAL verification: call balances endpoint (hits Coinbase using user keys)
+    // This avoids duplicating JWT/signing logic here.
+    const probeUrl = new URL("/api/coinbase/balances", req.url).toString();
+    const probeRes = await fetch(probeUrl, {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    let probeJson: any = null;
+    try {
+      probeJson = await probeRes.json();
+    } catch {
+      probeJson = null;
+    }
+
+    const probeOk = !!(probeRes.ok && probeJson && probeJson.ok === true);
+
+    if (!probeOk) {
+      return json(200, {
+        connected: false,
+        reason: "coinbase_auth_failed",
+        status: probeJson?.status ?? probeRes.status,
+        hint:
+          probeJson?.error ||
+          "Check Coinbase API key permissions (View + Trade), portfolio, and that the key is Active.",
         alg: keys.key_alg ?? "unknown",
         updated_at: keys.updated_at ?? null,
-      },
-      { status: 200 }
-    );
+      });
+    }
+
+    return json(200, {
+      connected: true,
+      reason: "ok",
+      alg: keys.key_alg ?? "unknown",
+      updated_at: keys.updated_at ?? null,
+    });
   } catch (err) {
     console.error("coinbase/status error", err);
-    return NextResponse.json(
-      { connected: false, error: "server_error" },
-      { status: 500 }
-    );
+    return json(500, { connected: false, reason: "server_error" });
   }
 }
