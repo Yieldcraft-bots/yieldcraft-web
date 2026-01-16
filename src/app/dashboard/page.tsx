@@ -118,7 +118,7 @@ export default function DashboardPage() {
     LIVE_ALLOWED: false,
   });
 
-  // ✅ NEW: reasons for trading status (for clickable bubble later)
+  // ✅ Explain payload (used for click + title)
   const [tradeExplain, setTradeExplain] = useState<{
     traffic: "green" | "red" | "unknown";
     blocking: string[];
@@ -126,10 +126,12 @@ export default function DashboardPage() {
     rawStatus?: string;
   }>({ traffic: "unknown", blocking: [], next_steps: [] });
 
+  // ✅ NEW: store coinbase/status raw so we can show exact reason on click
+  const [coinbaseStatusRaw, setCoinbaseStatusRaw] = useState<any>(null);
+
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
   const runCheck = useCallback(async () => {
-    // Prevent overlapping runs (auto-refresh + manual click)
     if (inFlightRef.current) return;
     inFlightRef.current = true;
 
@@ -284,6 +286,9 @@ export default function DashboardPage() {
       }
 
       // ✅ 5) USER Coinbase status (multi-user, server-verified)
+      let userKeysOk = false;
+      let userAlg: string | undefined = undefined;
+
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
@@ -299,16 +304,21 @@ export default function DashboardPage() {
           j = null;
         }
 
-        const ok = !!(r.ok && j && j.connected === true);
+        setCoinbaseStatusRaw(j);
+
+        userKeysOk = !!(r.ok && j && j.connected === true);
+        userAlg = j?.alg;
 
         if (!mountedRef.current) return;
 
-        setUserCoinbaseConn(ok ? "ok" : "no");
-        setUserCoinbaseMeta({ alg: j?.alg });
+        setUserCoinbaseConn(userKeysOk ? "ok" : "no");
+        setUserCoinbaseMeta({ alg: userAlg });
       } catch {
         if (!mountedRef.current) return;
+        setCoinbaseStatusRaw({ connected: false, error: "network_error" });
         setUserCoinbaseConn("no");
         setUserCoinbaseMeta({});
+        userKeysOk = false;
       }
 
       // ✅ 5b) USER Balances (read-only, server-verified)
@@ -382,7 +392,7 @@ export default function DashboardPage() {
         const ok = !!(r.ok && j && j.ok === true);
         setTradeConn(ok ? "ok" : "no");
 
-        // Build explain payload for a future clickable bubble
+        // Build explain payload
         const blocking: string[] = [];
         const next_steps: string[] = [];
 
@@ -391,8 +401,8 @@ export default function DashboardPage() {
           next_steps.push("Refresh and try again. If it persists, reconnect Coinbase keys.");
         }
 
-        // If user keys aren't connected, that will block live trading even if platform is up
-        if (userCoinbaseConn !== "ok") {
+        // IMPORTANT: use the *fresh* result (userKeysOk), not stale React state
+        if (!userKeysOk) {
           blocking.push("No Coinbase keys found for your account.");
           next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
         }
@@ -433,12 +443,11 @@ export default function DashboardPage() {
     } finally {
       inFlightRef.current = false;
     }
-  }, [router, userCoinbaseConn]);
+  }, [router]);
 
   useEffect(() => {
     mountedRef.current = true;
     runCheck();
-
     return () => {
       mountedRef.current = false;
     };
@@ -457,7 +466,6 @@ export default function DashboardPage() {
       clear();
       if (document.visibilityState !== "visible") return;
       intervalRef.current = window.setInterval(() => {
-        // Only auto-refresh if tab is visible
         if (document.visibilityState === "visible") runCheck();
       }, AUTO_REFRESH_MS);
     };
@@ -558,7 +566,6 @@ export default function DashboardPage() {
   const shownEmail = displayEmail ?? userEmail ?? null;
 
   const balancesBox = (() => {
-    // If user hasn’t connected keys yet
     if (userCoinbaseConn !== "ok") {
       return (
         <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
@@ -568,7 +575,6 @@ export default function DashboardPage() {
       );
     }
 
-    // Connected, but balances probe failed
     if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
       const msg =
         (balances as any)?.error ||
@@ -627,6 +633,24 @@ export default function DashboardPage() {
     );
   })();
 
+  const coinbaseClickMsg = () => {
+    if (userCoinbaseConn === "ok") return `✅ Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
+
+    const r = coinbaseStatusRaw || {};
+    const reason = r?.reason || r?.error || "unknown";
+    if (reason === "no_keys") return "❌ No keys saved yet.\n\nNext: Go to Connect Keys and click Verify & Continue.";
+    if (reason === "invalid_keys") return "❌ Keys saved but invalid.\n\nNext: Re-paste using Coinbase copy icons (don’t drag-select).";
+    if (reason === "not_authenticated") return "❌ Not signed in.\n\nNext: Log out and back in, then re-check.";
+    return `❌ Coinbase not connected.\nReason: ${reason}\n\nNext: Go to Connect Keys and click Verify & Continue.`;
+  };
+
+  const tradingClickMsg = () => {
+    if (tradeExplain.traffic === "green") return "✅ Trading status verified (per-user).";
+    const blocks = tradeExplain.blocking.length ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}` : "";
+    const steps = tradeExplain.next_steps.length ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}` : "";
+    return `⚠️ Trading is not green.${blocks}${steps}`;
+  };
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <section className="border-b border-slate-800 bg-gradient-to-b from-slate-950 to-slate-900">
@@ -652,18 +676,16 @@ export default function DashboardPage() {
                 PLAN ACCESS: {planP.label}
               </span>
 
-              {/* ✅ Now truly multi-user */}
-              <span
+              {/* ✅ Clickable Coinbase pill */}
+              <button
+                type="button"
+                onClick={() => alert(coinbaseClickMsg())}
                 className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", userKeysP.wrap].join(" ")}
-                title={
-                  userCoinbaseConn === "ok"
-                    ? `Verified keys saved (alg: ${userCoinbaseMeta.alg ?? "unknown"})`
-                    : "No saved keys found for this user yet."
-                }
+                title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
                 YOUR COINBASE: {userKeysP.label}
-              </span>
+              </button>
 
               {/* ✅ BALANCES pill */}
               <span
@@ -679,9 +701,11 @@ export default function DashboardPage() {
                 PLATFORM ENGINE: {platP.label}
               </span>
 
-              {/* ✅ Trading status now reflects REAL per-user pulse-trade status */}
-              <span
-                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold cursor-help", tradeP.wrap].join(" ")}
+              {/* ✅ Clickable Trading Status pill */}
+              <button
+                type="button"
+                onClick={() => alert(tradingClickMsg())}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", tradeP.wrap].join(" ")}
                 title={
                   tradeExplain.traffic === "green"
                     ? "Trading status verified (per-user)."
@@ -692,7 +716,7 @@ export default function DashboardPage() {
               >
                 <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
                 TRADING STATUS: {tradeP.label}
-              </span>
+              </button>
 
               <span className="text-xs text-slate-400">
                 Last check: <span className="text-slate-200">{lastCheck ? fmt(lastCheck) : "—"}</span>
@@ -760,7 +784,6 @@ export default function DashboardPage() {
                   Trading is <span className={armedLabel.tone}>{armedLabel.title}</span> unless you explicitly arm it.
                 </div>
 
-                {/* ✅ Balances UI (no DevTools needed) */}
                 {balancesBox}
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
