@@ -126,10 +126,29 @@ export default function DashboardPage() {
     rawStatus?: string;
   }>({ traffic: "unknown", blocking: [], next_steps: [] });
 
-  // ✅ NEW: store coinbase/status raw so we can show exact reason on click
+  // ✅ store coinbase/status raw so we can show exact reason on click
   const [coinbaseStatusRaw, setCoinbaseStatusRaw] = useState<any>(null);
 
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
+
+  // ✅ UI-only: pill details modal (no trading impact)
+  const [pillModal, setPillModal] = useState<{
+    open: boolean;
+    title: string;
+    tone: "green" | "red" | "neutral";
+    body: string[];
+    footer?: string[];
+  }>({ open: false, title: "", tone: "neutral", body: [] });
+
+  const openPillModal = (p: {
+    title: string;
+    tone: "green" | "red" | "neutral";
+    body: string[];
+    footer?: string[];
+  }) => setPillModal({ open: true, ...p });
+
+  const closePillModal = () =>
+    setPillModal({ open: false, title: "", tone: "neutral", body: [] });
 
   const runCheck = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -598,12 +617,28 @@ export default function DashboardPage() {
       <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
         <div className="flex items-center justify-between">
           <p className="font-semibold text-slate-100">Coinbase Balances</p>
-          <span
+          <button
+            type="button"
+            onClick={() => {
+              openPillModal({
+                title: "BALANCES",
+                tone: balancesConn === "ok" ? "green" : "red",
+                body: [
+                  `Available USD: ${fmtMoney(ok.available_usd)}`,
+                  `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
+                  `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
+                  `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
+                  `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
+                ],
+                footer: ["Balances are read-only and server-verified."],
+              });
+            }}
             className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold", balP.wrap].join(" ")}
+            title="Click for details"
           >
             <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
             BALANCES: {balP.label}
-          </span>
+          </button>
         </div>
 
         <div className="mt-3 space-y-2">
@@ -653,6 +688,77 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
+      {/* ✅ Pill Details Modal (UI-only) */}
+      {pillModal.open && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={closePillModal}
+        >
+          <div
+            className="w-full max-w-lg rounded-3xl border border-slate-800 bg-slate-950 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status details</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-100">{pillModal.title}</h2>
+
+                <div className="mt-2">
+                  <span
+                    className={[
+                      "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold ring-1",
+                      pillModal.tone === "green"
+                        ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/25"
+                        : pillModal.tone === "red"
+                        ? "bg-rose-500/15 text-rose-200 ring-rose-500/25"
+                        : "bg-slate-800/60 text-slate-200 ring-slate-700",
+                    ].join(" ")}
+                  >
+                    <span
+                      className={[
+                        "h-2 w-2 rounded-full",
+                        pillModal.tone === "green"
+                          ? "bg-emerald-400"
+                          : pillModal.tone === "red"
+                          ? "bg-rose-400"
+                          : "bg-slate-300",
+                      ].join(" ")}
+                    />
+                    {pillModal.tone === "green" ? "GREEN" : pillModal.tone === "red" ? "RED" : "INFO"}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closePillModal}
+                className="rounded-full border border-slate-700 bg-slate-900/40 px-3 py-1 text-xs font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/70"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2 text-sm text-slate-200">
+              {pillModal.body.map((line, idx) => (
+                <p key={idx} className="text-slate-200">
+                  {line}
+                </p>
+              ))}
+            </div>
+
+            {pillModal.footer?.length ? (
+              <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/35 p-4 text-xs text-slate-400">
+                {pillModal.footer.map((line, idx) => (
+                  <p key={idx}>{line}</p>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       <section className="border-b border-slate-800 bg-gradient-to-b from-slate-950 to-slate-900">
         <div className="mx-auto max-w-6xl px-6 py-12">
           <div className="flex flex-col gap-6">
@@ -679,7 +785,17 @@ export default function DashboardPage() {
               {/* ✅ Clickable Coinbase pill */}
               <button
                 type="button"
-                onClick={() => alert(coinbaseClickMsg())}
+                onClick={() => {
+                  const msg = coinbaseClickMsg();
+                  const lines = msg.split("\n").map((s) => s.trim()).filter(Boolean);
+
+                  openPillModal({
+                    title: "YOUR COINBASE",
+                    tone: userCoinbaseConn === "ok" ? "green" : "red",
+                    body: lines,
+                    footer: ["This is your personal connection status (server-verified)."],
+                  });
+                }}
                 className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", userKeysP.wrap].join(" ")}
                 title="Click for details"
               >
@@ -687,24 +803,84 @@ export default function DashboardPage() {
                 YOUR COINBASE: {userKeysP.label}
               </button>
 
-              {/* ✅ BALANCES pill */}
-              <span
+              {/* ✅ BALANCES pill (clickable) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
+                    const msg =
+                      (balances as any)?.error ||
+                      (balances as any)?.details ||
+                      "Unable to fetch balances (check Coinbase key permissions).";
+
+                    openPillModal({
+                      title: "BALANCES",
+                      tone: "red",
+                      body: [String(msg), "Common cause: API key missing required scopes (View/Trade) or wrong portfolio."],
+                      footer: ["Balances are read-only and server-verified."],
+                    });
+                    return;
+                  }
+
+                  const ok = balances as BalancesOk;
+
+                  openPillModal({
+                    title: "BALANCES",
+                    tone: "green",
+                    body: [
+                      `Available USD: ${fmtMoney(ok.available_usd)}`,
+                      `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
+                      `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
+                      `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
+                      `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
+                    ],
+                    footer: ["Balances are read-only and server-verified."],
+                  });
+                }}
                 className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", balP.wrap].join(" ")}
-                title="Read-only balances snapshot"
+                title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
                 BALANCES: {balP.label}
-              </span>
+              </button>
 
-              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", platP.wrap].join(" ")}>
+              {/* ✅ PLATFORM ENGINE pill (clickable) */}
+              <button
+                type="button"
+                onClick={() => {
+                  const ok = platformEngineConn === "ok" && platformEngineMeta.authOk;
+                  openPillModal({
+                    title: "PLATFORM ENGINE",
+                    tone: ok ? "green" : "red",
+                    body: [
+                      ok ? "✅ Platform engine can authenticate to Coinbase (server env keys)." : "❌ Platform engine auth is failing.",
+                      `Auth status: ${platformEngineMeta.authStatus ?? "—"}`,
+                      `Mode: ${platformEngineMeta.mode ?? "—"}`,
+                    ],
+                    footer: ["This is the platform’s server connectivity (not your personal keys)."],
+                  });
+                }}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", platP.wrap].join(" ")}
+                title="Click for details"
+              >
                 <span className={["h-2 w-2 rounded-full", platP.dot].join(" ")} />
                 PLATFORM ENGINE: {platP.label}
-              </span>
+              </button>
 
               {/* ✅ Clickable Trading Status pill */}
               <button
                 type="button"
-                onClick={() => alert(tradingClickMsg())}
+                onClick={() => {
+                  const msg = tradingClickMsg();
+                  const lines = msg.split("\n").map((s) => s.trim()).filter(Boolean);
+
+                  openPillModal({
+                    title: "TRADING STATUS",
+                    tone: tradeExplain.traffic === "green" ? "green" : "red",
+                    body: lines,
+                    footer: ["This is per-user Pulse status (server-verified)."],
+                  });
+                }}
                 className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", tradeP.wrap].join(" ")}
                 title={
                   tradeExplain.traffic === "green"
