@@ -14,7 +14,17 @@ function escapeHtml(s: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function cleanEmail(input: unknown, fallback: string) {
+  if (typeof input !== "string") return fallback;
+  const v = input.trim();
+  if (!v) return fallback;
+  // very light sanity check (Resend will validate too)
+  if (!v.includes("@") || v.length > 254) return fallback;
+  return v;
 }
 
 export async function POST(req: Request) {
@@ -25,10 +35,11 @@ export async function POST(req: Request) {
     // optional JSON body: { "to": "email@domain.com", "name": "Donnie" }
     let to = "dk@yieldcraft.co";
     let name = "";
+
     try {
       const body = await req.json();
-      if (body?.to && typeof body.to === "string") to = body.to;
-      if (body?.name && typeof body.name === "string") name = body.name;
+      to = cleanEmail(body?.to, to);
+      if (typeof body?.name === "string") name = body.name.trim();
     } catch {
       // ignore if no JSON body
     }
@@ -39,8 +50,9 @@ export async function POST(req: Request) {
     const subject = "Welcome to YieldCraft ✅";
 
     const html = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif; line-height: 1.5; color: #0f172a;">
+      <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; line-height:1.5; color:#0f172a;">
         <h2 style="margin:0 0 10px;">Welcome to YieldCraft ✅</h2>
+
         <p style="margin:0 0 12px;">
           ${safeName ? `Hey ${safeName}, ` : ""}you’re in.
           YieldCraft is built for <strong>safe, disciplined execution</strong> — not hype.
@@ -57,7 +69,11 @@ export async function POST(req: Request) {
         <ol style="margin:0 0 14px; padding-left:18px;">
           <li><strong>Connect Coinbase</strong> and make sure your status is green.</li>
           <li>Start small, stay consistent. The goal is repeatable behavior, not adrenaline.</li>
-          <li>Watch the logs: we show <em>why</em> a trade did or didn’t fire.</li>
+          <li>
+            Check your <strong>Decision Status</strong>: you’ll see whether the system is
+            <strong>Active</strong>, <strong>Waiting</strong>, or <strong>Protected</strong> — and why
+            (fees, volatility, confidence, cooldown, or risk limits).
+          </li>
         </ol>
 
         <div style="padding:12px 14px; border-left:4px solid #0ea5e9; background:#ecfeff; border-radius:10px; margin:0 0 14px;">
