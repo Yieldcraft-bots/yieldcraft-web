@@ -73,7 +73,6 @@ function msSince(iso?: string | null) {
 
 // ---------- logging (safe) ----------
 function log(runId: string, event: string, data?: any) {
-  // Never log secrets/keys. Keep logs compact and structured.
   const payload = {
     t: new Date().toISOString(),
     runId,
@@ -85,7 +84,6 @@ function log(runId: string, event: string, data?: any) {
 
 // ---------- auth ----------
 function okAuth(req: Request) {
-  // accept either CRON_SECRET or PULSE_MANAGER_SECRET
   const secret = (process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "").trim();
   if (!secret) return false;
 
@@ -109,7 +107,6 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
 
-  // uri claim should NOT include query string
   const pathForUri = path.split("?")[0];
   const uri = `${method} api.coinbase.com${pathForUri}`;
 
@@ -120,7 +117,7 @@ function buildCdpJwt(method: "GET" | "POST", path: string) {
   );
 }
 
-async function cbFetch(path: string) {
+async function cbGet(path: string) {
   const token = buildCdpJwt("GET", path);
   const res = await fetch(`https://api.coinbase.com${path}`, {
     method: "GET",
@@ -131,9 +128,23 @@ async function cbFetch(path: string) {
   return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
 }
 
+async function cbPost(path: string, payload: any) {
+  const token = buildCdpJwt("POST", path);
+  const res = await fetch(`https://api.coinbase.com${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
+}
+
 // ---------- position ----------
 async function fetchBtcPosition() {
-  const r = await cbFetch("/api/v3/brokerage/accounts");
+  const r = await cbGet("/api/v3/brokerage/accounts");
 
   if (!r.ok) {
     return {
@@ -167,7 +178,7 @@ async function fetchLastBuyFill(): Promise<
     PRODUCT_ID
   )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
 
-  const r = await cbFetch(path);
+  const r = await cbGet(path);
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
@@ -206,7 +217,7 @@ async function fetchPeakWindow(): Promise<
     endTs
   )}&granularity=${encodeURIComponent(gran)}`;
 
-  const r = await cbFetch(path);
+  const r = await cbGet(path);
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const candles = (r.json as any)?.candles || [];
@@ -229,37 +240,27 @@ async function fetchPeakWindow(): Promise<
   return { ok: true, peak, last, startTs, endTs };
 }
 
-// ---------- call pulse-trade ----------
-function siteBaseUrl() {
-  return (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "https://yieldcraft.co").replace(
-    /\/$/,
-    ""
-  );
+// ---------- LIVE order placement (direct, safe) ----------
+async function placeBuyMarket(quoteUsd: string) {
+  const path = "/api/v3/brokerage/orders";
+  const payload = {
+    client_order_id: `yc_mgr_buy_${Date.now()}`,
+    product_id: PRODUCT_ID,
+    side: "BUY",
+    order_configuration: { market_market_ioc: { quote_size: quoteUsd } },
+  };
+  return cbPost(path, payload);
 }
-function authHeadersForInternalCall() {
-  const cronSecret = (process.env.CRON_SECRET || "").trim();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  // pulse-trade doesn't require auth, but leaving header is fine
-  if (cronSecret) headers["x-cron-secret"] = cronSecret;
-  return headers;
-}
-async function callPulseTrade(payload: any) {
-  const url = `${siteBaseUrl()}/api/pulse-trade`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: authHeadersForInternalCall(),
-    body: JSON.stringify(payload),
-    cache: "no-store",
-  });
 
-  const text = await res.text();
-  return { ok: res.ok, status: res.status, data: safeJsonParse(text) ?? text };
-}
-async function placeSell(baseSize: string) {
-  return callPulseTrade({ action: "place_order", side: "SELL", base_size: baseSize });
-}
-async function placeBuy(quoteSize: string) {
-  return callPulseTrade({ action: "place_order", side: "BUY", quote_size: quoteSize });
+async function placeSellMarket(baseSize: string) {
+  const path = "/api/v3/brokerage/orders";
+  const payload = {
+    client_order_id: `yc_mgr_sell_${Date.now()}`,
+    product_id: PRODUCT_ID,
+    side: "SELL",
+    order_configuration: { market_market_ioc: { base_size: baseSize } },
+  };
+  return cbPost(path, payload);
 }
 
 // ---------- main runner (entries + exits) ----------
@@ -276,10 +277,18 @@ async function runManager(runId: string) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  // exits params
+  // exits params (profit + trail)
   const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
   const trailArmBps = num(process.env.TRAIL_ARM_BPS, 150);
   const trailOffsetBps = num(process.env.TRAIL_OFFSET_BPS, 50);
+
+  // NEW: protection exits (loss-side)
+  const hardStopEnabled = truthy(process.env.PULSE_HARD_STOP_ENABLED);
+  const hardStopLossBps = num(process.env.PULSE_HARD_STOP_LOSS_BPS, 0); // positive number; triggers at pnl <= -X
+
+  const timeStopEnabled = truthy(process.env.PULSE_TIME_STOP_ENABLED);
+  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, 0); // 0 disables unless flag on
+  const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
   // entry size
   const entryQuoteUsd = fmtQuoteSizeUsd(num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0));
@@ -297,7 +306,6 @@ async function runManager(runId: string) {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  // First log: snapshot (safe)
   log(runId, "START", {
     gates,
     position_ok: position.ok,
@@ -309,6 +317,10 @@ async function runManager(runId: string) {
     profitTargetBps,
     trailArmBps,
     trailOffsetBps,
+    hardStopEnabled,
+    hardStopLossBps,
+    timeStopEnabled,
+    maxHoldMinutes,
   });
 
   if (!gates.LIVE_ALLOWED) {
@@ -366,7 +378,7 @@ async function runManager(runId: string) {
     }
 
     log(runId, "ACTION", { mode: "ENTRY_BUY", quote_usd: entryQuoteUsd });
-    const buy = await placeBuy(entryQuoteUsd);
+    const buy = await placeBuyMarket(entryQuoteUsd);
     log(runId, "RESULT", { mode: "ENTRY_BUY", buy_ok: buy.ok, status: buy.status });
     return { ok: buy.ok, mode: "ENTRY_BUY", gates, position, cooldown, buy };
   }
@@ -377,7 +389,6 @@ async function runManager(runId: string) {
     return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown };
   }
 
-  // entry info for exits
   if (!lastBuy.ok) {
     log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_entry", error: lastBuy.error });
     return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_entry", lastBuy };
@@ -393,40 +404,67 @@ async function runManager(runId: string) {
   const current = peak.last;
   const peakPrice = peak.peak;
 
-  const pnlBps = ((current - entryPrice) / entryPrice) * 10_000;
-  const drawdownFromPeakBps = ((peakPrice - current) / peakPrice) * 10_000;
+  const pnlBpsRaw = ((current - entryPrice) / entryPrice) * 10_000;
+  const pnlBps = Number(pnlBpsRaw.toFixed(2));
 
+  const drawdownFromPeakBpsRaw = ((peakPrice - current) / peakPrice) * 10_000;
+  const drawdownFromPeakBps = Number(drawdownFromPeakBpsRaw.toFixed(2));
+
+  const heldMs = msSince(lastBuy.entryTime);
+
+  // Profit / trailing exits (existing)
   const shouldTakeProfit = pnlBps >= profitTargetBps;
   const trailArmed = pnlBps >= trailArmBps;
   const shouldTrailStop = trailArmed && drawdownFromPeakBps >= trailOffsetBps;
+
+  // NEW: hard stop (loss-side)
+  const shouldHardStop =
+    hardStopEnabled &&
+    hardStopLossBps > 0 &&
+    pnlBps <= -Math.abs(hardStopLossBps);
+
+  // NEW: time stop (stress + exposure control)
+  const shouldTimeStop =
+    timeStopEnabled &&
+    maxHoldMs > 0 &&
+    Number.isFinite(heldMs) &&
+    heldMs >= maxHoldMs &&
+    pnlBps < 0; // only cut if still down
 
   const decision = {
     entryPrice,
     entryTime: lastBuy.entryTime,
     entryQty: Number.isFinite(lastBuy.entryQty) ? lastBuy.entryQty : null,
+    heldMs: Number.isFinite(heldMs) ? heldMs : null,
     candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
     current,
     peakPrice,
-    pnlBps: Number(pnlBps.toFixed(2)),
-    drawdownFromPeakBps: Number(drawdownFromPeakBps.toFixed(2)),
+    pnlBps,
+    drawdownFromPeakBps,
     profitTargetBps,
     trailArmBps,
     trailOffsetBps,
     shouldTakeProfit,
     trailArmed,
     shouldTrailStop,
+    // new exits
+    hardStopEnabled,
+    hardStopLossBps,
+    shouldHardStop,
+    timeStopEnabled,
+    maxHoldMinutes,
+    shouldTimeStop,
   };
 
-  if (!shouldTakeProfit && !shouldTrailStop) {
+  if (!shouldHardStop && !shouldTimeStop && !shouldTakeProfit && !shouldTrailStop) {
     log(runId, "DECISION", {
       mode: "HOLD",
       reason: "exit conditions not met",
       decision: {
-        pnlBps: decision.pnlBps,
-        drawdownFromPeakBps: decision.drawdownFromPeakBps,
-        profitTargetBps,
-        trailArmBps,
-        trailOffsetBps,
+        pnlBps,
+        drawdownFromPeakBps,
+        shouldHardStop,
+        shouldTimeStop,
         shouldTakeProfit,
         trailArmed,
         shouldTrailStop,
@@ -442,19 +480,27 @@ async function runManager(runId: string) {
     return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, decision, would_sell_base_size: baseSize };
   }
 
+  const reason =
+    shouldHardStop ? "hard_stop" :
+    shouldTimeStop ? "time_stop" :
+    shouldTakeProfit ? "take_profit" :
+    "trail_stop";
+
   log(runId, "ACTION", {
     mode: "EXIT_SELL",
     baseSize,
-    reason: shouldTakeProfit ? "take_profit" : "trail_stop",
+    reason,
     decision: {
-      pnlBps: decision.pnlBps,
-      drawdownFromPeakBps: decision.drawdownFromPeakBps,
+      pnlBps,
+      drawdownFromPeakBps,
+      shouldHardStop,
+      shouldTimeStop,
       shouldTakeProfit,
       shouldTrailStop,
     },
   });
 
-  const sell = await placeSell(baseSize);
+  const sell = await placeSellMarket(baseSize);
   log(runId, "RESULT", { mode: "EXIT_SELL", sell_ok: sell.ok, status: sell.status });
   return { ok: sell.ok, mode: "EXIT_SELL", gates, position, cooldown, decision, sell };
 }
@@ -514,7 +560,6 @@ export async function POST(req: Request) {
     return json(200, { ok: true, runId, status: "PULSE_MANAGER_READY", gates, position });
   }
 
-  // default: run
   const result = await runManager(runId);
   log(runId, "END", { ok: result.ok, mode: (result as any)?.mode });
 
