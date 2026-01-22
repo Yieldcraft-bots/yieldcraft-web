@@ -277,20 +277,44 @@ async function runManager(runId: string) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  // exits params (profit + trail)
-  const profitTargetBps = num(process.env.PROFIT_TARGET_BPS, 120);
-  const trailArmBps = num(process.env.TRAIL_ARM_BPS, 150);
-  const trailOffsetBps = num(process.env.TRAIL_OFFSET_BPS, 50);
+  // exits params (profit + trail) with Recon-owned fallbacks
+  const profitTargetBps = num(
+    process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
+    120
+  );
+  const trailArmBps = num(
+    process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS,
+    150
+  );
+  const trailOffsetBps = num(
+    process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS,
+    50
+  );
+
+  // Recon contract knobs (read-only; enforcement still via PULSE_* flags below)
+  const ycDefaultHardStopBps = num(process.env.YC_DEFAULT_HARD_STOP_BPS, 0);
+  const ycDefaultTimeStopMin = num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0);
+  const ycDailyMaxLossBps = num(process.env.YC_DAILY_MAX_LOSS_BPS, 0);
+  const ycMonthlyMaxDdBps = num(process.env.YC_MONTHLY_MAX_DD_BPS, 0);
+  const ycDefaultAllocationPct = num(process.env.YC_DEFAULT_ALLOCATION_PCT, 0);
 
   // NEW: protection exits (loss-side)
+  // Keep current behavior: only enabled if PULSE_* flags are on.
+  // If enabled, default values can come from YC_* contract.
   const hardStopEnabled = truthy(process.env.PULSE_HARD_STOP_ENABLED);
-  const hardStopLossBps = num(process.env.PULSE_HARD_STOP_LOSS_BPS, 0); // positive number; triggers at pnl <= -X
+  const hardStopLossBps = num(
+    process.env.PULSE_HARD_STOP_LOSS_BPS,
+    ycDefaultHardStopBps
+  ); // triggers at pnl <= -X
 
   const timeStopEnabled = truthy(process.env.PULSE_TIME_STOP_ENABLED);
-  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, 0); // 0 disables unless flag on
+  const maxHoldMinutes = num(
+    process.env.PULSE_MAX_HOLD_MINUTES,
+    ycDefaultTimeStopMin
+  ); // 0 disables unless flag on
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
-  // entry size
+  // entry size (still explicit dollars for now; allocation% comes later via Recon sizing)
   const entryQuoteUsd = fmtQuoteSizeUsd(num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0));
 
   const position = await fetchBtcPosition();
@@ -321,6 +345,14 @@ async function runManager(runId: string) {
     hardStopLossBps,
     timeStopEnabled,
     maxHoldMinutes,
+    // Recon contract (observability only)
+    yc: {
+      defaultAllocationPct: ycDefaultAllocationPct,
+      defaultHardStopBps: ycDefaultHardStopBps,
+      defaultTimeStopMin: ycDefaultTimeStopMin,
+      dailyMaxLossBps: ycDailyMaxLossBps,
+      monthlyMaxDdBps: ycMonthlyMaxDdBps,
+    },
   });
 
   if (!gates.LIVE_ALLOWED) {
@@ -454,6 +486,12 @@ async function runManager(runId: string) {
     timeStopEnabled,
     maxHoldMinutes,
     shouldTimeStop,
+    // recon contract telemetry
+    yc: {
+      defaultAllocationPct: ycDefaultAllocationPct,
+      dailyMaxLossBps: ycDailyMaxLossBps,
+      monthlyMaxDdBps: ycMonthlyMaxDdBps,
+    },
   };
 
   if (!shouldHardStop && !shouldTimeStop && !shouldTakeProfit && !shouldTrailStop) {
@@ -509,7 +547,9 @@ async function runManager(runId: string) {
 export async function GET(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
-  const runId = (crypto as any).randomUUID ? (crypto as any).randomUUID() : crypto.randomBytes(8).toString("hex");
+  const runId = (crypto as any).randomUUID
+    ? (crypto as any).randomUUID()
+    : crypto.randomBytes(8).toString("hex");
   log(runId, "REQUEST", { method: "GET", url: req.url });
 
   const result = await runManager(runId);
@@ -521,7 +561,9 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
-  const runId = (crypto as any).randomUUID ? (crypto as any).randomUUID() : crypto.randomBytes(8).toString("hex");
+  const runId = (crypto as any).randomUUID
+    ? (crypto as any).randomUUID()
+    : crypto.randomBytes(8).toString("hex");
   log(runId, "REQUEST", { method: "POST", url: req.url });
 
   let body: any = null;
