@@ -8,8 +8,8 @@ const COINBASE_API_SETTINGS_URL = "https://www.coinbase.com/settings/api";
 const COINBASE_SIGNUP_FALLBACK_URL = "https://www.coinbase.com/signup";
 
 function getCoinbaseSignupUrl(): string {
-  // If you set NEXT_PUBLIC_COINBASE_REF_URL in Vercel, this will use your affiliate/ref link.
-  // The UI will NOT say "affiliate" anywhere.
+  // Uses your ref/affiliate link if set in Vercel as NEXT_PUBLIC_COINBASE_REF_URL.
+  // UI never needs to say “affiliate” anywhere.
   const v = process.env.NEXT_PUBLIC_COINBASE_REF_URL;
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : COINBASE_SIGNUP_FALLBACK_URL;
 }
@@ -29,11 +29,11 @@ export default function QuickStartPage() {
         {/* HERO */}
         <div className="mb-10 max-w-3xl">
           <p className="text-xs font-semibold tracking-[0.32em] text-sky-400 uppercase">
-            Quick Start Guide
+            Quick Start (Order-Enforced)
           </p>
 
           <h1 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
-            Join → Subscribe → Connect →{" "}
+            Join → Subscribe → Coinbase → Connect →{" "}
             <span className="text-sky-300">Confirm green lights</span>.
           </h1>
 
@@ -52,7 +52,9 @@ export default function QuickStartPage() {
                 </p>
                 <p className="mt-1 text-xs text-slate-400">
                   Your path is simple:{" "}
-                  <span className="text-slate-200">Plan → Coinbase → Connect → Dashboard</span>
+                  <span className="text-slate-200">
+                    Join → Plan → Coinbase → Connect → Dashboard
+                  </span>
                 </p>
               </div>
 
@@ -65,11 +67,12 @@ export default function QuickStartPage() {
               </button>
             </div>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-4">
-              <MiniStep title="1) Plan" subtitle="Choose your tier" active />
-              <MiniStep title="2) Coinbase" subtitle="API key setup" />
-              <MiniStep title="3) Connect" subtitle="Paste keys securely" />
-              <MiniStep title="4) Dashboard" subtitle="Watch green lights" />
+            <div className="mt-5 grid gap-3 md:grid-cols-5">
+              <MiniStep title="1) Join" subtitle="Create account / login" active />
+              <MiniStep title="2) Plan" subtitle="Subscribe" />
+              <MiniStep title="3) Coinbase" subtitle="Account choice + API" />
+              <MiniStep title="4) Connect" subtitle="Paste keys securely" />
+              <MiniStep title="5) Dashboard" subtitle="Confirm lights" />
             </div>
 
             <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
@@ -136,7 +139,7 @@ export default function QuickStartPage() {
             <p className="text-sm font-semibold text-sky-200">Best practice (recommended)</p>
             <p className="mt-1 text-xs text-slate-300">
               Use a dedicated Coinbase account or dedicated portfolio for bots. It keeps personal holdings separate and makes position tracking cleaner.
-              If you already hold BTC in the same account, the system may detect an existing position when managing trades.
+              If you already hold BTC in the same account, the system may treat that as an existing position when managing trades.
             </p>
           </div>
         </section>
@@ -159,21 +162,9 @@ export default function QuickStartPage() {
           </div>
 
           <div className="mt-5 grid gap-4 md:grid-cols-3">
-            <StatusItem
-              color="green"
-              title="Connected"
-              description="Exchange auth is valid and responding."
-            />
-            <StatusItem
-              color="green"
-              title="Engine Armed"
-              description="Your plan is active and bots are enabled."
-            />
-            <StatusItem
-              color="yellow"
-              title="Waiting for Signal"
-              description="No trade yet — conditions not met (normal)."
-            />
+            <StatusItem color="green" title="Connected" description="Exchange auth is valid and responding." />
+            <StatusItem color="green" title="Engine Armed" description="Your plan is active and bots are enabled." />
+            <StatusItem color="yellow" title="Waiting for Signal" description="No trade yet — conditions not met (normal)." />
           </div>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -204,30 +195,50 @@ export default function QuickStartPage() {
         {/* STEPS */}
         <div id="steps" className="space-y-6">
           <StepCard
-            id="step-plan"
+            id="step-join"
             number={1}
-            title="Pick a plan (Starter → Pro → Atlas)"
+            title="Join / Log in to YieldCraft"
             bullets={[
-              "Starter is perfect to begin",
-              "Pro unlocks the full bot suite",
-              "Atlas is a buy-only long-term allocation you can bundle anytime",
+              "Create your YieldCraft login (or sign in)",
+              "After login, come right back here to Quick Start",
+              "This unlocks your plan + secure key storage",
             ]}
-            primary={{ label: "Go to Pricing", internalHref: "/pricing" }}
+            primary={{ label: "Join", internalHref: "/join" }}
+            secondary={{ label: "Login", internalHref: "/login" }}
             comfort={{
               title: "Comfort check",
               lines: [
-                "After checkout, return here and continue to Coinbase.",
-                "If you’re brand-new, start small — consistency beats size.",
+                "If you’re already logged in, this step is complete.",
+                "If you got here from a phone, it’s okay — this page will guide you.",
+              ],
+            }}
+          />
+
+          <StepCard
+            id="step-plan"
+            number={2}
+            title="Subscribe to a plan (required before connecting Coinbase)"
+            bullets={[
+              "Choose a plan that includes Pulse (core engine)",
+              "After checkout, return here (or reopen Quick Start)",
+              "Once active, the Coinbase step becomes your focus",
+            ]}
+            primary={{ label: "Choose a Plan", internalHref: "/pricing" }}
+            comfort={{
+              title: "Why plan before Coinbase?",
+              lines: [
+                "It prevents users from doing the hardest step first.",
+                "It ensures the correct onboarding screens and permissions are active.",
               ],
             }}
           />
 
           <StepCard
             id="step-coinbase"
-            number={2}
+            number={3}
             title="Coinbase: use your existing account or create a dedicated trading account (recommended)"
             bullets={[
-              "If you already have Coinbase: use that account OR create a dedicated account/portfolio for bots (recommended).",
+              "If you already have Coinbase: you can use it, or create a dedicated account/portfolio for bots (recommended).",
               "Dedicated account/portfolio keeps personal holdings separate and makes position tracking cleaner.",
               "API key must be View + Trade only (NO withdrawals).",
             ]}
@@ -247,7 +258,7 @@ export default function QuickStartPage() {
               title: "Rules-of-thumb",
               lines: [
                 "Never enable withdrawals on API keys.",
-                "If you already hold BTC in the same account, the system may detect an existing position when managing trades.",
+                "If you already hold BTC in the same account, the system may treat that as an existing position.",
                 "If you choose a dedicated account/portfolio, keep it simple: fund it and let bots operate there.",
               ],
             }}
@@ -255,7 +266,7 @@ export default function QuickStartPage() {
 
           <StepCard
             id="step-api-key"
-            number={3}
+            number={4}
             title="Create a Coinbase API key (View + Trade only)"
             bullets={[
               "Open Coinbase API settings",
@@ -279,7 +290,7 @@ export default function QuickStartPage() {
 
           <StepCard
             id="step-connect"
-            number={4}
+            number={5}
             title="Connect your keys in YieldCraft (verify before leaving Coinbase)"
             bullets={[
               "Open Connect Keys",
@@ -300,7 +311,7 @@ export default function QuickStartPage() {
 
           <StepCard
             id="step-dashboard"
-            number={5}
+            number={6}
             title="Go to Dashboard and confirm green lights"
             bullets={[
               "Open Dashboard",
@@ -319,12 +330,11 @@ export default function QuickStartPage() {
           />
         </div>
 
-        {/* CTA */}
+        {/* SIMPLE FOOTER ACTIONS (NON-CONFUSING) */}
         <div className="mt-12 rounded-3xl border border-slate-800 bg-slate-900/40 p-7">
-          <h3 className="text-xl font-semibold">Ready to activate?</h3>
+          <h3 className="text-xl font-semibold">Need a shortcut?</h3>
           <p className="mt-2 text-sm text-slate-400 max-w-3xl">
-            Start simple. Click the steps in order. Confirm the lights. Then let YieldCraft do what it’s built to do:
-            wait for high-quality conditions and execute with guardrails.
+            Use these only if you already know where you are in the steps above.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-3">
@@ -332,28 +342,30 @@ export default function QuickStartPage() {
               href="/pricing"
               className="inline-flex items-center justify-center rounded-full bg-sky-400 px-6 py-3 text-sm font-semibold text-slate-950 shadow-lg hover:bg-sky-300"
             >
-              Choose a Plan
+              Pricing
+            </Link>
+
+            <Link
+              href="/connect-keys"
+              className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
+            >
+              Connect Keys
             </Link>
 
             <Link
               href="/dashboard"
               className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
             >
-              Go to Dashboard
+              Dashboard
             </Link>
 
             <Link
               href="/atlas"
               className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
             >
-              Learn Atlas (Long-Term)
+              Atlas
             </Link>
           </div>
-
-          <p className="mt-4 text-[11px] text-slate-500">
-            Tip: If you set <span className="font-mono text-slate-300">NEXT_PUBLIC_COINBASE_REF_URL</span>, the “Open Coinbase” button will use it
-            automatically (no “affiliate” wording shown).
-          </p>
         </div>
       </div>
     </main>
@@ -459,8 +471,8 @@ function StepCard({
   title: string;
   bullets: string[];
   primary: { label: string; href?: string; internalHref?: string; onClick?: () => void };
-  secondary?: { label: string; href: string };
-  tertiary?: { label: string; href: string };
+  secondary?: { label: string; href?: string; internalHref?: string };
+  tertiary?: { label: string; href?: string; internalHref?: string };
   comfort: { title: string; lines: string[] };
 }) {
   return (
@@ -514,28 +526,46 @@ function StepCard({
                 </a>
               )}
 
-              {/* Secondary (external) */}
+              {/* Secondary */}
               {secondary ? (
-                <a
-                  href={secondary.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
-                >
-                  {secondary.label}
-                </a>
+                secondary.internalHref ? (
+                  <Link
+                    href={secondary.internalHref}
+                    className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
+                  >
+                    {secondary.label}
+                  </Link>
+                ) : (
+                  <a
+                    href={secondary.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
+                  >
+                    {secondary.label}
+                  </a>
+                )
               ) : null}
 
-              {/* Tertiary (external) */}
+              {/* Tertiary */}
               {tertiary ? (
-                <a
-                  href={tertiary.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
-                >
-                  {tertiary.label}
-                </a>
+                tertiary.internalHref ? (
+                  <Link
+                    href={tertiary.internalHref}
+                    className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
+                  >
+                    {tertiary.label}
+                  </Link>
+                ) : (
+                  <a
+                    href={tertiary.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
+                  >
+                    {tertiary.label}
+                  </a>
+                )
               ) : null}
 
               <span className="inline-flex items-center rounded-full border border-slate-700 bg-slate-950/40 px-4 py-3 text-xs font-semibold text-slate-200">
