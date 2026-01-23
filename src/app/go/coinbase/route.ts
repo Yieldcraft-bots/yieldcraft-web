@@ -4,19 +4,25 @@ import { NextResponse } from "next/server";
 const FALLBACK = "https://www.coinbase.com/signup";
 
 // Read from env at runtime (works in Vercel). This is PUBLIC by design.
-function getRefUrl() {
+function getRefUrl(): string {
   const v = process.env.NEXT_PUBLIC_COINBASE_REF_URL;
   const ref = typeof v === "string" ? v.trim() : "";
   return ref.length > 0 ? ref : FALLBACK;
 }
 
 export async function GET(req: Request) {
-  const url = new URL(req.url);
+  const incoming = new URL(req.url);
+
+  // Build destination safely (never crash if env is malformed)
+  let dest: URL;
+  try {
+    dest = new URL(getRefUrl());
+  } catch {
+    dest = new URL(FALLBACK);
+  }
 
   // Optional pass-through params (safe allowlist)
   // Example: /go/coinbase?utm_source=yieldcraft&utm_campaign=quickstart
-  const passthrough = new URL(getRefUrl());
-
   const allow = [
     "utm_source",
     "utm_medium",
@@ -28,17 +34,19 @@ export async function GET(req: Request) {
   ];
 
   for (const key of allow) {
-    const val = url.searchParams.get(key);
-    if (val && !passthrough.searchParams.has(key)) {
-      passthrough.searchParams.set(key, val);
+    const val = incoming.searchParams.get(key);
+    if (val && !dest.searchParams.has(key)) {
+      dest.searchParams.set(key, val);
     }
   }
 
-  // Always tag the click so you can see it in Coinbase / analytics later
-  // (Does NOT expose anything sensitive)
-  if (!passthrough.searchParams.has("utm_source")) passthrough.searchParams.set("utm_source", "yieldcraft");
-  if (!passthrough.searchParams.has("utm_medium")) passthrough.searchParams.set("utm_medium", "affiliate");
-  if (!passthrough.searchParams.has("utm_campaign")) passthrough.searchParams.set("utm_campaign", "coinbase");
+  // Always tag clicks (no secrets)
+  if (!dest.searchParams.has("utm_source")) dest.searchParams.set("utm_source", "yieldcraft");
+  if (!dest.searchParams.has("utm_medium")) dest.searchParams.set("utm_medium", "affiliate");
+  if (!dest.searchParams.has("utm_campaign")) dest.searchParams.set("utm_campaign", "coinbase");
 
-  return NextResponse.redirect(passthrough.toString(), { status: 302 });
+  // Prevent caching of redirects (helps analytics + avoids weird browser caching)
+  const res = NextResponse.redirect(dest.toString(), 302);
+  res.headers.set("Cache-Control", "no-store, max-age=0");
+  return res;
 }
