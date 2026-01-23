@@ -1,163 +1,146 @@
 // src/app/api/affiliate/route.ts
 import { NextResponse } from "next/server";
+import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 
-function safeEmail(input: unknown) {
-  return String(input || "")
-    .trim()
-    .toLowerCase();
+function jsonNoStore(data: any, status = 200) {
+  return NextResponse.json(data, {
+    status,
+    headers: { "Cache-Control": "no-store" },
+  });
 }
 
-function safeText(input: unknown, max = 200) {
-  return String(input || "")
-    .trim()
-    .slice(0, max);
+function safeStr(v: unknown) {
+  return typeof v === "string" ? v.trim() : "";
 }
 
-function genAffiliateCode() {
-  // short, URL-friendly, reasonably unique
-  return crypto.randomUUID().replace(/-/g, "").slice(0, 10);
+function isEmail(email: string) {
+  // simple, practical check (good enough for intake)
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function getBaseUrl(req: Request) {
+  // Prefer your env, fall back to request host
+  const envUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    "";
+
+  if (envUrl) return envUrl.replace(/\/+$/, "");
+
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+function makeAffiliateCode() {
+  // 10 hex chars = short + collision-resistant enough for now
+  return crypto.randomBytes(5).toString("hex");
 }
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const fullName = safeText((body as any)?.fullName, 120);
-    const email = safeEmail((body as any)?.email);
+    const fullName = safeStr(body?.fullName);
+    const email = safeStr(body?.email).toLowerCase();
 
     if (!fullName || !email) {
-      return NextResponse.json(
-        { ok: false, error: "Missing required fields (fullName, email)" },
-        { status: 400, headers: { "Cache-Control": "no-store" } }
-      );
+      return jsonNoStore({ ok: false, error: "Missing fullName or email" }, 400);
+    }
+    if (!isEmail(email)) {
+      return jsonNoStore({ ok: false, error: "Invalid email" }, 400);
     }
 
     const sb = supabaseAdmin();
 
-    // 1) If affiliate already exists, return their existing code/link (no duplicates)
-    const { data: existing, error: selErr } = await sb
+    // 1) See if affiliate already exists for this email
+    const existing = await sb
       .from("affiliates")
-      .select("id, affiliate_code, status, commission_rate")
+      .select("id,email,name,status,affiliate_code,commission_rate,created_at,approved_at")
       .eq("email", email)
       .maybeSingle();
 
-    if (selErr) {
-      return NextResponse.json(
-        { ok: false, error: `DB read failed: ${selErr.message}` },
-        { status: 500, headers: { "Cache-Control": "no-store" } }
-      );
+    if (existing.error) {
+      console.error("[affiliate] lookup error:", existing.error);
+      return jsonNoStore({ ok: false, error: "DB lookup failed" }, 500);
     }
 
-    const appUrl =
-      (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "") ||
-      "https://yieldcraft.co";
+    let affiliate = existing.data;
 
-    if (existing?.affiliate_code) {
-      return NextResponse.json(
-        {
-          ok: true,
-          status: existing.status,
-          commission_rate: existing.commission_rate,
-          affiliateCode: existing.affiliate_code,
-          affiliateLink: `${appUrl}/?ref=${encodeURIComponent(
-            existing.affiliate_code
-          )}`,
-          message:
-            existing.status === "approved"
-              ? "Affiliate already approved."
-              : "Application already received.",
-        },
-        { headers: { "Cache-Control": "no-store" } }
-      );
-    }
+    // 2) If missing, create a new affiliate record
+    if (!affiliate) {
+      // try a few times in case of rare affiliate_code collision
+      let affiliateCode = makeAffiliateCode();
+      let created = null;
 
-    // 2) Create new affiliate (pending) + generate unique code
-    let affiliateCode = genAffiliateCode();
-
-    // try a few times in the (rare) case of a collision on unique(affiliate_code)
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      const { data: inserted, error: insErr } = await sb
-        .from("affiliates")
-        .insert({
-          email,
-          name: fullName,
-          status: "pending",
-          affiliate_code: affiliateCode,
-          commission_rate: 30,
-        })
-        .select("id, affiliate_code, status, commission_rate")
-        .single();
-
-      if (!insErr && inserted?.affiliate_code) {
-        return NextResponse.json(
-          {
-            ok: true,
-            status: inserted.status,
-            commission_rate: inserted.commission_rate,
-            affiliateCode: inserted.affiliate_code,
-            affiliateLink: `${appUrl}/?ref=${encodeURIComponent(
-              inserted.affiliate_code
-            )}`,
-            message: "Application received.",
-          },
-          { headers: { "Cache-Control": "no-store" } }
-        );
-      }
-
-      // If email already exists (unique violation), fetch and return it
-      if (insErr?.message?.toLowerCase().includes("affiliates_email_key")) {
-        const { data: again } = await sb
+      for (let i = 0; i < 5; i++) {
+        const ins = await sb
           .from("affiliates")
-          .select("affiliate_code, status, commission_rate")
-          .eq("email", email)
-          .maybeSingle();
+          .insert({
+            email,
+            name: fullName,
+            status: "pending",
+            affiliate_code: affiliateCode,
+            commission_rate: 30,
+          })
+          .select("id,email,name,status,affiliate_code,commission_rate,created_at,approved_at")
+          .single();
 
-        if (again?.affiliate_code) {
-          return NextResponse.json(
-            {
-              ok: true,
-              status: again.status,
-              commission_rate: again.commission_rate,
-              affiliateCode: again.affiliate_code,
-              affiliateLink: `${appUrl}/?ref=${encodeURIComponent(
-                again.affiliate_code
-              )}`,
-              message:
-                again.status === "approved"
-                  ? "Affiliate already approved."
-                  : "Application already received.",
-            },
-            { headers: { "Cache-Control": "no-store" } }
-          );
+        if (!ins.error) {
+          created = ins.data;
+          break;
         }
+
+        // If unique constraint failed on affiliate_code, retry
+        const msg = String(ins.error?.message || "");
+        if (msg.toLowerCase().includes("affiliate_code") || msg.toLowerCase().includes("duplicate")) {
+          affiliateCode = makeAffiliateCode();
+          continue;
+        }
+
+        console.error("[affiliate] insert error:", ins.error);
+        return jsonNoStore({ ok: false, error: "DB insert failed" }, 500);
       }
 
-      // If code collided, generate a new one and retry
-      if (
-        insErr?.message?.toLowerCase().includes("affiliates_affiliate_code_key") ||
-        insErr?.message?.toLowerCase().includes("duplicate key")
-      ) {
-        affiliateCode = genAffiliateCode();
-        continue;
+      if (!created) {
+        return jsonNoStore({ ok: false, error: "Could not generate unique affiliate code" }, 500);
       }
 
-      return NextResponse.json(
-        { ok: false, error: `DB insert failed: ${insErr?.message || "unknown"}` },
-        { status: 500, headers: { "Cache-Control": "no-store" } }
-      );
+      affiliate = created;
+    } else {
+      // 3) Keep name fresh if user re-applies (safe update)
+      if (affiliate.name !== fullName) {
+        const upd = await sb
+          .from("affiliates")
+          .update({ name: fullName })
+          .eq("id", affiliate.id)
+          .select("id,email,name,status,affiliate_code,commission_rate,created_at,approved_at")
+          .single();
+
+        if (!upd.error) affiliate = upd.data;
+      }
     }
 
-    return NextResponse.json(
-      { ok: false, error: "Unable to generate a unique affiliate code. Try again." },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+    const baseUrl = getBaseUrl(req);
+    const affiliateCode = affiliate.affiliate_code;
+    const affiliateLink = `${baseUrl}/?ref=${affiliateCode}`;
+
+    // ✅ IMPORTANT:
+    // Your UI likely expects `onboardingUrl`. For now we alias it to the affiliate link.
+    // Next step: swap onboardingUrl to a real Stripe Connect account onboarding link.
+    return jsonNoStore({
+      ok: true,
+      status: affiliate.status,
+      commission_rate: affiliate.commission_rate ?? 30,
+      affiliateCode,
+      affiliateLink,
+      onboardingUrl: affiliateLink,
+    });
   } catch (err: any) {
-    console.error("[affiliate.apply] error:", err);
-    return NextResponse.json(
-      { ok: false, error: err?.message || "Unable to submit affiliate application." },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+    console.error("[affiliate] fatal:", err?.message || err);
+    return jsonNoStore({ ok: false, error: "Unable to start affiliate onboarding." }, 500);
   }
 }
