@@ -88,19 +88,25 @@ export default function AffiliatePage() {
           </h1>
 
           <p className="mt-6 text-lg text-white/70">
-            Earn <span className="text-yellow-200 font-semibold">{COMMISSION_HIGHLIGHT}</span> by
-            referring serious traders to YieldCraft.
+            Earn{" "}
+            <span className="text-yellow-200 font-semibold">
+              {COMMISSION_HIGHLIGHT}
+            </span>{" "}
+            by referring serious traders to YieldCraft.
           </p>
 
           <div className="mt-6 rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-5 text-sm text-yellow-100/90">
-            <p className="font-semibold text-yellow-200">Simple, automated, and paid through Stripe.</p>
+            <p className="font-semibold text-yellow-200">
+              Simple, automated, and paid through Stripe.
+            </p>
             <ul className="mt-2 list-disc pl-5 space-y-1 text-yellow-100/80">
               <li>
-                Commissions are tied to the customer subscription and paid automatically via Stripe payouts
-                (not “manually from Donnie”).
+                Commissions are tied to the customer subscription and paid
+                automatically via Stripe payouts (not “manually from Donnie”).
               </li>
               <li>
-                No performance claims. No spam. No brand bidding. Strict compliance keeps this program safe.
+                No performance claims. No spam. No brand bidding. Strict
+                compliance keeps this program safe.
               </li>
             </ul>
           </div>
@@ -127,20 +133,28 @@ export default function AffiliatePage() {
             </GlassCard>
 
             <div className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-5 text-sm text-yellow-200">
-              <strong>Pro tip:</strong> “Audience / channel” helps us approve faster and send you the right assets.
+              <strong>Pro tip:</strong> “Audience / channel” helps us approve
+              faster and send you the right assets.
             </div>
 
             <div className="rounded-2xl border border-white/10 bg-white/5 p-5 text-xs text-white/60">
-              <p className="font-semibold text-white/70">Strict rules (keeps you + YieldCraft protected):</p>
+              <p className="font-semibold text-white/70">
+                Strict rules (keeps you + YieldCraft protected):
+              </p>
               <ul className="mt-2 list-disc pl-5 space-y-1">
                 <li>No spam / unsolicited messaging.</li>
                 <li>No misleading claims (especially performance).</li>
                 <li>No paid ads bidding on YieldCraft brand terms.</li>
-                <li>No “guarantees,” no impersonation, no fake testimonials.</li>
+                <li>
+                  No “guarantees,” no impersonation, no fake testimonials.
+                </li>
               </ul>
               <p className="mt-3">
                 Full terms:{" "}
-                <Link href={TERMS_HREF} className="text-yellow-200 hover:text-yellow-100 underline">
+                <Link
+                  href={TERMS_HREF}
+                  className="text-yellow-200 hover:text-yellow-100 underline"
+                >
                   Affiliate Terms & Compliance
                 </Link>
                 .
@@ -178,7 +192,7 @@ export default function AffiliatePage() {
 
               <Field
                 label="Audience / channel (optional)"
-                hint="Examples: “YouTube 12k subs”, “X (Twitter) 8k”, “Newsletter 2k”, “Discord group”, “Client list”"
+                hint='Examples: “YouTube 12k subs”, “X (Twitter) 8k”, “Newsletter 2k”, “Discord group”, “Client list”'
               >
                 <input
                   value={audience}
@@ -210,16 +224,23 @@ export default function AffiliatePage() {
               <label className="flex items-start gap-3 rounded-xl border border-white/10 bg-black/20 p-4">
                 <input
                   type="checkbox"
+                  required
                   checked={acceptedTerms}
                   onChange={(e) => setAcceptedTerms(e.target.checked)}
                   className="mt-1 h-4 w-4 rounded border-white/20 bg-black/40"
                 />
                 <span className="text-xs text-white/70">
                   I agree to the{" "}
-                  <Link href={TERMS_HREF} className="text-yellow-200 hover:text-yellow-100 underline">
-                    Affiliate Terms & Compliance
-                  </Link>{" "}
-                  and understand I cannot make performance claims, spam, or run brand-bidding ads.
+                  <a
+                    href={TERMS_HREF}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-yellow-200 hover:text-yellow-100 underline"
+                  >
+                    Affiliate Terms &amp; Conditions
+                  </a>{" "}
+                  and understand I cannot make performance claims, spam, or run
+                  brand-bidding ads.
                 </span>
               </label>
 
@@ -244,7 +265,8 @@ export default function AffiliatePage() {
               )}
 
               <p className="pt-2 text-xs text-white/50">
-                Anti-abuse is enforced. If we detect spam or misleading claims, the application is rejected automatically.
+                Anti-abuse is enforced. If we detect spam or misleading claims,
+                the application is rejected automatically.
               </p>
             </form>
           </div>
@@ -290,10 +312,18 @@ function Field({
     <label className="block">
       <div className="flex items-baseline justify-between gap-4">
         <div className="mb-2 text-xs text-white/70">{label}</div>
-        {hint ? <div className="mb-2 hidden md:block text-[11px] text-white/35">{hint}</div> : null}
+        {hint ? (
+          <div className="mb-2 hidden md:block text-[11px] text-white/35">
+            {hint}
+          </div>
+        ) : null}
       </div>
       {children}
-      {hint ? <div className="mt-2 md:hidden text-[11px] text-white/35">{hint}</div> : null}
+      {hint ? (
+        <div className="mt-2 md:hidden text-[11px] text-white/35">
+          {hint}
+        </div>
+      ) : null}
     </label>
   );
 }
