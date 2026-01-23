@@ -5,14 +5,11 @@ import Link from "next/link";
 import React, { useCallback } from "react";
 
 const COINBASE_API_SETTINGS_URL = "https://www.coinbase.com/settings/api";
-const COINBASE_SIGNUP_FALLBACK_URL = "https://www.coinbase.com/signup";
 
-function getCoinbaseSignupUrl(): string {
-  // Uses your ref/affiliate link if set in Vercel as NEXT_PUBLIC_COINBASE_REF_URL.
-  // UI never needs to say “affiliate” anywhere.
-  const v = process.env.NEXT_PUBLIC_COINBASE_REF_URL;
-  return typeof v === "string" && v.trim().length > 0 ? v.trim() : COINBASE_SIGNUP_FALLBACK_URL;
-}
+// IMPORTANT:
+// We route ALL “Open Coinbase” clicks through our internal redirect
+// so you always get affiliate credit and can add UTM tracking safely.
+const COINBASE_GO_URL = "/go/coinbase";
 
 export default function QuickStartPage() {
   const scrollToId = useCallback((id: string) => {
@@ -20,8 +17,6 @@ export default function QuickStartPage() {
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
-
-  const coinbaseSignupUrl = getCoinbaseSignupUrl();
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -77,11 +72,14 @@ export default function QuickStartPage() {
 
             <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <p className="text-sm text-slate-200">
-                <span className="font-semibold text-slate-50">Important:</span> it’s normal to see{" "}
-                <span className="text-sky-300 font-semibold">no trade</span> right away. Waiting is part of the strategy.
+                <span className="font-semibold text-slate-50">Important:</span>{" "}
+                it’s normal to see{" "}
+                <span className="text-sky-300 font-semibold">no trade</span> right
+                away. Waiting is part of the strategy.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Your “proof” is the green lights + heartbeat confirmation — not an immediate order.
+                Your “proof” is the green lights + heartbeat confirmation — not an
+                immediate order.
               </p>
             </div>
           </div>
@@ -99,9 +97,14 @@ export default function QuickStartPage() {
               </h2>
               <p className="mt-3 text-sm md:text-base text-slate-300">
                 YieldCraft is designed to reward{" "}
-                <span className="text-slate-50 font-semibold">consistency</span>, not impulse. We help you build a repeatable habit:
-                <span className="text-slate-50 font-semibold"> pay yourself first</span>, contribute consistently, then let disciplined automation
-                do what it’s built to do.
+                <span className="text-slate-50 font-semibold">consistency</span>,
+                not impulse. We help you build a repeatable habit:
+                <span className="text-slate-50 font-semibold">
+                  {" "}
+                  pay yourself first
+                </span>
+                , contribute consistently, then let disciplined automation do what
+                it’s built to do.
               </p>
             </div>
 
@@ -129,17 +132,25 @@ export default function QuickStartPage() {
 
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
             <p className="text-sm text-slate-200">
-              <span className="font-semibold text-slate-50">How sizing works:</span> YieldCraft reads your available balances from the exchange
-              and constrains order sizes by available funds, exchange minimum order rules, and risk controls.{" "}
-              <span className="text-slate-50 font-semibold">No leverage. No forced sizing.</span>
+              <span className="font-semibold text-slate-50">How sizing works:</span>{" "}
+              YieldCraft reads your available balances from the exchange and
+              constrains order sizes by available funds, exchange minimum order
+              rules, and risk controls.{" "}
+              <span className="text-slate-50 font-semibold">
+                No leverage. No forced sizing.
+              </span>
             </p>
           </div>
 
           <div className="mt-4 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
-            <p className="text-sm font-semibold text-sky-200">Best practice (recommended)</p>
+            <p className="text-sm font-semibold text-sky-200">
+              Best practice (recommended)
+            </p>
             <p className="mt-1 text-xs text-slate-300">
-              Use a dedicated Coinbase account or dedicated portfolio for bots. It keeps personal holdings separate and makes position tracking cleaner.
-              If you already hold BTC in the same account, the system may treat that as an existing position when managing trades.
+              Use a dedicated Coinbase account or dedicated portfolio for bots. It
+              keeps personal holdings separate and makes position tracking cleaner.
+              If you already hold BTC in the same account, the system may treat
+              that as an existing position when managing trades.
             </p>
           </div>
         </section>
@@ -162,9 +173,21 @@ export default function QuickStartPage() {
           </div>
 
           <div className="mt-5 grid gap-4 md:grid-cols-3">
-            <StatusItem color="green" title="Connected" description="Exchange auth is valid and responding." />
-            <StatusItem color="green" title="Engine Armed" description="Your plan is active and bots are enabled." />
-            <StatusItem color="yellow" title="Waiting for Signal" description="No trade yet — conditions not met (normal)." />
+            <StatusItem
+              color="green"
+              title="Connected"
+              description="Exchange auth is valid and responding."
+            />
+            <StatusItem
+              color="green"
+              title="Engine Armed"
+              description="Your plan is active and bots are enabled."
+            />
+            <StatusItem
+              color="yellow"
+              title="Waiting for Signal"
+              description="No trade yet — conditions not met (normal)."
+            />
           </div>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -179,7 +202,8 @@ export default function QuickStartPage() {
           </div>
 
           <p className="mt-4 text-xs text-slate-500">
-            Performance targets are design goals, not promises. Markets are risky and results vary.
+            Performance targets are design goals, not promises. Markets are risky
+            and results vary.
           </p>
         </section>
 
@@ -187,8 +211,9 @@ export default function QuickStartPage() {
         <div className="mb-10 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
           <p className="text-sm font-semibold text-sky-200">Connection check ≠ trade</p>
           <p className="mt-1 text-xs text-slate-300">
-            When you connect your API key, YieldCraft performs a signed heartbeat check.
-            This confirms access — it does <span className="font-semibold">not</span> place a trade.
+            When you connect your API key, YieldCraft performs a signed heartbeat
+            check. This confirms access — it does{" "}
+            <span className="font-semibold">not</span> place a trade.
           </p>
         </div>
 
@@ -247,8 +272,9 @@ export default function QuickStartPage() {
               onClick: () => scrollToId("step-api-key"),
             }}
             secondary={{
+              // ALWAYS through affiliate redirect
               label: "Open Coinbase",
-              href: coinbaseSignupUrl,
+              internalHref: `${COINBASE_GO_URL}?utm_campaign=quickstart&utm_content=step3_open_coinbase`,
             }}
             tertiary={{
               label: "Then go to API settings →",
@@ -364,6 +390,14 @@ export default function QuickStartPage() {
               className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
             >
               Atlas
+            </Link>
+
+            {/* Optional: extra affiliate-friendly shortcut */}
+            <Link
+              href={`${COINBASE_GO_URL}?utm_campaign=quickstart&utm_content=footer_open_coinbase`}
+              className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
+            >
+              Open Coinbase
             </Link>
           </div>
         </div>

@@ -1,4 +1,3 @@
-// src/app/affiliate/page.tsx
 "use client";
 
 import Link from "next/link";
@@ -47,16 +46,27 @@ export default function AffiliatePage() {
         }),
       });
 
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as any)?.error || "Submission failed");
+      const json = await res.json().catch(() => ({} as any));
 
+      if (!res.ok) {
+        throw new Error((json as any)?.error || "Unable to start affiliate onboarding.");
+      }
+
+      const onboardingUrl = (json as any)?.onboardingUrl;
+
+      if (!onboardingUrl || typeof onboardingUrl !== "string") {
+        throw new Error("Missing Stripe onboarding URL. Please try again.");
+      }
+
+      // Optional: show a brief success state before redirect (nice UX)
       setState({
         status: "success",
-        message: "Application received. Check your email for next steps.",
+        message: "Opening Stripe onboarding…",
       });
 
-      // optional: clear fields on success
-      // setFullName(""); setEmail(""); setAudience(""); setWebsite(""); setNotes(""); setAcceptedTerms(false);
+      // Redirect to Stripe Connect onboarding
+      window.location.href = onboardingUrl;
+      return;
     } catch (err: any) {
       setState({
         status: "error",
@@ -118,6 +128,7 @@ export default function AffiliatePage() {
             <GlassCard title="How it works" accent="yellow">
               <ol className="list-decimal pl-5 space-y-3 text-white/80">
                 <li>Apply (takes ~30 seconds)</li>
+                <li>Complete Stripe onboarding (to enable payouts)</li>
                 <li>Get your referral link</li>
                 <li>Earn recurring payouts while they stay subscribed</li>
               </ol>
@@ -145,9 +156,7 @@ export default function AffiliatePage() {
                 <li>No spam / unsolicited messaging.</li>
                 <li>No misleading claims (especially performance).</li>
                 <li>No paid ads bidding on YieldCraft brand terms.</li>
-                <li>
-                  No “guarantees,” no impersonation, no fake testimonials.
-                </li>
+                <li>No “guarantees,” no impersonation, no fake testimonials.</li>
               </ul>
               <p className="mt-3">
                 Full terms:{" "}
@@ -155,7 +164,7 @@ export default function AffiliatePage() {
                   href={TERMS_HREF}
                   className="text-yellow-200 hover:text-yellow-100 underline"
                 >
-                  Affiliate Terms & Compliance
+                  Affiliate Terms &amp; Compliance
                 </Link>
                 .
               </p>
@@ -253,6 +262,7 @@ export default function AffiliatePage() {
                       ? "bg-gradient-to-r from-yellow-400 to-amber-400 hover:brightness-110"
                       : "bg-yellow-400 opacity-50 cursor-not-allowed"
                   }`}
+                disabled={!canSubmit || state.status === "submitting"}
               >
                 {state.status === "submitting" ? "Submitting…" : "Apply"}
               </button>
