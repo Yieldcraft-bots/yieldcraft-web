@@ -1,146 +1,184 @@
-// src/app/api/affiliate/route.ts
 import { NextResponse } from "next/server";
-import crypto from "crypto";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import Stripe from "stripe";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-function jsonNoStore(data: any, status = 200) {
-  return NextResponse.json(data, {
-    status,
-    headers: { "Cache-Control": "no-store" },
-  });
+function requireEnv(name: string) {
+  const v = process.env[name];
+  if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
+  return v.trim();
 }
 
-function safeStr(v: unknown) {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function isEmail(email: string) {
-  // simple, practical check (good enough for intake)
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-function getBaseUrl(req: Request) {
-  // Prefer your env, fall back to request host
-  const envUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
+function getBaseUrl() {
+  // prefer server-only, but allow your existing public var too
+  return (
     process.env.APP_URL ||
-    process.env.NEXT_PUBLIC_SITE_URL ||
-    "";
-
-  if (envUrl) return envUrl.replace(/\/+$/, "");
-
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  return `${proto}://${host}`.replace(/\/+$/, "");
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://yieldcraft.co"
+  ).replace(/\/$/, "");
 }
 
-function makeAffiliateCode() {
-  // 10 hex chars = short + collision-resistant enough for now
-  return crypto.randomBytes(5).toString("hex");
+function genCode() {
+  // short, human-safe-ish code
+  return Math.random().toString(16).slice(2, 10);
 }
+
+const stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"));
 
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
-    const fullName = safeStr(body?.fullName);
-    const email = safeStr(body?.email).toLowerCase();
+    const fullName = String(body?.fullName || "").trim();
+    const email = String(body?.email || "").trim().toLowerCase();
+
+    const audience = String(body?.audience || body?.channel || "").trim();
+    const website = String(body?.website || "").trim();
+    const notes = String(body?.notes || "").trim();
 
     if (!fullName || !email) {
-      return jsonNoStore({ ok: false, error: "Missing fullName or email" }, 400);
-    }
-    if (!isEmail(email)) {
-      return jsonNoStore({ ok: false, error: "Invalid email" }, 400);
+      return NextResponse.json(
+        { ok: false, error: "Missing required fields" },
+        { status: 400 }
+      );
     }
 
-    const sb = supabaseAdmin();
+    const baseUrl = getBaseUrl();
 
-    // 1) See if affiliate already exists for this email
-    const existing = await sb
+    // Supabase (service role - server only)
+    const supabaseUrl =
+      process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    if (!supabaseUrl) throw new Error("Missing env: SUPABASE_URL");
+    const supabaseKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+
+    const sb = createClient(supabaseUrl, supabaseKey, {
+      auth: { persistSession: false },
+    });
+
+    // 1) Find existing affiliate by email (if they applied before)
+    const { data: existing, error: existingErr } = await sb
       .from("affiliates")
-      .select("id,email,name,status,affiliate_code,commission_rate,created_at,approved_at")
+      .select("id,email,name,status,affiliate_code,commission_rate,stripe_account_id")
       .eq("email", email)
       .maybeSingle();
 
-    if (existing.error) {
-      console.error("[affiliate] lookup error:", existing.error);
-      return jsonNoStore({ ok: false, error: "DB lookup failed" }, 500);
+    if (existingErr) throw existingErr;
+
+    // 2) Ensure Stripe Connect Express account exists
+    let stripeAccountId = existing?.stripe_account_id as string | null;
+
+    if (!stripeAccountId) {
+      const acct = await stripe.accounts.create({
+        type: "express",
+        email,
+        business_type: "individual",
+        capabilities: {
+          transfers: { requested: true },
+        },
+        metadata: {
+          source: "yieldcraft_affiliate_apply",
+        },
+      });
+      stripeAccountId = acct.id;
     }
 
-    let affiliate = existing.data;
+    // 3) Ensure affiliate_code exists
+    const affiliateCode = existing?.affiliate_code || genCode();
 
-    // 2) If missing, create a new affiliate record
-    if (!affiliate) {
-      // try a few times in case of rare affiliate_code collision
-      let affiliateCode = makeAffiliateCode();
-      let created = null;
+    // 4) Upsert affiliate row
+    // NOTE: your table currently includes: email, name, status, affiliate_code, commission_rate, created_at, approved_at
+    // We also store stripe_account_id + optional fields if your table has them.
+    // If your table doesn't yet have these extra columns, it will still work if we only write known columns.
+    const payload: any = {
+      email,
+      name: fullName,
+      status: existing?.status || "pending",
+      affiliate_code: affiliateCode,
+      commission_rate: existing?.commission_rate ?? 30,
+      stripe_account_id: stripeAccountId,
+      audience,
+      website,
+      notes,
+    };
 
-      for (let i = 0; i < 5; i++) {
-        const ins = await sb
+    // Try update if exists, else insert
+    if (existing?.id) {
+      const { error: upErr } = await sb
+        .from("affiliates")
+        .update(payload)
+        .eq("id", existing.id);
+      if (upErr) {
+        // fallback: update only core columns if extra cols don't exist
+        const { error: upErr2 } = await sb
           .from("affiliates")
-          .insert({
+          .update({
+            email,
+            name: fullName,
+            status: existing?.status || "pending",
+            affiliate_code: affiliateCode,
+            commission_rate: existing?.commission_rate ?? 30,
+          })
+          .eq("id", existing.id);
+        if (upErr2) throw upErr2;
+      }
+    } else {
+      const { error: insErr } = await sb.from("affiliates").insert([
+        {
+          email,
+          name: fullName,
+          status: "pending",
+          affiliate_code: affiliateCode,
+          commission_rate: 30,
+          stripe_account_id: stripeAccountId,
+          audience,
+          website,
+          notes,
+        },
+      ]);
+
+      if (insErr) {
+        // fallback: insert only core columns if extra cols don't exist
+        const { error: insErr2 } = await sb.from("affiliates").insert([
+          {
             email,
             name: fullName,
             status: "pending",
             affiliate_code: affiliateCode,
             commission_rate: 30,
-          })
-          .select("id,email,name,status,affiliate_code,commission_rate,created_at,approved_at")
-          .single();
-
-        if (!ins.error) {
-          created = ins.data;
-          break;
-        }
-
-        // If unique constraint failed on affiliate_code, retry
-        const msg = String(ins.error?.message || "");
-        if (msg.toLowerCase().includes("affiliate_code") || msg.toLowerCase().includes("duplicate")) {
-          affiliateCode = makeAffiliateCode();
-          continue;
-        }
-
-        console.error("[affiliate] insert error:", ins.error);
-        return jsonNoStore({ ok: false, error: "DB insert failed" }, 500);
-      }
-
-      if (!created) {
-        return jsonNoStore({ ok: false, error: "Could not generate unique affiliate code" }, 500);
-      }
-
-      affiliate = created;
-    } else {
-      // 3) Keep name fresh if user re-applies (safe update)
-      if (affiliate.name !== fullName) {
-        const upd = await sb
-          .from("affiliates")
-          .update({ name: fullName })
-          .eq("id", affiliate.id)
-          .select("id,email,name,status,affiliate_code,commission_rate,created_at,approved_at")
-          .single();
-
-        if (!upd.error) affiliate = upd.data;
+          },
+        ]);
+        if (insErr2) throw insErr2;
       }
     }
 
-    const baseUrl = getBaseUrl(req);
-    const affiliateCode = affiliate.affiliate_code;
+    // 5) Create Stripe onboarding link (this is what your UI should redirect to)
+    const accountLink = await stripe.accountLinks.create({
+      account: stripeAccountId,
+      refresh_url: `${baseUrl}/affiliate?refresh=1`,
+      return_url: `${baseUrl}/affiliate/success?code=${encodeURIComponent(affiliateCode)}`,
+      type: "account_onboarding",
+    });
+
     const affiliateLink = `${baseUrl}/?ref=${affiliateCode}`;
 
-    // ✅ IMPORTANT:
-    // Your UI likely expects `onboardingUrl`. For now we alias it to the affiliate link.
-    // Next step: swap onboardingUrl to a real Stripe Connect account onboarding link.
-    return jsonNoStore({
+    return NextResponse.json({
       ok: true,
-      status: affiliate.status,
-      commission_rate: affiliate.commission_rate ?? 30,
+      status: existing?.status || "pending",
+      commission_rate: existing?.commission_rate ?? 30,
       affiliateCode,
       affiliateLink,
-      onboardingUrl: affiliateLink,
+      onboardingUrl: accountLink.url, // ✅ KEY FIX
+      stripeAccountId,
     });
   } catch (err: any) {
-    console.error("[affiliate] fatal:", err?.message || err);
-    return jsonNoStore({ ok: false, error: "Unable to start affiliate onboarding." }, 500);
+    console.error("Affiliate onboarding error:", err?.message || err);
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Unable to start affiliate onboarding.",
+        detail: err?.message || "unknown_error",
+      },
+      { status: 500 }
+    );
   }
 }
