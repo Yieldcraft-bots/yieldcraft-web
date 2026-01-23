@@ -1,6 +1,7 @@
+// src/app/affiliate/page.tsx
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 type ApplyState =
   | { status: "idle" }
@@ -22,7 +23,7 @@ export default function AffiliatePage() {
     [fullName, email]
   );
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!canSubmit || state.status === "submitting") return;
 
@@ -41,13 +42,16 @@ export default function AffiliatePage() {
         }),
       });
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error || "Submission failed");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as any)?.error || "Submission failed");
 
       setState({
         status: "success",
         message: "Application received. We’ll email you shortly.",
       });
+
+      // optional: clear fields on success
+      // setFullName(""); setEmail(""); setAudience(""); setWebsite(""); setNotes("");
     } catch (err: any) {
       setState({
         status: "error",
@@ -119,26 +123,46 @@ export default function AffiliatePage() {
 
             <form onSubmit={onSubmit} className="space-y-5">
               <Field label="Full name *">
-                <input value={fullName} onChange={(e) => setFullName(e.target.value)} className={inputClass} />
+                <input
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className={inputClass}
+                />
               </Field>
 
               <Field label="Email *">
-                <input value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} />
+                <input
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className={inputClass}
+                />
               </Field>
 
               <Field label="Audience / channel">
-                <input value={audience} onChange={(e) => setAudience(e.target.value)} className={inputClass} />
+                <input
+                  value={audience}
+                  onChange={(e) => setAudience(e.target.value)}
+                  className={inputClass}
+                />
               </Field>
 
               <Field label="Website">
-                <input value={website} onChange={(e) => setWebsite(e.target.value)} className={inputClass} />
+                <input
+                  value={website}
+                  onChange={(e) => setWebsite(e.target.value)}
+                  className={inputClass}
+                />
               </Field>
 
               <Field label="Notes">
-                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} className={`${inputClass} min-h-[120px]`} />
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className={`${inputClass} min-h-[120px]`}
+                />
               </Field>
 
-              {/* 🔥 APPLY BUTTON — ALWAYS YELLOW */}
+              {/* APPLY BUTTON — ALWAYS YELLOW */}
               <button
                 type="submit"
                 className={`w-full rounded-xl py-3 font-semibold text-black transition
@@ -176,7 +200,7 @@ function GlassCard({
 }: {
   title: string;
   accent: "yellow" | "cyan";
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
@@ -192,7 +216,7 @@ function GlassCard({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
       <div className="mb-2 text-xs text-white/70">{label}</div>
