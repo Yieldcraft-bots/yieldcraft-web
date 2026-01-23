@@ -4,8 +4,10 @@ import Stripe from "stripe";
 
 export const runtime = "nodejs";
 
+// ✅ Use the Stripe SDK’s pinned API version (or set it to the one your SDK expects)
+// Easiest + safest: DO NOT set apiVersion at all.
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2024-06-20",
+  // apiVersion: "2025-12-15.clover", // optional: only if you want to pin explicitly
 });
 
 export async function POST(req: Request) {
@@ -14,13 +16,10 @@ export async function POST(req: Request) {
     const { fullName = "", email = "" } = body || {};
 
     if (!fullName || !email) {
-      return NextResponse.json(
-        { error: "Missing required fields" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // 1️⃣ Create a Stripe Connect Express account
+    // 1) Create a Stripe Connect Express account for the affiliate
     const account = await stripe.accounts.create({
       type: "express",
       email,
@@ -30,16 +29,27 @@ export async function POST(req: Request) {
       },
     });
 
-    // 2️⃣ Create onboarding link
+    // 2) Create onboarding link
+    // NOTE: You set NEXT_PUBLIC_APP_URL in Vercel — this uses it.
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL;
+
+    if (!baseUrl) {
+      return NextResponse.json(
+        { error: "Missing env: NEXT_PUBLIC_APP_URL" },
+        { status: 500 }
+      );
+    }
+
     const accountLink = await stripe.accountLinks.create({
       account: account.id,
-      refresh_url: `${process.env.NEXT_PUBLIC_APP_URL}/affiliate`,
-      return_url: `${process.env.NEXT_PUBLIC_APP_URL}/affiliate/success`,
+      refresh_url: `${baseUrl}/affiliate`,
+      return_url: `${baseUrl}/affiliate/success`,
       type: "account_onboarding",
     });
 
     return NextResponse.json({
       ok: true,
+      accountId: account.id,
       onboardingUrl: accountLink.url,
     });
   } catch (err) {
