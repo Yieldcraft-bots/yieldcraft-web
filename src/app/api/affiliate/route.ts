@@ -1,21 +1,18 @@
 // src/app/api/affiliate/route.ts
 import { NextResponse } from "next/server";
+import Stripe from "stripe";
 
 export const runtime = "nodejs";
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: "2024-06-20",
+});
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+    const { fullName = "", email = "" } = body || {};
 
-    const {
-      fullName = "",
-      email = "",
-      audience = "",
-      website = "",
-      notes = "",
-    } = body || {};
-
-    // Minimal validation (never throw hard)
     if (!fullName || !email) {
       return NextResponse.json(
         { error: "Missing required fields" },
@@ -23,28 +20,32 @@ export async function POST(req: Request) {
       );
     }
 
-    // 🔒 SAFE MODE:
-    // For now, we just log the application.
-    // No DB, no email, no Stripe — nothing that can break.
-    console.log("📩 Affiliate application received:", {
-      fullName,
+    // 1️⃣ Create a Stripe Connect Express account
+    const account = await stripe.accounts.create({
+      type: "express",
       email,
-      audience,
-      website,
-      notes,
-      at: new Date().toISOString(),
+      business_type: "individual",
+      capabilities: {
+        transfers: { requested: true },
+      },
     });
 
-    // Always return success so frontend is happy
+    // 2️⃣ Create onboarding link
+    const accountLink = await stripe.accountLinks.create({
+      account: account.id,
+      refresh_url: `${process.env.NEXT_PUBLIC_APP_URL}/affiliate`,
+      return_url: `${process.env.NEXT_PUBLIC_APP_URL}/affiliate/success`,
+      type: "account_onboarding",
+    });
+
     return NextResponse.json({
       ok: true,
-      message: "Application received. We’ll email you shortly.",
+      onboardingUrl: accountLink.url,
     });
   } catch (err) {
-    console.error("Affiliate apply error:", err);
-
+    console.error("Affiliate onboarding error:", err);
     return NextResponse.json(
-      { error: "Unable to process application right now." },
+      { error: "Unable to start affiliate onboarding." },
       { status: 500 }
     );
   }
