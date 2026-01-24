@@ -51,9 +51,7 @@ export function supabaseAdmin() {
   const url =
     process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
   if (!url)
-    throw new Error(
-      "Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)"
-    );
+    throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
 
   const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -63,7 +61,8 @@ export function supabaseAdmin() {
 }
 
 type KeyRow = {
-  id?: string | null;
+  id?: string | null; // exists in user_coinbase_keys, NOT in coinbase_keys
+  user_id?: string | null;
   api_key_name?: string | null;
   private_key?: string | null;
   key_alg?: string | null;
@@ -73,14 +72,32 @@ type KeyRow = {
 async function fetchLatestKeyRow(table: string, userId: string) {
   const sb = supabaseAdmin();
 
-  // We try to select common columns; if a table differs, Supabase will error — we treat as "not found"
-  const { data, error } = await sb
+  // Select a "safe" superset. If a column doesn't exist, Supabase errors.
+  // We handle that by retrying without "id" for legacy tables.
+  const baseSelect = "api_key_name, private_key, key_alg, created_at, user_id";
+
+  // Try with id first (new table)
+  let { data, error } = await sb
     .from(table)
-    .select("id, api_key_name, private_key, key_alg, created_at")
+    .select(`id, ${baseSelect}`)
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle<KeyRow>();
+
+  // If "id" doesn't exist (legacy), retry without it
+  if (error && String(error.message || "").toLowerCase().includes("column") && String(error.message || "").toLowerCase().includes(".id")) {
+    const retry = await sb
+      .from(table)
+      .select(baseSelect)
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<KeyRow>();
+
+    data = retry.data as any;
+    error = retry.error as any;
+  }
 
   if (error) return null;
   if (!data?.api_key_name || !data?.private_key) return null;
@@ -88,15 +105,13 @@ async function fetchLatestKeyRow(table: string, userId: string) {
   return { sb, data };
 }
 
-async function autoHealKeyAlg(
+async function autoHealKeyAlgById(
   sb: ReturnType<typeof supabaseAdmin>,
   table: string,
   rowId: string | null | undefined,
   privateKey: string,
   currentKeyAlg: string | null | undefined
 ) {
-  if (!rowId) return canonicalKeyAlg(currentKeyAlg);
-
   let keyAlg = canonicalKeyAlg(currentKeyAlg);
 
   // infer + persist if missing/unknown
@@ -105,12 +120,50 @@ async function autoHealKeyAlg(
       const inferred = inferKeyAlgFromPrivateKey(String(privateKey));
       const canonical = inferred === "ed25519" ? "ed25519" : "ES256";
 
-      const { error: upErr } = await sb
-        .from(table)
-        .update({ key_alg: canonical })
-        .eq("id", rowId);
+      if (rowId) {
+        const { error: upErr } = await sb
+          .from(table)
+          .update({ key_alg: canonical })
+          .eq("id", rowId);
 
-      if (!upErr) keyAlg = canonical;
+        if (!upErr) keyAlg = canonical;
+      } else {
+        // if no id, caller must use the other healer (user_id + created_at)
+        keyAlg = null;
+      }
+    } catch {
+      // don't block reads
+    }
+  }
+
+  return keyAlg;
+}
+
+async function autoHealKeyAlgByUserAndCreatedAt(
+  sb: ReturnType<typeof supabaseAdmin>,
+  table: string,
+  userId: string,
+  createdAt: string | null | undefined,
+  privateKey: string,
+  currentKeyAlg: string | null | undefined
+) {
+  let keyAlg = canonicalKeyAlg(currentKeyAlg);
+
+  if (!keyAlg) {
+    try {
+      const inferred = inferKeyAlgFromPrivateKey(String(privateKey));
+      const canonical = inferred === "ed25519" ? "ed25519" : "ES256";
+
+      // Needs created_at to target the newest row safely
+      if (createdAt) {
+        const { error: upErr } = await sb
+          .from(table)
+          .update({ key_alg: canonical })
+          .eq("user_id", userId)
+          .eq("created_at", createdAt);
+
+        if (!upErr) keyAlg = canonical;
+      }
     } catch {
       // don't block reads
     }
@@ -130,13 +183,27 @@ export async function getUserCoinbaseKeys(userId: string) {
   const newHit = await fetchLatestKeyRow("user_coinbase_keys", userId);
   if (newHit) {
     const { sb, data } = newHit;
-    const healed = await autoHealKeyAlg(
+
+    // try heal via id first
+    let healed = await autoHealKeyAlgById(
       sb,
       "user_coinbase_keys",
       data.id ?? null,
       String(data.private_key),
       data.key_alg ?? null
     );
+
+    // if no id (or heal didn't run), fall back to user_id + created_at
+    if (!healed) {
+      healed = await autoHealKeyAlgByUserAndCreatedAt(
+        sb,
+        "user_coinbase_keys",
+        userId,
+        data.created_at ?? null,
+        String(data.private_key),
+        data.key_alg ?? null
+      );
+    }
 
     return {
       apiKeyName: String(data.api_key_name),
@@ -146,15 +213,17 @@ export async function getUserCoinbaseKeys(userId: string) {
     };
   }
 
-  // 2) Fallback to legacy table
+  // 2) Fallback to legacy table (no id column)
   const legacyHit = await fetchLatestKeyRow("coinbase_keys", userId);
   if (!legacyHit) return null;
 
   const { sb, data } = legacyHit;
-  const healed = await autoHealKeyAlg(
+
+  const healed = await autoHealKeyAlgByUserAndCreatedAt(
     sb,
     "coinbase_keys",
-    data.id ?? null,
+    userId,
+    data.created_at ?? null,
     String(data.private_key),
     data.key_alg ?? null
   );
