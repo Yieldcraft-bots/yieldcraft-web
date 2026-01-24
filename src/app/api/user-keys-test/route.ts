@@ -14,6 +14,20 @@ function json(status: number, body: any) {
   });
 }
 
+function safeSupabaseHost() {
+  const raw =
+    process.env.SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    "";
+
+  // Only return host-ish info (no secrets).
+  // Example output: xgmryvczdkizefvvbolz.supabase.co
+  return (raw || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+}
+
 export async function GET(req: NextRequest) {
   const userId = req.nextUrl.searchParams.get("user_id");
   if (!userId) {
@@ -23,8 +37,13 @@ export async function GET(req: NextRequest) {
   try {
     const keys = await getUserCoinbaseKeys(userId);
 
+    const db = {
+      supabaseUrl: safeSupabaseHost(),
+      table: "coinbase_keys",
+    };
+
     if (!keys) {
-      return json(200, { ok: true, found: false });
+      return json(200, { ok: true, found: false, db });
     }
 
     // NEVER return private key. Just confirm presence + metadata.
@@ -33,8 +52,13 @@ export async function GET(req: NextRequest) {
       found: true,
       apiKeyNameTail: keys.apiKeyName.slice(-6),
       keyAlg: keys.keyAlg,
+      db,
     });
   } catch (e: any) {
-    return json(500, { ok: false, error: String(e?.message || e) });
+    return json(500, {
+      ok: false,
+      error: String(e?.message || e),
+      db: { supabaseUrl: safeSupabaseHost(), table: "coinbase_keys" },
+    });
   }
 }
