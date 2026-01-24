@@ -12,7 +12,10 @@ function normalizePem(pem: string) {
   let p = (pem || "").trim();
 
   // strip accidental wrapping quotes
-  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+  if (
+    (p.startsWith('"') && p.endsWith('"')) ||
+    (p.startsWith("'") && p.endsWith("'"))
+  ) {
     p = p.slice(1, -1);
   }
 
@@ -23,7 +26,7 @@ function normalizePem(pem: string) {
 function inferKeyAlgFromPrivateKey(privateKeyRaw: string): "ES256" | "ed25519" {
   const pem = normalizePem(privateKeyRaw);
 
-  // If the pem is invalid, createPrivateKey will throw (we catch upstream)
+  // If invalid, createPrivateKey throws
   const keyObj = crypto.createPrivateKey(pem);
 
   // Node returns: "ec" | "ed25519" | "rsa" | ...
@@ -32,14 +35,25 @@ function inferKeyAlgFromPrivateKey(privateKeyRaw: string): "ES256" | "ed25519" {
   if (t === "ed25519") return "ed25519";
   if (t === "ec") return "ES256";
 
-  // Safe default (your system already defaults ES256 if unknown)
   return "ES256";
+}
+
+function canonicalKeyAlg(v: any): "ES256" | "ed25519" | null {
+  const s = String(v || "").trim().toLowerCase();
+  if (!s || s === "unknown" || s === "null") return null;
+  if (s.includes("ed25519") || s.includes("eddsa")) return "ed25519";
+  if (s.includes("es256") || s === "ec") return "ES256";
+  return null;
 }
 
 // IMPORTANT: Service role key must ONLY be used server-side (api routes / server actions)
 export function supabaseAdmin() {
-  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
+  const url =
+    process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  if (!url)
+    throw new Error(
+      "Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)"
+    );
 
   const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -48,43 +62,107 @@ export function supabaseAdmin() {
   });
 }
 
-export async function getUserCoinbaseKeys(userId: string) {
+type KeyRow = {
+  id?: string | null;
+  api_key_name?: string | null;
+  private_key?: string | null;
+  key_alg?: string | null;
+  created_at?: string | null;
+};
+
+async function fetchLatestKeyRow(table: string, userId: string) {
   const sb = supabaseAdmin();
 
+  // We try to select common columns; if a table differs, Supabase will error — we treat as "not found"
   const { data, error } = await sb
-    .from("coinbase_keys")
+    .from(table)
     .select("id, api_key_name, private_key, key_alg, created_at")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(1)
-    .maybeSingle();
+    .maybeSingle<KeyRow>();
 
-  if (error) throw new Error(`coinbase_keys lookup failed: ${error.message}`);
+  if (error) return null;
   if (!data?.api_key_name || !data?.private_key) return null;
 
-  let keyAlg: string | null = (data.key_alg as string | null) || null;
+  return { sb, data };
+}
 
-  // ✅ AUTO-HEAL: if missing/unknown, infer it from the private key and persist it
-  if (!keyAlg || keyAlg === "unknown" || keyAlg === "null") {
+async function autoHealKeyAlg(
+  sb: ReturnType<typeof supabaseAdmin>,
+  table: string,
+  rowId: string | null | undefined,
+  privateKey: string,
+  currentKeyAlg: string | null | undefined
+) {
+  if (!rowId) return canonicalKeyAlg(currentKeyAlg);
+
+  let keyAlg = canonicalKeyAlg(currentKeyAlg);
+
+  // infer + persist if missing/unknown
+  if (!keyAlg) {
     try {
-      const inferred = inferKeyAlgFromPrivateKey(String(data.private_key));
+      const inferred = inferKeyAlgFromPrivateKey(String(privateKey));
       const canonical = inferred === "ed25519" ? "ed25519" : "ES256";
 
-      // write it back so future reads are consistent everywhere
       const { error: upErr } = await sb
-        .from("coinbase_keys")
+        .from(table)
         .update({ key_alg: canonical })
-        .eq("id", data.id);
+        .eq("id", rowId);
 
       if (!upErr) keyAlg = canonical;
     } catch {
-      // do not block reads if inference fails; leave keyAlg as-is
+      // don't block reads
     }
   }
 
+  return keyAlg;
+}
+
+/**
+ * Unified per-user Coinbase keys lookup.
+ * Supports BOTH schemas:
+ *  - user_coinbase_keys (newer)
+ *  - coinbase_keys (legacy)
+ */
+export async function getUserCoinbaseKeys(userId: string) {
+  // 1) Prefer newer table (this is likely what Connect Keys writes to)
+  const newHit = await fetchLatestKeyRow("user_coinbase_keys", userId);
+  if (newHit) {
+    const { sb, data } = newHit;
+    const healed = await autoHealKeyAlg(
+      sb,
+      "user_coinbase_keys",
+      data.id ?? null,
+      String(data.private_key),
+      data.key_alg ?? null
+    );
+
+    return {
+      apiKeyName: String(data.api_key_name),
+      privateKey: String(data.private_key),
+      keyAlg: healed,
+      source: "user_coinbase_keys" as const,
+    };
+  }
+
+  // 2) Fallback to legacy table
+  const legacyHit = await fetchLatestKeyRow("coinbase_keys", userId);
+  if (!legacyHit) return null;
+
+  const { sb, data } = legacyHit;
+  const healed = await autoHealKeyAlg(
+    sb,
+    "coinbase_keys",
+    data.id ?? null,
+    String(data.private_key),
+    data.key_alg ?? null
+  );
+
   return {
-    apiKeyName: data.api_key_name as string,
-    privateKey: data.private_key as string,
-    keyAlg,
+    apiKeyName: String(data.api_key_name),
+    privateKey: String(data.private_key),
+    keyAlg: healed,
+    source: "coinbase_keys" as const,
   };
 }
