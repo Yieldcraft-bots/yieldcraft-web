@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
@@ -82,9 +83,51 @@ function log(runId: string, event: string, data?: any) {
   console.log("[pulse-manager]", JSON.stringify(payload));
 }
 
+// ---------- supabase (server-only) ----------
+function sb() {
+  const url = requireEnv("SUPABASE_URL");
+  const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY"); // server-only
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+async function writeTradeLog(row: any) {
+  try {
+    const client = sb();
+    const { error } = await client.from("trade_logs").insert([row]);
+    if (error) {
+      console.log(
+        "[pulse-manager]",
+        JSON.stringify({
+          t: nowIso(),
+          event: "DB_WRITE_ERR",
+          data: String((error as any)?.message || error),
+        })
+      );
+    } else {
+      console.log(
+        "[pulse-manager]",
+        JSON.stringify({ t: nowIso(), event: "DB_WRITE_OK" })
+      );
+    }
+  } catch (e: any) {
+    console.log(
+      "[pulse-manager]",
+      JSON.stringify({
+        t: nowIso(),
+        event: "DB_WRITE_EX",
+        data: String(e?.message || e),
+      })
+    );
+  }
+}
+
 // ---------- auth ----------
 function okAuth(req: Request) {
-  const secret = (process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "").trim();
+  const secret = (
+    process.env.CRON_SECRET ||
+    process.env.PULSE_MANAGER_SECRET ||
+    ""
+  ).trim();
   if (!secret) return false;
 
   const h =
@@ -194,7 +237,8 @@ async function fetchLastBuyFill(): Promise<
   const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
-  if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
+  if (!Number.isFinite(px) || px <= 0)
+    return { ok: false, error: { bad_price: buy } };
 
   return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
 }
@@ -299,23 +343,23 @@ async function runManager(runId: string) {
   const ycDefaultAllocationPct = num(process.env.YC_DEFAULT_ALLOCATION_PCT, 0);
 
   // NEW: protection exits (loss-side)
-  // Keep current behavior: only enabled if PULSE_* flags are on.
-  // If enabled, default values can come from YC_* contract.
   const hardStopEnabled = truthy(process.env.PULSE_HARD_STOP_ENABLED);
   const hardStopLossBps = num(
     process.env.PULSE_HARD_STOP_LOSS_BPS,
     ycDefaultHardStopBps
-  ); // triggers at pnl <= -X
+  );
 
   const timeStopEnabled = truthy(process.env.PULSE_TIME_STOP_ENABLED);
   const maxHoldMinutes = num(
     process.env.PULSE_MAX_HOLD_MINUTES,
     ycDefaultTimeStopMin
-  ); // 0 disables unless flag on
+  );
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
-  // entry size (still explicit dollars for now; allocation% comes later via Recon sizing)
-  const entryQuoteUsd = fmtQuoteSizeUsd(num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0));
+  // entry size
+  const entryQuoteUsd = fmtQuoteSizeUsd(
+    num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0)
+  );
 
   const position = await fetchBtcPosition();
 
@@ -345,7 +389,6 @@ async function runManager(runId: string) {
     hardStopLossBps,
     timeStopEnabled,
     maxHoldMinutes,
-    // Recon contract (observability only)
     yc: {
       defaultAllocationPct: ycDefaultAllocationPct,
       defaultHardStopBps: ycDefaultHardStopBps,
@@ -356,16 +399,30 @@ async function runManager(runId: string) {
   });
 
   if (!gates.LIVE_ALLOWED) {
-    log(runId, "DECISION", { mode: "NOOP_GATES", reason: "LIVE_ALLOWED=false", gates });
+    log(runId, "DECISION", {
+      mode: "NOOP_GATES",
+      reason: "LIVE_ALLOWED=false",
+      gates,
+    });
     return { ok: true, mode: "NOOP_GATES", gates, position };
   }
 
   if (!position.ok) {
-    log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_position", status: (position as any)?.status });
-    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
+    log(runId, "DECISION", {
+      mode: "BLOCKED",
+      reason: "cannot_read_position",
+      status: (position as any)?.status,
+    });
+    return {
+      ok: false,
+      mode: "BLOCKED",
+      gates,
+      error: "cannot_read_position",
+      position,
+    };
   }
 
-  // ---- COOLDOWN: use last BUY fill time if available ----
+  // ---- COOLDOWN ----
   const lastBuy = await fetchLastBuyFill();
   const lastFillIso = lastBuy.ok ? lastBuy.entryTime : null;
   const sinceMs = msSince(lastFillIso);
@@ -386,19 +443,29 @@ async function runManager(runId: string) {
     cooldownOk,
   });
 
-  // ---- ENTRY: if no position and entries enabled ----
+  // ---- ENTRY ----
   if (!position.has_position) {
     if (!entriesEnabled) {
-      log(runId, "DECISION", { mode: "NO_POSITION_ENTRIES_DISABLED", reason: "entries disabled" });
+      log(runId, "DECISION", {
+        mode: "NO_POSITION_ENTRIES_DISABLED",
+        reason: "entries disabled",
+      });
       return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
     }
     if (!cooldownOk) {
-      log(runId, "DECISION", { mode: "NO_POSITION_COOLDOWN", reason: "cooldown active", cooldown });
+      log(runId, "DECISION", {
+        mode: "NO_POSITION_COOLDOWN",
+        reason: "cooldown active",
+        cooldown,
+      });
       return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
     }
 
     if (entriesDryRun) {
-      log(runId, "DECISION", { mode: "DRY_RUN_BUY", would_buy_quote_usd: entryQuoteUsd });
+      log(runId, "DECISION", {
+        mode: "DRY_RUN_BUY",
+        would_buy_quote_usd: entryQuoteUsd,
+      });
       return {
         ok: true,
         mode: "DRY_RUN_BUY",
@@ -412,10 +479,23 @@ async function runManager(runId: string) {
     log(runId, "ACTION", { mode: "ENTRY_BUY", quote_usd: entryQuoteUsd });
     const buy = await placeBuyMarket(entryQuoteUsd);
     log(runId, "RESULT", { mode: "ENTRY_BUY", buy_ok: buy.ok, status: buy.status });
+
+    await writeTradeLog({
+      t: nowIso(),
+      run_id: runId,
+      product_id: PRODUCT_ID,
+      side: "BUY",
+      mode: "ENTRY_BUY",
+      ok: buy.ok,
+      status: buy.status,
+      user_id: "system", // single-account until multi-user loop is added
+      raw: buy.json ?? buy.text ?? null,
+    });
+
     return { ok: buy.ok, mode: "ENTRY_BUY", gates, position, cooldown, buy };
   }
 
-  // ---- EXIT: if position exists ----
+  // ---- EXIT ----
   if (!exitsEnabled) {
     log(runId, "DECISION", { mode: "HOLD_EXITS_DISABLED", reason: "exits disabled" });
     return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown };
@@ -444,24 +524,19 @@ async function runManager(runId: string) {
 
   const heldMs = msSince(lastBuy.entryTime);
 
-  // Profit / trailing exits (existing)
   const shouldTakeProfit = pnlBps >= profitTargetBps;
   const trailArmed = pnlBps >= trailArmBps;
   const shouldTrailStop = trailArmed && drawdownFromPeakBps >= trailOffsetBps;
 
-  // NEW: hard stop (loss-side)
   const shouldHardStop =
-    hardStopEnabled &&
-    hardStopLossBps > 0 &&
-    pnlBps <= -Math.abs(hardStopLossBps);
+    hardStopEnabled && hardStopLossBps > 0 && pnlBps <= -Math.abs(hardStopLossBps);
 
-  // NEW: time stop (stress + exposure control)
   const shouldTimeStop =
     timeStopEnabled &&
     maxHoldMs > 0 &&
     Number.isFinite(heldMs) &&
     heldMs >= maxHoldMs &&
-    pnlBps < 0; // only cut if still down
+    pnlBps < 0;
 
   const decision = {
     entryPrice,
@@ -479,14 +554,12 @@ async function runManager(runId: string) {
     shouldTakeProfit,
     trailArmed,
     shouldTrailStop,
-    // new exits
     hardStopEnabled,
     hardStopLossBps,
     shouldHardStop,
     timeStopEnabled,
     maxHoldMinutes,
     shouldTimeStop,
-    // recon contract telemetry
     yc: {
       defaultAllocationPct: ycDefaultAllocationPct,
       dailyMaxLossBps: ycDailyMaxLossBps,
@@ -540,6 +613,20 @@ async function runManager(runId: string) {
 
   const sell = await placeSellMarket(baseSize);
   log(runId, "RESULT", { mode: "EXIT_SELL", sell_ok: sell.ok, status: sell.status });
+
+  await writeTradeLog({
+    t: nowIso(),
+    run_id: runId,
+    product_id: PRODUCT_ID,
+    side: "SELL",
+    mode: "EXIT_SELL",
+    ok: sell.ok,
+    status: sell.status,
+    user_id: "system",
+    raw: sell.json ?? sell.text ?? null,
+    reason,
+  });
+
   return { ok: sell.ok, mode: "EXIT_SELL", gates, position, cooldown, decision, sell };
 }
 
