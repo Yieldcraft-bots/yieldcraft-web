@@ -96,7 +96,9 @@ function normalizePem(pem: string) {
 function toEcPrivateKeyPemFromBase64Der(b64: string) {
   const clean = (b64 || "").trim().replace(/\s+/g, "");
   const lines = clean.match(/.{1,64}/g) || [];
-  return `-----BEGIN EC PRIVATE KEY-----\n${lines.join("\n")}\n-----END EC PRIVATE KEY-----`;
+  return `-----BEGIN EC PRIVATE KEY-----\n${lines.join(
+    "\n"
+  )}\n-----END EC PRIVATE KEY-----`;
 }
 
 function normalizePrivateKeyFromDb(raw: string) {
@@ -112,8 +114,9 @@ function okAuth(req: Request) {
   const secret = (
     process.env.CRON_SECRET ||
     process.env.PULSE_TRADE_SECRET ||
-    process.env.PULSE_MANAGER_SECRET
-  || "").trim();
+    process.env.PULSE_MANAGER_SECRET ||
+    ""
+  ).trim();
 
   if (!secret) return false;
 
@@ -394,7 +397,15 @@ export async function POST(req: Request) {
   if (!userId) return jsonError("Missing body field: user_id", 400);
   if (!isUuid(userId)) return jsonError("Invalid user_id (must be UUID).", 400);
 
-  const action = (body?.action || "status") as Action;
+  // normalize + validate action
+  const actionRaw = String(body?.action || "status").toLowerCase();
+  const action: Action =
+    actionRaw === "dry_run_order"
+      ? "dry_run_order"
+      : actionRaw === "place_order"
+        ? "place_order"
+        : "status";
+
   const { tradingEnabled, armed, liveAllowed } = gates();
   const orderMode = getOrderMode();
 
@@ -437,6 +448,7 @@ export async function POST(req: Request) {
 
   const position = await fetchBtcPosition(userKeys);
 
+  // If we can't confirm position, do NOT allow LIVE, but still allow DRY RUN
   if (!position.ok && action === "place_order") {
     return jsonError("LIVE blocked: cannot verify BTC position snapshot.", 503, {
       position,
@@ -470,6 +482,9 @@ export async function POST(req: Request) {
   let payload: any;
 
   if (orderMode === "market") {
+    // IMPORTANT FIX:
+    // - BUY uses quote_size (USD)
+    // - SELL uses base_size (BTC)
     payload = {
       client_order_id,
       product_id,
