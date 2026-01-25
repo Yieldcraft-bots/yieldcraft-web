@@ -113,7 +113,7 @@ export default function DashboardPage() {
   const [balancesConn, setBalancesConn] = useState<Conn>("checking");
   const [balances, setBalances] = useState<BalancesResp | null>(null);
 
-  // ✅ Trading status pill (supports YELLOW for locked)
+  // ✅ Trading status pill (now supports YELLOW for locked)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -269,7 +269,12 @@ export default function DashboardPage() {
           });
           setPlanConn("ok");
         } else {
-          setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
+          setEntitlements({
+            pulse: false,
+            recon: false,
+            atlas: false,
+            created_at: null,
+          });
           setPlanConn("no");
         }
       } catch {
@@ -289,7 +294,10 @@ export default function DashboardPage() {
           j = null;
         }
 
-        const authOk = !!(j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200);
+        const authOk = !!(
+          j?.coinbase_auth?.ok === true &&
+          (j?.coinbase_auth?.status ?? 0) >= 200
+        );
         const ok = !!(r.ok && j && j.ok === true && authOk);
 
         if (!mountedRef.current) return;
@@ -382,20 +390,17 @@ export default function DashboardPage() {
         } as BalancesErr);
       }
 
-      // ✅ 6) Trading gates (USER-SCOPED; shows YELLOW when locked)
+      // ✅ 6) Trading gates (USER-SCOPED; now shows YELLOW when locked)
       try {
         if (!sessionUserId) throw new Error("missing_user_id");
-
-        // ✅ IMPORTANT: include Authorization so the status endpoint is consistent & secure.
-        // Even if the endpoint also accepts user_id, this removes "anonymous status" weirdness.
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        };
-        if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+        if (!accessToken) throw new Error("missing_access_token"); // ✅ FIX: required for /api/pulse-trade (401 without it)
 
         const r = await fetch("/api/pulse-trade", {
           method: "POST",
-          headers,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`, // ✅ FIX: add auth header
+          },
           cache: "no-store",
           body: JSON.stringify({ action: "status", user_id: sessionUserId }),
         });
@@ -420,6 +425,7 @@ export default function DashboardPage() {
 
         const ok = !!(r.ok && j && j.ok === true);
 
+        // Build explain payload
         const blocking: string[] = [];
         const next_steps: string[] = [];
 
@@ -433,40 +439,33 @@ export default function DashboardPage() {
           traffic = "red";
           connState = "no";
         } else {
-          // Status endpoint OK — interpret gates safely
+          // Status endpoint OK — now interpret gates safely
+          // IMPORTANT: use the *fresh* result (userKeysOk), not stale React state
           if (!userKeysOk) {
-            // Missing user keys = RED (this is truly broken for that user)
             blocking.push("No Coinbase keys found for your account.");
             next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
             traffic = "red";
             connState = "no";
-          } else {
-            // ✅ Everything below is "safe locked" states unless fully armed.
-            // Treat disabled/disarmed flags as YELLOW (LOCKED), not RED.
-            const isFullyLive = parsed.COINBASE_TRADING_ENABLED && parsed.PULSE_TRADE_ARMED && parsed.LIVE_ALLOWED;
-
-            if (!parsed.COINBASE_TRADING_ENABLED) {
-              blocking.push("Trading is disabled by platform admin (safe mode).");
-              next_steps.push("Admin can enable COINBASE_TRADING_ENABLED=true in Production env and redeploy.");
-            }
-
+          } else if (!parsed.COINBASE_TRADING_ENABLED) {
+            blocking.push("Trading is disabled by platform admin.");
+            next_steps.push("Admin must enable COINBASE_TRADING_ENABLED=true in Production env and redeploy.");
+            traffic = "red";
+            connState = "no";
+          } else if (!parsed.PULSE_TRADE_ARMED || !parsed.LIVE_ALLOWED) {
+            // SAFE LOCKED state = YELLOW (not an error)
             if (!parsed.PULSE_TRADE_ARMED) {
               blocking.push("Pulse is not armed (safe mode).");
-              next_steps.push("Admin can set PULSE_TRADE_ARMED=true in Production env and redeploy.");
+              next_steps.push("Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy.");
             }
-
             if (!parsed.LIVE_ALLOWED) {
-              blocking.push("Live trading is not allowed by current safety gates (safe mode).");
-              next_steps.push("Admin can enable required env flags, then re-check status.");
+              blocking.push("Live trading is not allowed by current safety gates.");
+              next_steps.push("Admin must enable required env flags, then re-check status.");
             }
-
-            if (isFullyLive) {
-              traffic = "green";
-              connState = "ok";
-            } else {
-              traffic = "yellow";
-              connState = "warn";
-            }
+            traffic = "yellow";
+            connState = "warn";
+          } else {
+            traffic = "green";
+            connState = "ok";
           }
         }
 
@@ -671,7 +670,10 @@ export default function DashboardPage() {
                 footer: ["Balances are read-only and server-verified."],
               });
             }}
-            className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold", balP.wrap].join(" ")}
+            className={[
+              "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+              balP.wrap,
+            ].join(" ")}
             title="Click for details"
           >
             <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
@@ -707,7 +709,8 @@ export default function DashboardPage() {
   })();
 
   const coinbaseClickMsg = () => {
-    if (userCoinbaseConn === "ok") return `✅ Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
+    if (userCoinbaseConn === "ok")
+      return `✅ Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
 
     const r = coinbaseStatusRaw || {};
     const reason = r?.reason || r?.error || "unknown";
