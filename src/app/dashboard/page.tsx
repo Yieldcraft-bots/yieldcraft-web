@@ -295,8 +295,7 @@ export default function DashboardPage() {
         }
 
         const authOk = !!(
-          j?.coinbase_auth?.ok === true &&
-          (j?.coinbase_auth?.status ?? 0) >= 200
+          j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200
         );
         const ok = !!(r.ok && j && j.ok === true && authOk);
 
@@ -393,13 +392,13 @@ export default function DashboardPage() {
       // ✅ 6) Trading gates (USER-SCOPED; now shows YELLOW when locked)
       try {
         if (!sessionUserId) throw new Error("missing_user_id");
-        if (!accessToken) throw new Error("missing_access_token"); // ✅ FIX: required for /api/pulse-trade (401 without it)
+        if (!accessToken) throw new Error("missing_access_token");
 
         const r = await fetch("/api/pulse-trade", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`, // ✅ FIX: add auth header
+            Authorization: `Bearer ${accessToken}`, // ✅ FIX: prevents HTTP 401
           },
           cache: "no-store",
           body: JSON.stringify({ action: "status", user_id: sessionUserId }),
@@ -448,14 +447,18 @@ export default function DashboardPage() {
             connState = "no";
           } else if (!parsed.COINBASE_TRADING_ENABLED) {
             blocking.push("Trading is disabled by platform admin.");
-            next_steps.push("Admin must enable COINBASE_TRADING_ENABLED=true in Production env and redeploy.");
+            next_steps.push(
+              "Admin must enable COINBASE_TRADING_ENABLED=true in Production env and redeploy."
+            );
             traffic = "red";
             connState = "no";
           } else if (!parsed.PULSE_TRADE_ARMED || !parsed.LIVE_ALLOWED) {
-            // SAFE LOCKED state = YELLOW (not an error)
+            // This is SAFE LOCKED state = YELLOW (not an error)
             if (!parsed.PULSE_TRADE_ARMED) {
               blocking.push("Pulse is not armed (safe mode).");
-              next_steps.push("Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy.");
+              next_steps.push(
+                "Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy."
+              );
             }
             if (!parsed.LIVE_ALLOWED) {
               blocking.push("Live trading is not allowed by current safety gates.");
@@ -464,6 +467,7 @@ export default function DashboardPage() {
             traffic = "yellow";
             connState = "warn";
           } else {
+            // Truly live-allowed & armed = GREEN
             traffic = "green";
             connState = "ok";
           }
@@ -715,7 +719,8 @@ export default function DashboardPage() {
     const r = coinbaseStatusRaw || {};
     const reason = r?.reason || r?.error || "unknown";
     if (reason === "no_keys") return "❌ No keys saved yet.\n\nNext: Go to Connect Keys and click Verify & Continue.";
-    if (reason === "invalid_keys") return "❌ Keys saved but invalid.\n\nNext: Re-paste using Coinbase copy icons (don’t drag-select).";
+    if (reason === "invalid_keys")
+      return "❌ Keys saved but invalid.\n\nNext: Re-paste using Coinbase copy icons (don’t drag-select).";
     if (reason === "not_authenticated") return "❌ Not signed in.\n\nNext: Log out and back in, then re-check.";
     return `❌ Coinbase not connected.\nReason: ${reason}\n\nNext: Go to Connect Keys and click Verify & Continue.`;
   };
@@ -723,8 +728,12 @@ export default function DashboardPage() {
   const tradingClickMsg = () => {
     if (tradeExplain.traffic === "green") return "✅ Trading status verified (per-user).";
     if (tradeExplain.traffic === "yellow") return "🟡 Trading is locked (safe mode). Not an error.";
-    const blocks = tradeExplain.blocking.length ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}` : "";
-    const steps = tradeExplain.next_steps.length ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}` : "";
+    const blocks = tradeExplain.blocking.length
+      ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}`
+      : "";
+    const steps = tradeExplain.next_steps.length
+      ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}`
+      : "";
     return `⚠️ Trading is not green.${blocks}${steps}`;
   };
 
@@ -868,7 +877,10 @@ export default function DashboardPage() {
                     openPillModal({
                       title: "BALANCES",
                       tone: "red",
-                      body: [String(msg), "Common cause: API key missing required scopes (View/Trade) or wrong portfolio."],
+                      body: [
+                        String(msg),
+                        "Common cause: API key missing required scopes (View/Trade) or wrong portfolio.",
+                      ],
                       footer: ["Balances are read-only and server-verified."],
                     });
                     return;
@@ -905,7 +917,9 @@ export default function DashboardPage() {
                     title: "PLATFORM ENGINE",
                     tone: ok ? "green" : "red",
                     body: [
-                      ok ? "✅ Platform engine can authenticate to Coinbase (server env keys)." : "❌ Platform engine auth is failing.",
+                      ok
+                        ? "✅ Platform engine can authenticate to Coinbase (server env keys)."
+                        : "❌ Platform engine auth is failing.",
                       `Auth status: ${platformEngineMeta.authStatus ?? "—"}`,
                       `Mode: ${platformEngineMeta.mode ?? "—"}`,
                     ],
@@ -945,7 +959,9 @@ export default function DashboardPage() {
                     : tradeExplain.traffic === "yellow"
                     ? "Trading is locked (safe mode)."
                     : tradeExplain.blocking.length
-                    ? `${tradeExplain.blocking.join(" ")} ${tradeExplain.next_steps.length ? "Next: " + tradeExplain.next_steps.join(" ") : ""}`
+                    ? `${tradeExplain.blocking.join(" ")} ${
+                        tradeExplain.next_steps.length ? "Next: " + tradeExplain.next_steps.join(" ") : ""
+                      }`
                     : "Trading status unavailable."
                 }
               >
