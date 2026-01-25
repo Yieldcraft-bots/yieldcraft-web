@@ -32,6 +32,26 @@ function jwtRoleHint(jwt: string | undefined | null): string | null {
   }
 }
 
+type KeyMeta = {
+  api_key_name?: string | null;
+  private_key?: string | null;
+  key_alg?: string | null;
+  created_at?: string | null;
+};
+
+async function latestFromTable(sb: any, table: string, userId: string) {
+  // We only select columns that exist in BOTH schemas (and avoid "id").
+  // If table doesn't exist, Supabase returns an error we capture.
+  const q = await sb
+    .from(table)
+    .select("api_key_name, private_key, key_alg, created_at", { count: "exact" })
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  return q;
+}
+
 export async function GET(req: NextRequest) {
   const userId = req.nextUrl.searchParams.get("user_id");
   if (!userId) return json(400, { ok: false, error: "Missing query param: user_id" });
@@ -46,19 +66,52 @@ export async function GET(req: NextRequest) {
   try {
     const sb = supabaseAdmin();
 
-    // IMPORTANT: your table has NO "id" column, so do not select it.
-    const q1 = await sb
-      .from("coinbase_keys")
-      .select("key_alg, created_at", { count: "exact" })
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(1);
+    // 1) Prefer newer table (if it exists)
+    const qNew = await latestFromTable(sb, "user_coinbase_keys", userId);
+    if (!qNew.error) {
+      const row: KeyMeta | null = (qNew.data?.[0] as any) ?? null;
+      const hasKeyName = !!row?.api_key_name;
+      const hasPrivateKey = !!row?.private_key;
 
-    if (q1.error) {
+      return json(200, {
+        ok: true,
+        found: hasKeyName && hasPrivateKey,
+        db: {
+          supabaseUrlHost: supabaseUrl ? new URL(supabaseUrl).host : null,
+          sourceTable: "user_coinbase_keys",
+        },
+        env: {
+          serviceKeyPresent,
+          serviceKeyRoleHint,
+          nodeEnv: process.env.NODE_ENV || null,
+          vercelEnv: process.env.VERCEL_ENV || null,
+        },
+        meta: {
+          count: qNew.count ?? null,
+          newestRow: row
+            ? {
+                apiKeyNameTail: row.api_key_name ? String(row.api_key_name).slice(-6) : null,
+                keyAlg: row.key_alg ?? null,
+                createdAt: row.created_at ?? null,
+                hasKeyName,
+                hasPrivateKey,
+              }
+            : null,
+        },
+      });
+    }
+
+    // 2) Fallback to legacy table
+    const qLegacy = await latestFromTable(sb, "coinbase_keys", userId);
+
+    if (qLegacy.error) {
       return json(200, {
         ok: true,
         found: false,
-        db: { supabaseUrlHost: supabaseUrl ? new URL(supabaseUrl).host : null, table: "coinbase_keys" },
+        db: {
+          supabaseUrlHost: supabaseUrl ? new URL(supabaseUrl).host : null,
+          sourceTable: "coinbase_keys",
+        },
         env: {
           serviceKeyPresent,
           serviceKeyRoleHint,
@@ -66,19 +119,24 @@ export async function GET(req: NextRequest) {
           vercelEnv: process.env.VERCEL_ENV || null,
         },
         query: {
-          error: q1.error.message,
-          hint: (q1.error as any).hint ?? null,
-          code: (q1.error as any).code ?? null,
+          error: qLegacy.error.message,
+          hint: (qLegacy.error as any).hint ?? null,
+          code: (qLegacy.error as any).code ?? null,
         },
       });
     }
 
-    const row = q1.data?.[0] ?? null;
+    const row: KeyMeta | null = (qLegacy.data?.[0] as any) ?? null;
+    const hasKeyName = !!row?.api_key_name;
+    const hasPrivateKey = !!row?.private_key;
 
     return json(200, {
       ok: true,
-      found: !!row,
-      db: { supabaseUrlHost: supabaseUrl ? new URL(supabaseUrl).host : null, table: "coinbase_keys" },
+      found: hasKeyName && hasPrivateKey,
+      db: {
+        supabaseUrlHost: supabaseUrl ? new URL(supabaseUrl).host : null,
+        sourceTable: "coinbase_keys",
+      },
       env: {
         serviceKeyPresent,
         serviceKeyRoleHint,
@@ -86,8 +144,16 @@ export async function GET(req: NextRequest) {
         vercelEnv: process.env.VERCEL_ENV || null,
       },
       meta: {
-        count: q1.count ?? null,
-        newestRow: row ? { keyAlg: row.key_alg ?? null, createdAt: row.created_at ?? null } : null,
+        count: qLegacy.count ?? null,
+        newestRow: row
+          ? {
+              apiKeyNameTail: row.api_key_name ? String(row.api_key_name).slice(-6) : null,
+              keyAlg: row.key_alg ?? null,
+              createdAt: row.created_at ?? null,
+              hasKeyName,
+              hasPrivateKey,
+            }
+          : null,
       },
     });
   } catch (e: any) {
