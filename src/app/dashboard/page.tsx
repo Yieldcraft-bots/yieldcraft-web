@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
-type Conn = "ok" | "no" | "checking";
+type Conn = "ok" | "no" | "checking" | "warn";
 
 type TradeGates = {
   COINBASE_TRADING_ENABLED: boolean;
@@ -51,6 +51,8 @@ type BalancesErr = {
 };
 
 type BalancesResp = BalancesOk | BalancesErr;
+
+type Traffic = "green" | "yellow" | "red" | "unknown";
 
 function truthy(v: any) {
   return v === true || v === "true" || v === 1 || v === "1";
@@ -111,6 +113,7 @@ export default function DashboardPage() {
   const [balancesConn, setBalancesConn] = useState<Conn>("checking");
   const [balances, setBalances] = useState<BalancesResp | null>(null);
 
+  // ✅ Trading status pill (now supports YELLOW for locked)
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -120,7 +123,7 @@ export default function DashboardPage() {
 
   // ✅ Explain payload (used for click + title)
   const [tradeExplain, setTradeExplain] = useState<{
-    traffic: "green" | "red" | "unknown";
+    traffic: Traffic;
     blocking: string[];
     next_steps: string[];
     rawStatus?: string;
@@ -135,14 +138,14 @@ export default function DashboardPage() {
   const [pillModal, setPillModal] = useState<{
     open: boolean;
     title: string;
-    tone: "green" | "red" | "neutral";
+    tone: "green" | "yellow" | "red" | "neutral";
     body: string[];
     footer?: string[];
   }>({ open: false, title: "", tone: "neutral", body: [] });
 
   const openPillModal = (p: {
     title: string;
-    tone: "green" | "red" | "neutral";
+    tone: "green" | "yellow" | "red" | "neutral";
     body: string[];
     footer?: string[];
   }) => setPillModal({ open: true, ...p });
@@ -379,7 +382,7 @@ export default function DashboardPage() {
         } as BalancesErr);
       }
 
-      // ✅ 6) Trading gates (USER-SCOPED; fixes false RED on multi-user)
+      // ✅ 6) Trading gates (USER-SCOPED; now shows YELLOW when locked)
       try {
         if (!sessionUserId) throw new Error("missing_user_id");
 
@@ -409,40 +412,55 @@ export default function DashboardPage() {
         setTradeGates(parsed);
 
         const ok = !!(r.ok && j && j.ok === true);
-        setTradeConn(ok ? "ok" : "no");
 
         // Build explain payload
         const blocking: string[] = [];
         const next_steps: string[] = [];
 
+        let traffic: Traffic = "unknown";
+        let connState: Conn = "checking";
+
         if (!ok) {
+          // Broken status endpoint = RED
           blocking.push(`Status check failed (HTTP ${r.status}).`);
           next_steps.push("Refresh and try again. If it persists, reconnect Coinbase keys.");
+          traffic = "red";
+          connState = "no";
+        } else {
+          // Status endpoint OK — now interpret gates safely
+          // IMPORTANT: use the *fresh* result (userKeysOk), not stale React state
+          if (!userKeysOk) {
+            blocking.push("No Coinbase keys found for your account.");
+            next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
+            traffic = "red";
+            connState = "no";
+          } else if (!parsed.COINBASE_TRADING_ENABLED) {
+            blocking.push("Trading is disabled by platform admin.");
+            next_steps.push("Admin must enable COINBASE_TRADING_ENABLED=true in Production env and redeploy.");
+            traffic = "red";
+            connState = "no";
+          } else if (!parsed.PULSE_TRADE_ARMED || !parsed.LIVE_ALLOWED) {
+            // This is SAFE LOCKED state = YELLOW (not an error)
+            if (!parsed.PULSE_TRADE_ARMED) {
+              blocking.push("Pulse is not armed (safe mode).");
+              next_steps.push("Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy.");
+            }
+            if (!parsed.LIVE_ALLOWED) {
+              blocking.push("Live trading is not allowed by current safety gates.");
+              next_steps.push("Admin must enable required env flags, then re-check status.");
+            }
+            traffic = "yellow";
+            connState = "warn";
+          } else {
+            // Truly live-allowed & armed = GREEN
+            traffic = "green";
+            connState = "ok";
+          }
         }
 
-        // IMPORTANT: use the *fresh* result (userKeysOk), not stale React state
-        if (!userKeysOk) {
-          blocking.push("No Coinbase keys found for your account.");
-          next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
-        }
-
-        if (!parsed.COINBASE_TRADING_ENABLED) {
-          blocking.push("Trading is disabled by platform admin.");
-          next_steps.push("Try again later or contact support.");
-        }
-
-        if (!parsed.PULSE_TRADE_ARMED) {
-          blocking.push("Pulse is not armed (safe mode).");
-          next_steps.push("Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy.");
-        }
-
-        if (!parsed.LIVE_ALLOWED) {
-          blocking.push("Live trading is not allowed by current safety gates.");
-          next_steps.push("Admin must enable required env flags, then re-check status.");
-        }
-
+        setTradeConn(connState);
         setTradeExplain({
-          traffic: blocking.length ? "red" : "green",
+          traffic,
           blocking,
           next_steps,
           rawStatus: j?.status,
@@ -548,6 +566,13 @@ export default function DashboardPage() {
         label: "GREEN",
       };
     }
+    if (state === "warn") {
+      return {
+        wrap: "bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/30",
+        dot: "bg-amber-400",
+        label: "YELLOW",
+      };
+    }
     return {
       wrap: "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
       dot: "bg-rose-400",
@@ -563,6 +588,7 @@ export default function DashboardPage() {
   const balP = pill(balancesConn);
   const tradeP = pill(tradeConn);
 
+  // Sidebar label: locked should be YELLOW, not GREEN
   const armedLabel = tradeGates.LIVE_ALLOWED
     ? {
         title: "HOT (Live Allowed)",
@@ -571,8 +597,8 @@ export default function DashboardPage() {
       }
     : {
         title: "LOCKED (Safe)",
-        tone: "text-emerald-200",
-        badge: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/25",
+        tone: "text-amber-200",
+        badge: "bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/25",
       };
 
   const planText =
@@ -681,6 +707,7 @@ export default function DashboardPage() {
 
   const tradingClickMsg = () => {
     if (tradeExplain.traffic === "green") return "✅ Trading status verified (per-user).";
+    if (tradeExplain.traffic === "yellow") return "🟡 Trading is locked (safe mode). Not an error.";
     const blocks = tradeExplain.blocking.length ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}` : "";
     const steps = tradeExplain.next_steps.length ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}` : "";
     return `⚠️ Trading is not green.${blocks}${steps}`;
@@ -711,6 +738,8 @@ export default function DashboardPage() {
                       "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold ring-1",
                       pillModal.tone === "green"
                         ? "bg-emerald-500/15 text-emerald-200 ring-emerald-500/25"
+                        : pillModal.tone === "yellow"
+                        ? "bg-amber-500/15 text-amber-200 ring-amber-500/25"
                         : pillModal.tone === "red"
                         ? "bg-rose-500/15 text-rose-200 ring-rose-500/25"
                         : "bg-slate-800/60 text-slate-200 ring-slate-700",
@@ -721,12 +750,20 @@ export default function DashboardPage() {
                         "h-2 w-2 rounded-full",
                         pillModal.tone === "green"
                           ? "bg-emerald-400"
+                          : pillModal.tone === "yellow"
+                          ? "bg-amber-400"
                           : pillModal.tone === "red"
                           ? "bg-rose-400"
                           : "bg-slate-300",
                       ].join(" ")}
                     />
-                    {pillModal.tone === "green" ? "GREEN" : pillModal.tone === "red" ? "RED" : "INFO"}
+                    {pillModal.tone === "green"
+                      ? "GREEN"
+                      : pillModal.tone === "yellow"
+                      ? "YELLOW"
+                      : pillModal.tone === "red"
+                      ? "RED"
+                      : "INFO"}
                   </span>
                 </div>
               </div>
@@ -876,7 +913,12 @@ export default function DashboardPage() {
 
                   openPillModal({
                     title: "TRADING STATUS",
-                    tone: tradeExplain.traffic === "green" ? "green" : "red",
+                    tone:
+                      tradeExplain.traffic === "green"
+                        ? "green"
+                        : tradeExplain.traffic === "yellow"
+                        ? "yellow"
+                        : "red",
                     body: lines,
                     footer: ["This is per-user Pulse status (server-verified)."],
                   });
@@ -885,6 +927,8 @@ export default function DashboardPage() {
                 title={
                   tradeExplain.traffic === "green"
                     ? "Trading status verified (per-user)."
+                    : tradeExplain.traffic === "yellow"
+                    ? "Trading is locked (safe mode)."
                     : tradeExplain.blocking.length
                     ? `${tradeExplain.blocking.join(" ")} ${tradeExplain.next_steps.length ? "Next: " + tradeExplain.next_steps.join(" ") : ""}`
                     : "Trading status unavailable."
