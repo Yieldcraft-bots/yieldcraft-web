@@ -10,9 +10,12 @@
 //   1) COINBASE_TRADING_ENABLED=true
 //   2) PULSE_TRADE_ARMED=true
 //
-// AUTH (REQUIRED):
+// AUTH (REQUIRED) for any non-public action:
 //   - x-cron-secret OR x-pulse-secret OR Authorization: Bearer <secret>
 //   - secret query param allowed for manual diagnostics
+//
+// PUBLIC (SAFE):
+//   - GET ?action=status  (returns read-only gates only; no user data)
 //
 // DESIGN:
 // - Single-position only (BTC-USD)
@@ -344,7 +347,11 @@ async function buildStatusPayload(userId: string) {
 
     position = await fetchBtcPosition(userKeys);
   } catch (e: any) {
-    userKeysMeta = { ok: false, user_id: userId, error: String(e?.message || e) };
+    userKeysMeta = {
+      ok: false,
+      user_id: userId,
+      error: String(e?.message || e),
+    };
     position = {
       ok: false,
       has_position: false,
@@ -372,10 +379,50 @@ async function buildStatusPayload(userId: string) {
 // -------------------- GET --------------------
 
 export async function GET(req: NextRequest) {
+  const actionRaw = (req.nextUrl.searchParams.get("action") || "status").toLowerCase();
+  const action: Action =
+    actionRaw === "dry_run_order"
+      ? "dry_run_order"
+      : actionRaw === "place_order"
+        ? "place_order"
+        : "status";
+
+  // ✅ PUBLIC, READ-ONLY status (no secrets, no user info)
+  // This makes the pills green and allows safe uptime/health checks.
+  if (action === "status" && !okAuth(req)) {
+    const { tradingEnabled, armed, liveAllowed } = gates();
+    return json(200, {
+      ok: true,
+      status: "PULSE_TRADE_STATUS_PUBLIC",
+      gates: {
+        BOT_ENABLED: truthy(process.env.BOT_ENABLED),
+        COINBASE_TRADING_ENABLED: tradingEnabled,
+        PULSE_TRADE_ARMED: armed,
+        LIVE_ALLOWED: liveAllowed,
+      },
+      t: new Date().toISOString(),
+    });
+  }
+
+  // Everything else requires auth
   if (!okAuth(req)) return jsonError("unauthorized", 401);
 
+  // Authenticated GET can return detailed status if user_id is provided
   const userId = req.nextUrl.searchParams.get("user_id") || "";
-  if (!userId) return jsonError("Missing query param: user_id", 400);
+  if (!userId) {
+    const { tradingEnabled, armed, liveAllowed } = gates();
+    return json(200, {
+      ok: true,
+      status: "PULSE_TRADE_STATUS_AUTH_NO_USER",
+      gates: {
+        BOT_ENABLED: truthy(process.env.BOT_ENABLED),
+        COINBASE_TRADING_ENABLED: tradingEnabled,
+        PULSE_TRADE_ARMED: armed,
+        LIVE_ALLOWED: liveAllowed,
+      },
+      t: new Date().toISOString(),
+    });
+  }
 
   const body = await buildStatusPayload(userId);
   return json(200, body);
@@ -415,7 +462,12 @@ export async function POST(req: Request) {
   }
 
   // Load user keys ONCE for the rest of the request
-  let userKeys: { apiKeyName: string; privateKeyPem: string; jwtAlg: JwtAlg; keyAlg?: any };
+  let userKeys: {
+    apiKeyName: string;
+    privateKeyPem: string;
+    jwtAlg: JwtAlg;
+    keyAlg?: any;
+  };
   try {
     const k = await requireUserKeys(userId);
     userKeys = {
@@ -482,7 +534,7 @@ export async function POST(req: Request) {
   let payload: any;
 
   if (orderMode === "market") {
-    // IMPORTANT FIX:
+    // IMPORTANT:
     // - BUY uses quote_size (USD)
     // - SELL uses base_size (BTC)
     payload = {
