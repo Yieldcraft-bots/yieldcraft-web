@@ -9,6 +9,13 @@ import { supabase } from "@/lib/supabaseClient";
 type BotStatus = "Active" | "Available" | "Locked";
 type StepState = "Done" | "Next" | "Pending";
 
+type Entitlements = {
+  pulse: boolean;
+  recon: boolean;
+  atlas: boolean;
+  created_at?: string | null;
+};
+
 function fmtDate(d?: Date | null) {
   if (!d) return "—";
   try {
@@ -199,12 +206,21 @@ export default function AccountPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+
   const [email, setEmail] = useState<string | null>(null);
   const [createdAt, setCreatedAt] = useState<Date | null>(null);
   const [emailVerified, setEmailVerified] = useState(false);
 
-  // These are optional “upgrade hooks” you can later wire to real data.
+  // Plan / bots (real)
+  const [entitlements, setEntitlements] = useState<Entitlements>({
+    pulse: false,
+    recon: false,
+    atlas: false,
+    created_at: null,
+  });
   const [planName, setPlanName] = useState<string>("Starter Plan");
+
+  // Coinbase + Status (REAL checks)
   const [coinbaseConnected, setCoinbaseConnected] = useState<boolean>(false);
   const [coinbaseGreen, setCoinbaseGreen] = useState<boolean>(false);
 
@@ -212,20 +228,21 @@ export default function AccountPage() {
     let mounted = true;
 
     (async () => {
-      const { data, error } = await supabase.auth.getUser();
+      // 1) Session
+      const { data } = await supabase.auth.getSession();
+      const session = data?.session ?? null;
 
       if (!mounted) return;
 
-      if (error || !data?.user) {
+      if (!session?.user) {
         router.push("/login");
         return;
       }
 
-      const u = data.user;
+      const u = session.user;
       setEmail(u.email ?? null);
       setCreatedAt(u.created_at ? new Date(u.created_at) : null);
 
-      // Supabase user objects may have different fields depending on setup; handle safely.
       const verified =
         Boolean((u as any).email_confirmed_at) ||
         Boolean((u as any).confirmed_at) ||
@@ -233,18 +250,89 @@ export default function AccountPage() {
 
       setEmailVerified(verified);
 
-      // Optional metadata-driven UI (safe fallbacks)
+      const accessToken = session.access_token;
+
+      // Safe metadata fallback (won’t override real checks if they succeed)
       const meta: any = (u as any).user_metadata || {};
-      const plan = typeof meta.plan_name === "string" && meta.plan_name.trim() ? meta.plan_name : "Starter Plan";
-      setPlanName(plan);
+      const metaPlan =
+        typeof meta.plan_name === "string" && meta.plan_name.trim() ? meta.plan_name : "Starter Plan";
+      setPlanName(metaPlan);
 
-      const cbConnected = Boolean(meta.coinbase_connected) || Boolean(meta.coinbase_keys_saved);
-      setCoinbaseConnected(cbConnected);
+      // 2) Entitlements (real)
+      try {
+        const r = await fetch("/api/entitlements", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const j = await r.json().catch(() => null);
 
-      // “Green” means your app’s status checks are passing (wire later). For now use metadata if present.
-      const cbGreen = Boolean(meta.coinbase_green) || Boolean(meta.coinbase_status_ok);
-      setCoinbaseGreen(cbGreen);
+        if (!mounted) return;
 
+        if (r.ok && j?.ok === true && j?.entitlements) {
+          const e = j.entitlements as Entitlements;
+          setEntitlements({
+            pulse: !!e.pulse,
+            recon: !!e.recon,
+            atlas: !!e.atlas,
+            created_at: e.created_at ?? null,
+          });
+
+          // OPTIONAL: set a clearer plan label without needing Stripe wiring
+          const anyOn = !!(e.pulse || e.recon || e.atlas);
+          setPlanName(anyOn ? "Active Member" : "Starter Plan");
+        } else {
+          // keep defaults; don’t fail the page
+          setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3) Coinbase status (real)
+      let cbConnected = false;
+      try {
+        const r = await fetch("/api/coinbase/status", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const j = await r.json().catch(() => null);
+
+        if (!mounted) return;
+
+        cbConnected = !!(r.ok && j && j.connected === true);
+        setCoinbaseConnected(cbConnected);
+      } catch {
+        if (!mounted) return;
+        setCoinbaseConnected(false);
+      }
+
+      // 4) Trading status (real) — if Dashboard is green, this will green too
+      try {
+        const userId = session.user.id;
+
+        const r = await fetch("/api/pulse-trade", {
+          method: "POST",
+          cache: "no-store",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ action: "status", user_id: userId }),
+        });
+
+        const j = await r.json().catch(() => null);
+
+        if (!mounted) return;
+
+        const ok = !!(r.ok && j && j.ok === true);
+        // “Green” here means: Coinbase connected + status endpoint OK
+        setCoinbaseGreen(ok && cbConnected);
+      } catch {
+        if (!mounted) return;
+        setCoinbaseGreen(false);
+      }
+
+      if (!mounted) return;
       setLoading(false);
     })();
 
@@ -277,7 +365,6 @@ export default function AccountPage() {
   }
 
   function goForgotPassword() {
-    // You already built /forgot-password — use it as the safe reset path.
     const q = email ? `?email=${encodeURIComponent(email)}` : "";
     router.push(`/forgot-password${q}`);
   }
@@ -289,6 +376,13 @@ export default function AccountPage() {
       </div>
     );
   }
+
+  // Bot statuses from entitlements (matches Dashboard)
+  const pulseStatus: BotStatus = entitlements.pulse ? "Active" : "Locked";
+  const reconStatus: BotStatus = entitlements.recon ? "Active" : "Locked";
+  const atlasStatus: BotStatus = entitlements.atlas ? "Available" : "Locked";
+
+  const activeCount = [entitlements.pulse, entitlements.recon].filter(Boolean).length;
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -386,7 +480,6 @@ export default function AccountPage() {
                   !emailVerified
                     ? async () => {
                         if (!email) return;
-                        // This sends a new sign-in link if you use magic links OR can be replaced later with a dedicated verification resend flow.
                         await supabase.auth.resend({ type: "signup", email });
                         alert("Verification email requested. Check inbox/spam.");
                       }
@@ -417,8 +510,8 @@ export default function AccountPage() {
                 <Chip tone="warn">Fast help</Chip>
               </div>
               <div className="mt-2 text-sm text-white/60">
-                If something looks wrong (email not arriving, Coinbase not green), it’s almost always DNS/SMTP,
-                permissions, or one missing key field. We’ll keep it step-by-step.
+                If something looks wrong (email not arriving, Coinbase not green), it’s almost always permissions,
+                a missing key field, or a login token issue. We’ll keep it step-by-step.
               </div>
 
               <div className="mt-4 flex flex-wrap gap-3">
@@ -442,7 +535,7 @@ export default function AccountPage() {
                 <div className="text-white text-lg font-semibold">Subscribed Bots</div>
                 <div className="mt-1 text-sm text-white/60">Your current suite and availability.</div>
               </div>
-              <Chip tone="good">2 Active</Chip>
+              <Chip tone={activeCount > 0 ? "good" : "warn"}>{activeCount} Active</Chip>
             </div>
 
             <div className="mt-6 space-y-4">
@@ -450,19 +543,19 @@ export default function AccountPage() {
                 name="Pulse"
                 tag="LIVE READY"
                 desc="Core execution bot (spot) with disciplined cadence."
-                status="Active"
+                status={pulseStatus}
               />
               <BotCard
                 name="Recon"
                 tag="SIGNALS"
                 desc="Signal intelligence layer (confidence + regime)."
-                status="Active"
+                status={reconStatus}
               />
               <BotCard
                 name="Atlas"
                 tag="WEALTH"
                 desc="Long-term allocator for steady compounding (DCA)."
-                status="Available"
+                status={atlasStatus}
               />
               <BotCard
                 name="Ignition"
@@ -474,6 +567,7 @@ export default function AccountPage() {
 
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-5">
               <div className="text-white font-semibold">Account Health</div>
+
               <div className="mt-2 grid grid-cols-3 gap-3">
                 <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                   <div className="text-[11px] uppercase tracking-wider text-white/45">Email</div>
@@ -481,22 +575,29 @@ export default function AccountPage() {
                     <Chip tone={emailVerified ? "good" : "warn"}>{emailVerified ? "Verified" : "Pending"}</Chip>
                   </div>
                 </div>
+
                 <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                   <div className="text-[11px] uppercase tracking-wider text-white/45">Coinbase</div>
                   <div className="mt-1">
-                    <Chip tone={coinbaseConnected ? "good" : "warn"}>{coinbaseConnected ? "Connected" : "Not set"}</Chip>
+                    <Chip tone={coinbaseConnected ? "good" : "warn"}>
+                      {coinbaseConnected ? "Green" : "Not set"}
+                    </Chip>
                   </div>
                 </div>
+
                 <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                   <div className="text-[11px] uppercase tracking-wider text-white/45">Status</div>
                   <div className="mt-1">
-                    <Chip tone={coinbaseGreen ? "good" : "warn"}>{coinbaseGreen ? "Green" : "Needs check"}</Chip>
+                    <Chip tone={coinbaseGreen ? "good" : "warn"}>
+                      {coinbaseGreen ? "Green" : "Needs check"}
+                    </Chip>
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 text-xs text-white/45">
-                *Coinbase “Green” will reflect real preflight checks once we wire the status endpoint.
+                *These are real checks now: Coinbase comes from <span className="text-white/60">/api/coinbase/status</span>{" "}
+                and Status comes from <span className="text-white/60">/api/pulse-trade (action=status)</span>.
               </div>
             </div>
           </div>
