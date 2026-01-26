@@ -373,7 +373,8 @@ async function fetchBtcPositionFromPortfolio(userKeys: {
   // 1) list portfolios
   const plist = await listPortfolios(userKeys);
   if (!plist.ok) {
-    return { ok: false as const, source: "portfolios_list", ...plist };
+    return { source: "portfolios_list", ...plist };
+
   }
 
   const portfolios = (plist as any).portfolios || [];
@@ -390,8 +391,9 @@ async function fetchBtcPositionFromPortfolio(userKeys: {
   // 2) get breakdown (UI-like)
   const bd = await fetchPortfolioBreakdown(String(portfolio_uuid), userKeys);
   if (!bd.ok) {
-    return { ok: false as const, source: "portfolio_breakdown", portfolio_uuid, ...bd };
-  }
+  return { source: "portfolio_breakdown", portfolio_uuid, ...bd };
+}
+
 
   const breakdown = (bd as any).breakdown || {};
   const spot_positions = breakdown?.spot_positions || breakdown?.spotPositions || [];
