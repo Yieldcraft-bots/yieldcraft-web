@@ -125,7 +125,7 @@ type AuthResult = AuthOk | AuthNo;
 // SAFETY AUTH for this route (do NOT allow public trading)
 // Accepts either:
 //  - server-to-server secret (cron/manager) OR
-//  - a valid Supabase user session token (browser)
+//  - a valid Supabase user session token (browser → API)
 async function okAuth(req: Request): Promise<AuthResult> {
   // 1) Cron/manager secret (server-to-server)
   const secret = (
@@ -205,6 +205,22 @@ function minPositionBaseBtc() {
   return 0.000001; // default dust threshold
 }
 
+// Minimum SELL amount we will attempt (below this is considered dust / already-flat)
+function minSellBaseBtc() {
+  const raw = (process.env.PULSE_MIN_SELL_BASE_BTC || "").trim();
+  const n = raw ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n > 0) return n;
+  return 0.00001; // sane default
+}
+
+// Buffer subtracted from available_balance before SELL to avoid rounding/holds causing "sell > available"
+function sellBufferBaseBtc() {
+  const raw = (process.env.PULSE_SELL_BUFFER_BASE_BTC || "").trim();
+  const n = raw ? Number(raw) : NaN;
+  if (Number.isFinite(n) && n >= 0) return n;
+  return 0.00000001; // 1 sat
+}
+
 function fmtBaseSize(x: number) {
   const v = Math.max(0, x);
   return v.toFixed(8).replace(/\.?0+$/, "");
@@ -218,9 +234,7 @@ function isUuid(v: string) {
 
 function pickJwtAlgFromDb(keyAlg: any): JwtAlg {
   const k = String(keyAlg || "").toLowerCase();
-  // accept a few spellings
   if (k.includes("ed25519") || k.includes("eddsa") || k === "ed") return "EdDSA";
-  // default
   return "ES256";
 }
 
@@ -244,6 +258,10 @@ async function requireUserKeys(userId: string) {
     keyAlg: keys.keyAlg ? String(keys.keyAlg) : null,
     jwtAlg,
   };
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 // -------------------- Coinbase JWT (CDP) --------------------
@@ -320,6 +338,42 @@ async function fetchBtcPosition(userKeys: {
       error: String(e?.message || e || "position_fetch_failed"),
     };
   }
+}
+
+// -------------------- ORDER STATUS (BEST EFFORT) --------------------
+
+async function fetchOrderById(
+  orderId: string,
+  userKeys: { apiKeyName: string; privateKeyPem: string; jwtAlg: JwtAlg }
+) {
+  if (!orderId) return { ok: false as const, error: "missing_order_id" };
+  const path = `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`;
+  try {
+    const token = buildCdpJwtWithUserKeys("GET", path, userKeys);
+    const res = await fetch(`https://api.coinbase.com${path}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    const parsed = safeJsonParse(text);
+    return {
+      ok: res.ok as boolean,
+      status: res.status,
+      coinbase: parsed ?? text,
+    };
+  } catch (e: any) {
+    return { ok: false as const, error: String(e?.message || e) };
+  }
+}
+
+function extractOrderIdFromCoinbaseResponse(parsed: any): string | null {
+  const id =
+    parsed?.success_response?.order_id ||
+    parsed?.order_id ||
+    parsed?.order?.order_id ||
+    null;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
 }
 
 // -------------------- ORDER BOOK (for maker) --------------------
@@ -429,7 +483,6 @@ export async function GET(req: NextRequest) {
         : "status";
 
   // ✅ PUBLIC, READ-ONLY status (no secrets, no user info)
-  // This makes the pills green and allows safe uptime/health checks.
   const auth = await okAuth(req);
 
   if (action === "status" && !auth.ok) {
@@ -542,34 +595,70 @@ export async function POST(req: Request) {
     }
   }
 
-  const position = await fetchBtcPosition(userKeys);
+  const prePosition = await fetchBtcPosition(userKeys);
 
   // If we can't confirm position, do NOT allow LIVE, but still allow DRY RUN
-  if (!position.ok && action === "place_order") {
+  if (!prePosition.ok && action === "place_order") {
     return jsonError("LIVE blocked: cannot verify BTC position snapshot.", 503, {
-      position,
+      position: prePosition,
     });
   }
 
   let base_size: string | null = base_size_raw;
+
+  // Compute SELL size safely (buffer + min sell)
   if (side === "SELL") {
-    const available = Number((position as any)?.base_available || 0);
-    if (!base_size) base_size = fmtBaseSize(available);
+    const available = Number((prePosition as any)?.base_available || 0);
+    const buffer = sellBufferBaseBtc();
+    const minSell = minSellBaseBtc();
+
+    // If caller didn't specify base_size, we compute it from available (minus buffer)
+    if (!base_size) {
+      const computed = Math.max(0, available - buffer);
+      // If below min sell, treat as already flat (dust)
+      if (!Number.isFinite(computed) || computed < minSell) {
+        return json(200, {
+          ok: true,
+          mode: "NOOP",
+          reason: "dust_or_below_min_sell",
+          side,
+          product_id,
+          thresholds: { minSellBaseBtc: minSell, bufferBaseBtc: buffer },
+          position: prePosition,
+        });
+      }
+      base_size = fmtBaseSize(computed);
+    }
+
     const b = Number(base_size);
     if (!base_size || !Number.isFinite(b) || b <= 0) {
       return jsonError('SELL requires base_size > 0 (e.g., "0.00002").', 400, {
         got: { base_size },
-        position,
+        position: prePosition,
+      });
+    }
+
+    // If caller gave base_size, ensure it’s not below min sell
+    if (b < minSell) {
+      return json(200, {
+        ok: true,
+        mode: "NOOP",
+        reason: "below_min_sell",
+        side,
+        product_id,
+        thresholds: { minSellBaseBtc: minSell, bufferBaseBtc: buffer },
+        got: { base_size },
+        position: prePosition,
       });
     }
   }
 
   // -------------------- POSITION RULES --------------------
-  if (side === "BUY" && position.ok && position.has_position) {
-    return jsonError("BUY blocked: BTC position already exists.", 409, { position });
+  if (side === "BUY" && prePosition.ok && prePosition.has_position) {
+    return jsonError("BUY blocked: BTC position already exists.", 409, { position: prePosition });
   }
-  if (side === "SELL" && position.ok && !position.has_position) {
-    return jsonError("SELL blocked: no BTC position to exit.", 409, { position });
+  if (side === "SELL" && prePosition.ok && !prePosition.has_position) {
+    return jsonError("SELL blocked: no BTC position to exit.", 409, { position: prePosition });
   }
 
   const client_order_id = `yc_${action}_${Date.now()}`;
@@ -578,9 +667,6 @@ export async function POST(req: Request) {
   let payload: any;
 
   if (orderMode === "market") {
-    // IMPORTANT:
-    // - BUY uses quote_size (USD)
-    // - SELL uses base_size (BTC)
     payload = {
       client_order_id,
       product_id,
@@ -668,7 +754,7 @@ export async function POST(req: Request) {
         keyAlg: (userKeys as any).keyAlg ?? null,
         jwtAlg: userKeys.jwtAlg,
       },
-      position,
+      position: prePosition,
       gates: { tradingEnabled, armed, liveAllowed },
       payload,
     });
@@ -707,18 +793,48 @@ export async function POST(req: Request) {
   const text = await res.text();
   const parsed = safeJsonParse(text);
 
+  // ✅ Critical: "accepted" is not the same as "filled / flattened"
+  // We verify after placing:
+  const orderId = extractOrderIdFromCoinbaseResponse(parsed);
+  let orderLookup: any = null;
+
+  // best-effort order fetch (non-fatal)
+  if (orderId) {
+    // small delay helps Coinbase propagate the order record
+    await sleep(750);
+    orderLookup = await fetchOrderById(orderId, userKeys);
+  }
+
+  // post-trade position verification
+  await sleep(750);
+  const postPosition = await fetchBtcPosition(userKeys);
+
+  const flattened =
+    side === "SELL" && postPosition.ok ? !postPosition.has_position : null;
+
   return json(res.ok ? 200 : res.status, {
     ok: res.ok,
     mode: "LIVE",
     orderMode,
+    side,
+    product_id,
+    client_order_id,
     userKeys: {
       user_id: userId,
       apiKeyNameTail: userKeys.apiKeyName.slice(-6),
       keyAlg: (userKeys as any).keyAlg ?? null,
       jwtAlg: userKeys.jwtAlg,
     },
-    position,
+    gates: { tradingEnabled, armed, liveAllowed },
+    position: {
+      pre: prePosition,
+      post: postPosition,
+      flattened,
+    },
     payload,
     coinbase: parsed ?? text,
+    order_id: orderId,
+    order_lookup: orderLookup,
+    t: new Date().toISOString(),
   });
 }
