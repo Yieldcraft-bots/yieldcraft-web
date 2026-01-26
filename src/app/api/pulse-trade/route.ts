@@ -12,6 +12,7 @@
 //
 // AUTH (REQUIRED) for any non-public action:
 //   - x-cron-secret OR x-pulse-secret OR Authorization: Bearer <secret>
+//   - OR a valid Supabase user session token (Authorization: Bearer <supabase_access_token>)
 //   - secret query param allowed for manual diagnostics
 //
 // PUBLIC (SAFE):
@@ -37,6 +38,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import { createClient } from "@supabase/supabase-js";
 import { getUserCoinbaseKeys } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -112,8 +114,20 @@ function normalizePrivateKeyFromDb(raw: string) {
   return toEcPrivateKeyPemFromBase64Der(v);
 }
 
+type AuthOk =
+  | { ok: true; kind: "secret" }
+  | { ok: true; kind: "user"; userId: string };
+
+type AuthNo = { ok: false; status: number; error: string };
+
+type AuthResult = AuthOk | AuthNo;
+
 // SAFETY AUTH for this route (do NOT allow public trading)
-function okAuth(req: Request) {
+// Accepts either:
+//  - server-to-server secret (cron/manager) OR
+//  - a valid Supabase user session token (browser)
+async function okAuth(req: Request): Promise<AuthResult> {
+  // 1) Cron/manager secret (server-to-server)
   const secret = (
     process.env.CRON_SECRET ||
     process.env.PULSE_TRADE_SECRET ||
@@ -121,18 +135,45 @@ function okAuth(req: Request) {
     ""
   ).trim();
 
-  if (!secret) return false;
-
   const h =
     req.headers.get("x-cron-secret") ||
     req.headers.get("x-pulse-secret") ||
     req.headers.get("authorization");
 
-  if (h && (h === secret || h === `Bearer ${secret}`)) return true;
+  if (secret) {
+    if (h && (h === secret || h === `Bearer ${secret}`)) {
+      return { ok: true, kind: "secret" };
+    }
+    const url = new URL(req.url);
+    const q = url.searchParams.get("secret");
+    if (q === secret) return { ok: true, kind: "secret" };
+  }
 
-  const url = new URL(req.url);
-  const q = url.searchParams.get("secret");
-  return q === secret;
+  // 2) Supabase user session (browser → API)
+  const auth = req.headers.get("authorization") || "";
+  if (!auth.toLowerCase().startsWith("bearer ")) {
+    return { ok: false, status: 401, error: "missing_auth" };
+  }
+
+  const token = auth.slice("bearer ".length).trim();
+  if (!token) return { ok: false, status: 401, error: "missing_token" };
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anon) {
+    return { ok: false, status: 500, error: "supabase_env_missing" };
+  }
+
+  const supabase = createClient(url, anon, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data?.user?.id) {
+    return { ok: false, status: 401, error: "invalid_session" };
+  }
+
+  return { ok: true, kind: "user", userId: data.user.id };
 }
 
 function gates() {
@@ -389,7 +430,9 @@ export async function GET(req: NextRequest) {
 
   // ✅ PUBLIC, READ-ONLY status (no secrets, no user info)
   // This makes the pills green and allows safe uptime/health checks.
-  if (action === "status" && !okAuth(req)) {
+  const auth = await okAuth(req);
+
+  if (action === "status" && !auth.ok) {
     const { tradingEnabled, armed, liveAllowed } = gates();
     return json(200, {
       ok: true,
@@ -405,7 +448,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Everything else requires auth
-  if (!okAuth(req)) return jsonError("unauthorized", 401);
+  if (!auth.ok) return jsonError("unauthorized", auth.status ?? 401, { reason: auth.error });
 
   // Authenticated GET can return detailed status if user_id is provided
   const userId = req.nextUrl.searchParams.get("user_id") || "";
@@ -431,7 +474,8 @@ export async function GET(req: NextRequest) {
 // -------------------- POST --------------------
 
 export async function POST(req: Request) {
-  if (!okAuth(req)) return jsonError("unauthorized", 401);
+  const auth = await okAuth(req);
+  if (!auth.ok) return jsonError("unauthorized", auth.status ?? 401, { reason: auth.error });
 
   let body: any;
   try {
