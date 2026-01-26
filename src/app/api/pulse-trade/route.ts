@@ -13,7 +13,7 @@
 // AUTH (REQUIRED) for any non-public action:
 //   - x-cron-secret OR x-pulse-secret OR Authorization: Bearer <secret>
 //   - OR a valid Supabase user session token (Authorization: Bearer <supabase_access_token>)
-//   - secret query param allowed for manual diagnostics
+//   - secret query param allowed for manual diagnostics (NOT recommended)
 //
 // PUBLIC (SAFE):
 //   - GET ?action=status  (returns read-only gates only; no user data)
@@ -27,6 +27,12 @@
 // OPTIONAL:
 // - PULSE_ORDER_MODE=market|maker   (default: market)
 // - MAKER_OFFSET_BPS=1.0            (default: 1.0)
+//
+// PORTFOLIO IMPORTANT:
+// Coinbase UI balances often correspond to an Advanced Trade portfolio.
+// We detect BTC via Portfolio Breakdown when possible:
+//   GET /api/v3/brokerage/portfolios/{portfolio_uuid}
+// (fallback to /brokerage/accounts if needed)
 //
 // PER-USER KEYING:
 // - Uses the requesting user's stored Coinbase keys from Supabase.
@@ -144,6 +150,7 @@ async function okAuth(req: Request): Promise<AuthResult> {
     if (h && (h === secret || h === `Bearer ${secret}`)) {
       return { ok: true, kind: "secret" };
     }
+    // allow query param for manual diagnostics (not recommended)
     const url = new URL(req.url);
     const q = url.searchParams.get("secret");
     if (q === secret) return { ok: true, kind: "secret" };
@@ -221,12 +228,6 @@ function sellBufferBaseBtc() {
   return 0.00000001; // 1 sat
 }
 
-// If true, and available is tiny but total is real, we can *attempt* to sell total-buffer.
-// Default false because Coinbase may reject if funds are on hold.
-function sellUseTotalIfAvailableZero() {
-  return truthy(process.env.PULSE_SELL_USE_TOTAL_IF_AVAILABLE_ZERO);
-}
-
 function fmtBaseSize(x: number) {
   const v = Math.max(0, x);
   return v.toFixed(8).replace(/\.?0+$/, "");
@@ -295,10 +296,131 @@ function buildCdpJwtWithUserKeys(
   );
 }
 
-// -------------------- POSITION SNAPSHOT (READ-ONLY) --------------------
-// ✅ IMPORTANT FIX: determine "has_position" from TOTAL balance (matches Coinbase UI)
+// -------------------- PORTFOLIOS (UI-LIKE BALANCES) --------------------
 
-async function fetchBtcPosition(userKeys: {
+async function listPortfolios(userKeys: {
+  apiKeyName: string;
+  privateKeyPem: string;
+  jwtAlg: JwtAlg;
+}) {
+  const path = "/api/v3/brokerage/portfolios";
+  try {
+    const token = buildCdpJwtWithUserKeys("GET", path, userKeys);
+    const res = await fetch(`https://api.coinbase.com${path}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    const parsed = safeJsonParse(text);
+
+    if (!res.ok) {
+      return { ok: false as const, status: res.status, coinbase: parsed ?? text };
+    }
+
+    const portfolios = (parsed as any)?.portfolios || [];
+    return { ok: true as const, portfolios };
+  } catch (e: any) {
+    return { ok: false as const, error: String(e?.message || e || "list_portfolios_failed") };
+  }
+}
+
+async function fetchPortfolioBreakdown(
+  portfolioUuid: string,
+  userKeys: { apiKeyName: string; privateKeyPem: string; jwtAlg: JwtAlg }
+) {
+  const path = `/api/v3/brokerage/portfolios/${encodeURIComponent(portfolioUuid)}`;
+  try {
+    const token = buildCdpJwtWithUserKeys("GET", path, userKeys);
+    const res = await fetch(`https://api.coinbase.com${path}`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    const text = await res.text();
+    const parsed = safeJsonParse(text);
+
+    if (!res.ok) {
+      return { ok: false as const, status: res.status, coinbase: parsed ?? text };
+    }
+
+    return { ok: true as const, breakdown: (parsed as any)?.breakdown ?? parsed };
+  } catch (e: any) {
+    return { ok: false as const, error: String(e?.message || e || "portfolio_breakdown_failed") };
+  }
+}
+
+function pickPortfolioUuidFromList(portfolios: any[]) {
+  const forced = (optEnv("COINBASE_PORTFOLIO_UUID") || "").trim();
+  if (forced) return forced;
+
+  // Try to find the "default" style portfolio by name/type if present
+  const byName =
+    portfolios.find((p) => String(p?.name || "").toLowerCase().includes("default")) ||
+    portfolios.find((p) => String(p?.type || "").toLowerCase().includes("default")) ||
+    portfolios[0];
+
+  return byName?.uuid || byName?.id || null;
+}
+
+// -------------------- POSITION SNAPSHOT (READ-ONLY) --------------------
+
+async function fetchBtcPositionFromPortfolio(userKeys: {
+  apiKeyName: string;
+  privateKeyPem: string;
+  jwtAlg: JwtAlg;
+}) {
+  // 1) list portfolios
+  const plist = await listPortfolios(userKeys);
+  if (!plist.ok) {
+    return { ok: false as const, source: "portfolios_list", ...plist };
+  }
+
+  const portfolios = (plist as any).portfolios || [];
+  const portfolio_uuid = pickPortfolioUuidFromList(portfolios);
+  if (!portfolio_uuid) {
+    return {
+      ok: false as const,
+      source: "portfolios_list",
+      error: "no_portfolio_uuid_found",
+      portfolios_count: portfolios.length,
+    };
+  }
+
+  // 2) get breakdown (UI-like)
+  const bd = await fetchPortfolioBreakdown(String(portfolio_uuid), userKeys);
+  if (!bd.ok) {
+    return { ok: false as const, source: "portfolio_breakdown", portfolio_uuid, ...bd };
+  }
+
+  const breakdown = (bd as any).breakdown || {};
+  const spot_positions = breakdown?.spot_positions || breakdown?.spotPositions || [];
+  const btc = (spot_positions || []).find((p: any) => String(p?.asset || "").toUpperCase() === "BTC");
+
+  const available = Number(btc?.available_to_trade_crypto ?? btc?.available_to_trade ?? btc?.available ?? 0);
+  const total = Number(btc?.total_balance_crypto ?? btc?.total ?? btc?.total_balance ?? 0);
+
+  const minPos = minPositionBaseBtc();
+  const base_available = Number.isFinite(available) ? available : 0;
+  const base_total = Number.isFinite(total) ? total : 0;
+
+  const has_position = base_available >= minPos || base_total >= minPos;
+
+  return {
+    ok: true as const,
+    source: "portfolio_breakdown",
+    portfolio_uuid,
+    portfolio_name:
+      portfolios.find((p: any) => (p?.uuid || p?.id) === portfolio_uuid)?.name ?? null,
+    has_position,
+    base_available,
+    base_total,
+    min_pos: minPos,
+    raw_btc: btc ?? null,
+  };
+}
+
+async function fetchBtcPositionFromAccounts(userKeys: {
   apiKeyName: string;
   privateKeyPem: string;
   jwtAlg: JwtAlg;
@@ -319,46 +441,68 @@ async function fetchBtcPosition(userKeys: {
     if (!res.ok) {
       return {
         ok: false as const,
+        source: "accounts",
         has_position: false,
         base_available: 0,
         base_total: 0,
-        base_hold: 0,
         status: res.status,
         coinbase: parsed ?? text,
       };
     }
 
     const accounts = (parsed as any)?.accounts || [];
-    const btc = accounts.find((a: any) => a?.currency === "BTC");
-
+    const btc = accounts.find((a: any) => String(a?.currency || "").toUpperCase() === "BTC");
     const available = Number(btc?.available_balance?.value || 0);
-    const hold = Number(btc?.hold?.value || 0);
-    const total = Number(btc?.total_balance?.value || 0);
+    const total = Number(btc?.balance?.value || btc?.available_balance?.value || 0);
 
     const minPos = minPositionBaseBtc();
 
-    const safeAvailable = Number.isFinite(available) ? available : 0;
-    const safeHold = Number.isFinite(hold) ? hold : 0;
-    const safeTotal = Number.isFinite(total) ? total : 0;
+    const base_available = Number.isFinite(available) ? available : 0;
+    const base_total = Number.isFinite(total) ? total : 0;
 
     return {
       ok: true as const,
-      has_position: safeTotal >= minPos,
-      base_available: safeAvailable,
-      base_hold: safeHold,
-      base_total: safeTotal,
+      source: "accounts",
+      has_position: base_available >= minPos || base_total >= minPos,
+      base_available,
+      base_total,
       min_pos: minPos,
     };
   } catch (e: any) {
     return {
       ok: false as const,
+      source: "accounts",
       has_position: false,
       base_available: 0,
       base_total: 0,
-      base_hold: 0,
       error: String(e?.message || e || "position_fetch_failed"),
     };
   }
+}
+
+async function fetchBtcPosition(userKeys: {
+  apiKeyName: string;
+  privateKeyPem: string;
+  jwtAlg: JwtAlg;
+}) {
+  // Prefer portfolio breakdown (matches UI)
+  const p = await fetchBtcPositionFromPortfolio(userKeys);
+  if (p.ok) return p;
+
+  // Fallback to accounts
+  const a = await fetchBtcPositionFromAccounts(userKeys);
+  if (a.ok) return a;
+
+  // If both fail, surface both
+  return {
+    ok: false as const,
+    source: "both_failed",
+    portfolio_attempt: p,
+    accounts_attempt: a,
+    has_position: false,
+    base_available: 0,
+    base_total: 0,
+  };
 }
 
 // -------------------- ORDER STATUS (BEST EFFORT) --------------------
@@ -473,10 +617,12 @@ async function buildStatusPayload(userId: string) {
       has_position: false,
       base_available: 0,
       base_total: 0,
-      base_hold: 0,
       error: "cannot_check_position_without_valid_user_keys",
     };
   }
+
+  const posAvail = position?.ok ? Number(position.base_available || 0) : 0;
+  const hasPos = position?.ok ? Boolean(position.has_position) : false;
 
   return {
     ok: true,
@@ -489,9 +635,8 @@ async function buildStatusPayload(userId: string) {
     },
     userKeys: userKeysMeta,
     position,
-    positionBaseAvailable: position?.ok ? Number(position.base_available || 0) : 0,
-    positionBaseTotal: position?.ok ? Number(position.base_total || 0) : 0,
-    hasPosition: position?.ok ? Boolean(position.has_position) : false,
+    positionBaseAvailable: posAvail,
+    hasPosition: hasPos,
   };
 }
 
@@ -633,38 +778,24 @@ export async function POST(req: Request) {
   // Compute SELL size safely (buffer + min sell)
   if (side === "SELL") {
     const available = Number((prePosition as any)?.base_available || 0);
-    const total = Number((prePosition as any)?.base_total || 0);
-    const hold = Number((prePosition as any)?.base_hold || 0);
-
     const buffer = sellBufferBaseBtc();
     const minSell = minSellBaseBtc();
 
+    // If caller didn't specify base_size, we compute it from available (minus buffer)
     if (!base_size) {
-      const preferTotal = sellUseTotalIfAvailableZero();
-
-      // Default: SELL from available (safest)
-      let computed = Math.max(0, available - buffer);
-
-      // Optional: if available is tiny but total is real, attempt total-buffer
-      if (preferTotal && computed < minSell && total >= minSell) {
-        computed = Math.max(0, total - buffer);
-      }
-
+      const computed = Math.max(0, available - buffer);
+      // If below min sell, treat as already flat (dust)
       if (!Number.isFinite(computed) || computed < minSell) {
-        return json(409, {
-          ok: false,
-          error: "SELL blocked: position not sellable (available too low or dust).",
-          reason: computed < minSell ? "below_min_sell" : "invalid_computed",
+        return json(200, {
+          ok: true,
+          mode: "NOOP",
+          reason: "dust_or_below_min_sell",
+          side,
+          product_id,
           thresholds: { minSellBaseBtc: minSell, bufferBaseBtc: buffer },
           position: prePosition,
-          hint:
-            total >= minSell && available < minSell
-              ? "BTC is present but not available (likely hold/open orders). Cancel open orders or free funds, then retry."
-              : "No sellable BTC.",
-          debug: { available, total, hold, preferTotal },
         });
       }
-
       base_size = fmtBaseSize(computed);
     }
 
@@ -676,8 +807,14 @@ export async function POST(req: Request) {
       });
     }
 
+    // If caller gave base_size, ensure it’s not below min sell
     if (b < minSell) {
-      return jsonError("SELL blocked: below min sell threshold.", 409, {
+      return json(200, {
+        ok: true,
+        mode: "NOOP",
+        reason: "below_min_sell",
+        side,
+        product_id,
         thresholds: { minSellBaseBtc: minSell, bufferBaseBtc: buffer },
         got: { base_size },
         position: prePosition,
@@ -825,14 +962,19 @@ export async function POST(req: Request) {
   const text = await res.text();
   const parsed = safeJsonParse(text);
 
+  // ✅ Critical: "accepted" is not the same as "filled / flattened"
+  // We verify after placing:
   const orderId = extractOrderIdFromCoinbaseResponse(parsed);
   let orderLookup: any = null;
 
+  // best-effort order fetch (non-fatal)
   if (orderId) {
+    // small delay helps Coinbase propagate the order record
     await sleep(750);
     orderLookup = await fetchOrderById(orderId, userKeys);
   }
 
+  // post-trade position verification
   await sleep(750);
   const postPosition = await fetchBtcPosition(userKeys);
 
