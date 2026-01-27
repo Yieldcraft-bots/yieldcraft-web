@@ -32,14 +32,14 @@ function optEnv(name: string) {
   return v && v.trim() ? v.trim() : null;
 }
 function normalizePem(pem: string) {
-  let p = pem.trim();
+  let p = (pem || "").trim();
   if (
     (p.startsWith('"') && p.endsWith('"')) ||
     (p.startsWith("'") && p.endsWith("'"))
   ) {
     p = p.slice(1, -1);
   }
-  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n");
+  return p.replace(/\\n/g, "\n").replace(/\r\n/g, "\n").trim();
 }
 function safeJsonParse(text: string) {
   try {
@@ -85,14 +85,39 @@ function log(runId: string, event: string, data?: any) {
 
 // ---------- supabase (server-only) ----------
 function sb() {
-  const url = requireEnv("SUPABASE_URL");
+  // Support both env names, stay safe in Vercel
+  const url =
+    (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+  if (!url) throw new Error("Missing env: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)");
+
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY"); // server-only
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-async function writeTradeLog(row: any) {
+/**
+ * trade_logs table (per your screenshot):
+ *  - order_id text
+ *  - raw jsonb
+ *  - size numeric
+ *  - mode text
+ *
+ * We ONLY insert these columns so we never break on schema mismatch.
+ */
+async function writeTradeLog(args: {
+  order_id: string;
+  mode: string;
+  size?: number | null;
+  raw: any;
+}) {
   try {
     const client = sb();
+    const row = {
+      order_id: args.order_id,
+      mode: args.mode,
+      size: Number.isFinite(args.size as any) ? (args.size as number) : null,
+      raw: args.raw ?? null,
+    };
+
     const { error } = await client.from("trade_logs").insert([row]);
     if (error) {
       console.log(
@@ -104,10 +129,7 @@ async function writeTradeLog(row: any) {
         })
       );
     } else {
-      console.log(
-        "[pulse-manager]",
-        JSON.stringify({ t: nowIso(), event: "DB_WRITE_OK" })
-      );
+      console.log("[pulse-manager]", JSON.stringify({ t: nowIso(), event: "DB_WRITE_OK" }));
     }
   } catch (e: any) {
     console.log(
@@ -123,11 +145,7 @@ async function writeTradeLog(row: any) {
 
 // ---------- auth ----------
 function okAuth(req: Request) {
-  const secret = (
-    process.env.CRON_SECRET ||
-    process.env.PULSE_MANAGER_SECRET ||
-    ""
-  ).trim();
+  const secret = (process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "").trim();
   if (!secret) return false;
 
   const h =
@@ -229,16 +247,14 @@ async function fetchLastBuyFill(): Promise<
     return { ok: false, error: "no_fills_found" };
 
   const buy =
-    fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") ||
-    fills[0];
+    fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") || fills[0];
   if (!buy) return { ok: false, error: "no_buy_fill_found" };
 
   const px = Number(buy?.price || buy?.fill_price || 0);
   const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
-  if (!Number.isFinite(px) || px <= 0)
-    return { ok: false, error: { bad_price: buy } };
+  if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
 
   return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
 }
@@ -265,8 +281,7 @@ async function fetchPeakWindow(): Promise<
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const candles = (r.json as any)?.candles || [];
-  if (!Array.isArray(candles) || candles.length === 0)
-    return { ok: false, error: "no_candles" };
+  if (!Array.isArray(candles) || candles.length === 0) return { ok: false, error: "no_candles" };
 
   let peak = 0;
   let last = 0;
@@ -284,27 +299,31 @@ async function fetchPeakWindow(): Promise<
   return { ok: true, peak, last, startTs, endTs };
 }
 
-// ---------- LIVE order placement (direct, safe) ----------
+// ---------- LIVE order placement ----------
 async function placeBuyMarket(quoteUsd: string) {
   const path = "/api/v3/brokerage/orders";
+  const clientOrderId = `yc_mgr_buy_${Date.now()}`;
   const payload = {
-    client_order_id: `yc_mgr_buy_${Date.now()}`,
+    client_order_id: clientOrderId,
     product_id: PRODUCT_ID,
     side: "BUY",
     order_configuration: { market_market_ioc: { quote_size: quoteUsd } },
   };
-  return cbPost(path, payload);
+  const res = await cbPost(path, payload);
+  return { ...res, clientOrderId, quoteUsd: Number(quoteUsd) };
 }
 
 async function placeSellMarket(baseSize: string) {
   const path = "/api/v3/brokerage/orders";
+  const clientOrderId = `yc_mgr_sell_${Date.now()}`;
   const payload = {
-    client_order_id: `yc_mgr_sell_${Date.now()}`,
+    client_order_id: clientOrderId,
     product_id: PRODUCT_ID,
     side: "SELL",
     order_configuration: { market_market_ioc: { base_size: baseSize } },
   };
-  return cbPost(path, payload);
+  const res = await cbPost(path, payload);
+  return { ...res, clientOrderId, baseSize: Number(baseSize) };
 }
 
 // ---------- main runner (entries + exits) ----------
@@ -321,45 +340,29 @@ async function runManager(runId: string) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  // exits params (profit + trail) with Recon-owned fallbacks
   const profitTargetBps = num(
     process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
     120
   );
-  const trailArmBps = num(
-    process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS,
-    150
-  );
+  const trailArmBps = num(process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS, 150);
   const trailOffsetBps = num(
     process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS,
     50
   );
 
-  // Recon contract knobs (read-only; enforcement still via PULSE_* flags below)
   const ycDefaultHardStopBps = num(process.env.YC_DEFAULT_HARD_STOP_BPS, 0);
   const ycDefaultTimeStopMin = num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0);
   const ycDailyMaxLossBps = num(process.env.YC_DAILY_MAX_LOSS_BPS, 0);
   const ycMonthlyMaxDdBps = num(process.env.YC_MONTHLY_MAX_DD_BPS, 0);
-  const ycDefaultAllocationPct = num(process.env.YC_DEFAULT_ALLOCATION_PCT, 0);
 
-  // NEW: protection exits (loss-side)
   const hardStopEnabled = truthy(process.env.PULSE_HARD_STOP_ENABLED);
-  const hardStopLossBps = num(
-    process.env.PULSE_HARD_STOP_LOSS_BPS,
-    ycDefaultHardStopBps
-  );
+  const hardStopLossBps = num(process.env.PULSE_HARD_STOP_LOSS_BPS, ycDefaultHardStopBps);
 
   const timeStopEnabled = truthy(process.env.PULSE_TIME_STOP_ENABLED);
-  const maxHoldMinutes = num(
-    process.env.PULSE_MAX_HOLD_MINUTES,
-    ycDefaultTimeStopMin
-  );
+  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, ycDefaultTimeStopMin);
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
-  // entry size
-  const entryQuoteUsd = fmtQuoteSizeUsd(
-    num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0)
-  );
+  const entryQuoteUsd = fmtQuoteSizeUsd(num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0));
 
   const position = await fetchBtcPosition();
 
@@ -389,40 +392,34 @@ async function runManager(runId: string) {
     hardStopLossBps,
     timeStopEnabled,
     maxHoldMinutes,
-    yc: {
-      defaultAllocationPct: ycDefaultAllocationPct,
-      defaultHardStopBps: ycDefaultHardStopBps,
-      defaultTimeStopMin: ycDefaultTimeStopMin,
-      dailyMaxLossBps: ycDailyMaxLossBps,
-      monthlyMaxDdBps: ycMonthlyMaxDdBps,
-    },
+    yc: { defaultHardStopBps: ycDefaultHardStopBps, defaultTimeStopMin: ycDefaultTimeStopMin, dailyMaxLossBps: ycDailyMaxLossBps, monthlyMaxDdBps: ycMonthlyMaxDdBps },
   });
 
   if (!gates.LIVE_ALLOWED) {
-    log(runId, "DECISION", {
-      mode: "NOOP_GATES",
-      reason: "LIVE_ALLOWED=false",
-      gates,
+    log(runId, "DECISION", { mode: "NOOP_GATES", reason: "LIVE_ALLOWED=false", gates });
+
+    // optional: still log a heartbeat row (schema-safe)
+    await writeTradeLog({
+      order_id: runId,
+      mode: "noop_gates",
+      size: null,
+      raw: { kind: "noop", t: nowIso(), runId, gates, position },
     });
+
     return { ok: true, mode: "NOOP_GATES", gates, position };
   }
 
   if (!position.ok) {
-    log(runId, "DECISION", {
-      mode: "BLOCKED",
-      reason: "cannot_read_position",
-      status: (position as any)?.status,
+    log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_position", status: (position as any)?.status });
+    await writeTradeLog({
+      order_id: runId,
+      mode: "blocked",
+      size: null,
+      raw: { kind: "blocked", t: nowIso(), runId, reason: "cannot_read_position", position },
     });
-    return {
-      ok: false,
-      mode: "BLOCKED",
-      gates,
-      error: "cannot_read_position",
-      position,
-    };
+    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
   }
 
-  // ---- COOLDOWN ----
   const lastBuy = await fetchLastBuyFill();
   const lastFillIso = lastBuy.ok ? lastBuy.entryTime : null;
   const sinceMs = msSince(lastFillIso);
@@ -435,45 +432,39 @@ async function runManager(runId: string) {
     cooldownOk,
   };
 
-  log(runId, "COOLDOWN", {
-    lastBuy_ok: lastBuy.ok,
-    lastFillIso,
-    sinceMs: Number.isFinite(sinceMs) ? sinceMs : null,
-    cooldownMs,
-    cooldownOk,
-  });
-
   // ---- ENTRY ----
   if (!position.has_position) {
     if (!entriesEnabled) {
-      log(runId, "DECISION", {
-        mode: "NO_POSITION_ENTRIES_DISABLED",
-        reason: "entries disabled",
+      log(runId, "DECISION", { mode: "NO_POSITION_ENTRIES_DISABLED", reason: "entries disabled" });
+      await writeTradeLog({
+        order_id: runId,
+        mode: "entries_disabled",
+        size: null,
+        raw: { kind: "decision", t: nowIso(), runId, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown },
       });
       return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
     }
+
     if (!cooldownOk) {
-      log(runId, "DECISION", {
-        mode: "NO_POSITION_COOLDOWN",
-        reason: "cooldown active",
-        cooldown,
+      log(runId, "DECISION", { mode: "NO_POSITION_COOLDOWN", reason: "cooldown active", cooldown });
+      await writeTradeLog({
+        order_id: runId,
+        mode: "cooldown",
+        size: null,
+        raw: { kind: "decision", t: nowIso(), runId, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown },
       });
       return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
     }
 
     if (entriesDryRun) {
-      log(runId, "DECISION", {
-        mode: "DRY_RUN_BUY",
-        would_buy_quote_usd: entryQuoteUsd,
+      log(runId, "DECISION", { mode: "DRY_RUN_BUY", would_buy_quote_usd: entryQuoteUsd });
+      await writeTradeLog({
+        order_id: runId,
+        mode: "dry_run_buy",
+        size: Number(entryQuoteUsd),
+        raw: { kind: "dry_run", t: nowIso(), runId, side: "BUY", quote_usd: entryQuoteUsd, gates, position, cooldown },
       });
-      return {
-        ok: true,
-        mode: "DRY_RUN_BUY",
-        gates,
-        position,
-        cooldown,
-        would_buy_quote_usd: entryQuoteUsd,
-      };
+      return { ok: true, mode: "DRY_RUN_BUY", gates, position, cooldown, would_buy_quote_usd: entryQuoteUsd };
     }
 
     log(runId, "ACTION", { mode: "ENTRY_BUY", quote_usd: entryQuoteUsd });
@@ -481,15 +472,22 @@ async function runManager(runId: string) {
     log(runId, "RESULT", { mode: "ENTRY_BUY", buy_ok: buy.ok, status: buy.status });
 
     await writeTradeLog({
-      t: nowIso(),
-      run_id: runId,
-      product_id: PRODUCT_ID,
-      side: "BUY",
-      mode: "ENTRY_BUY",
-      ok: buy.ok,
-      status: buy.status,
-      user_id: "system", // single-account until multi-user loop is added
-      raw: buy.json ?? buy.text ?? null,
+      order_id: buy.clientOrderId || runId,
+      mode: "live_order",
+      size: buy.quoteUsd ?? Number(entryQuoteUsd),
+      raw: {
+        kind: "live_order",
+        t: nowIso(),
+        runId,
+        product_id: PRODUCT_ID,
+        side: "BUY",
+        gates,
+        cooldown,
+        result: buy.json ?? buy.text ?? null,
+        status: buy.status,
+        ok: buy.ok,
+        client_order_id: buy.clientOrderId,
+      },
     });
 
     return { ok: buy.ok, mode: "ENTRY_BUY", gates, position, cooldown, buy };
@@ -498,17 +496,35 @@ async function runManager(runId: string) {
   // ---- EXIT ----
   if (!exitsEnabled) {
     log(runId, "DECISION", { mode: "HOLD_EXITS_DISABLED", reason: "exits disabled" });
+    await writeTradeLog({
+      order_id: runId,
+      mode: "hold",
+      size: null,
+      raw: { kind: "decision", t: nowIso(), runId, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown },
+    });
     return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown };
   }
 
   if (!lastBuy.ok) {
     log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_entry", error: lastBuy.error });
+    await writeTradeLog({
+      order_id: runId,
+      mode: "blocked",
+      size: null,
+      raw: { kind: "blocked", t: nowIso(), runId, reason: "cannot_read_entry", error: lastBuy.error },
+    });
     return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_entry", lastBuy };
   }
 
   const peak = await fetchPeakWindow();
   if (!peak.ok) {
     log(runId, "DECISION", { mode: "BLOCKED", reason: "cannot_read_peak", error: peak.error });
+    await writeTradeLog({
+      order_id: runId,
+      mode: "blocked",
+      size: null,
+      raw: { kind: "blocked", t: nowIso(), runId, reason: "cannot_read_peak", error: peak.error },
+    });
     return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_peak", peak };
   }
 
@@ -516,12 +532,8 @@ async function runManager(runId: string) {
   const current = peak.last;
   const peakPrice = peak.peak;
 
-  const pnlBpsRaw = ((current - entryPrice) / entryPrice) * 10_000;
-  const pnlBps = Number(pnlBpsRaw.toFixed(2));
-
-  const drawdownFromPeakBpsRaw = ((peakPrice - current) / peakPrice) * 10_000;
-  const drawdownFromPeakBps = Number(drawdownFromPeakBpsRaw.toFixed(2));
-
+  const pnlBps = Number((((current - entryPrice) / entryPrice) * 10_000).toFixed(2));
+  const drawdownFromPeakBps = Number((((peakPrice - current) / peakPrice) * 10_000).toFixed(2));
   const heldMs = msSince(lastBuy.entryTime);
 
   const shouldTakeProfit = pnlBps >= profitTargetBps;
@@ -560,26 +572,15 @@ async function runManager(runId: string) {
     timeStopEnabled,
     maxHoldMinutes,
     shouldTimeStop,
-    yc: {
-      defaultAllocationPct: ycDefaultAllocationPct,
-      dailyMaxLossBps: ycDailyMaxLossBps,
-      monthlyMaxDdBps: ycMonthlyMaxDdBps,
-    },
   };
 
   if (!shouldHardStop && !shouldTimeStop && !shouldTakeProfit && !shouldTrailStop) {
-    log(runId, "DECISION", {
-      mode: "HOLD",
-      reason: "exit conditions not met",
-      decision: {
-        pnlBps,
-        drawdownFromPeakBps,
-        shouldHardStop,
-        shouldTimeStop,
-        shouldTakeProfit,
-        trailArmed,
-        shouldTrailStop,
-      },
+    log(runId, "DECISION", { mode: "HOLD", reason: "exit conditions not met", decision });
+    await writeTradeLog({
+      order_id: runId,
+      mode: "hold",
+      size: null,
+      raw: { kind: "decision", t: nowIso(), runId, mode: "HOLD", gates, position, decision },
     });
     return { ok: true, mode: "HOLD", gates, position, cooldown, decision };
   }
@@ -588,6 +589,12 @@ async function runManager(runId: string) {
 
   if (exitsDryRun) {
     log(runId, "DECISION", { mode: "DRY_RUN_SELL", would_sell_base_size: baseSize, decision });
+    await writeTradeLog({
+      order_id: runId,
+      mode: "dry_run_sell",
+      size: Number(baseSize),
+      raw: { kind: "dry_run", t: nowIso(), runId, side: "SELL", base_size: baseSize, gates, position, decision },
+    });
     return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, decision, would_sell_base_size: baseSize };
   }
 
@@ -597,34 +604,28 @@ async function runManager(runId: string) {
     shouldTakeProfit ? "take_profit" :
     "trail_stop";
 
-  log(runId, "ACTION", {
-    mode: "EXIT_SELL",
-    baseSize,
-    reason,
-    decision: {
-      pnlBps,
-      drawdownFromPeakBps,
-      shouldHardStop,
-      shouldTimeStop,
-      shouldTakeProfit,
-      shouldTrailStop,
-    },
-  });
-
+  log(runId, "ACTION", { mode: "EXIT_SELL", baseSize, reason, decision });
   const sell = await placeSellMarket(baseSize);
   log(runId, "RESULT", { mode: "EXIT_SELL", sell_ok: sell.ok, status: sell.status });
 
   await writeTradeLog({
-    t: nowIso(),
-    run_id: runId,
-    product_id: PRODUCT_ID,
-    side: "SELL",
-    mode: "EXIT_SELL",
-    ok: sell.ok,
-    status: sell.status,
-    user_id: "system",
-    raw: sell.json ?? sell.text ?? null,
-    reason,
+    order_id: sell.clientOrderId || runId,
+    mode: "live_order",
+    size: sell.baseSize ?? Number(baseSize),
+    raw: {
+      kind: "live_order",
+      t: nowIso(),
+      runId,
+      product_id: PRODUCT_ID,
+      side: "SELL",
+      reason,
+      gates,
+      decision,
+      result: sell.json ?? sell.text ?? null,
+      status: sell.status,
+      ok: sell.ok,
+      client_order_id: sell.clientOrderId,
+    },
   });
 
   return { ok: sell.ok, mode: "EXIT_SELL", gates, position, cooldown, decision, sell };
@@ -684,6 +685,14 @@ export async function POST(req: Request) {
       has_position: position.ok ? position.has_position : null,
       base_available: position.ok ? position.base_available : null,
       min_pos: (position as any)?.min_pos ?? null,
+    });
+
+    // status row (schema-safe)
+    await writeTradeLog({
+      order_id: runId,
+      mode: "status",
+      size: null,
+      raw: { kind: "status", t: nowIso(), runId, gates, position },
     });
 
     return json(200, { ok: true, runId, status: "PULSE_MANAGER_READY", gates, position });
