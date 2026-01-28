@@ -18,15 +18,12 @@ function json(status: number, body: any) {
 }
 
 /**
- * Uses the logged-in user's Supabase session (Authorization: Bearer <access_token>)
- * and reads:
- *  - public.entitlements (by user_id)
- *  - public.subscriptions (by user_id)
+ * Uses the logged-in user's Supabase access token:
+ *   Authorization: Bearer <access_token>
  *
- * This is the SINGLE source-of-truth for:
- *  - Account page subscription status
- *  - Dashboard pills
- *  - Admin mission control (per-user checks later)
+ * Reads:
+ *  - public.entitlements (by user_id)
+ *  - public.subscriptions (latest by user_id)
  */
 export async function GET(req: Request) {
   try {
@@ -44,37 +41,42 @@ export async function GET(req: Request) {
 
     const supabase = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
-      global: { headers: { Authorization: `Bearer ${token}` } },
     });
 
-    const { data: userRes, error: userErr } = await supabase.auth.getUser();
+    // IMPORTANT: pass token explicitly (do NOT rely on global headers/session storage)
+    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
     if (userErr || !userRes?.user) {
-      return json(401, { ok: false, error: "invalid_session" });
+      return json(401, { ok: false, error: "invalid_session", detail: userErr?.message });
     }
 
     const user = userRes.user;
     const userId = user.id;
     const email = (user.email || "").toLowerCase();
 
-    // Pull entitlements (RLS should allow user to read their own row)
-    const { data: ent, error: entErr } = await supabase
+    // Use the same token for PostgREST RLS
+    const authed = createClient(supabaseUrl, anonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+    });
+
+    const { data: ent, error: entErr } = await authed
       .from("entitlements")
       .select("pulse,recon,atlas,updated_at")
       .eq("user_id", userId)
       .maybeSingle();
 
-    // Pull subscription row (latest)
-    const { data: sub, error: subErr } = await supabase
+    const { data: sub, error: subErr } = await authed
       .from("subscriptions")
-      .select(
-        "plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,updated_at"
-      )
+      .select("plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,updated_at")
       .eq("user_id", userId)
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    // If tables are locked by RLS, you’ll see an error here — we’ll fix policies next.
     if (entErr) {
       return json(500, {
         ok: false,
@@ -82,6 +84,7 @@ export async function GET(req: Request) {
         detail: entErr.message || entErr,
       });
     }
+
     if (subErr) {
       return json(500, {
         ok: false,
