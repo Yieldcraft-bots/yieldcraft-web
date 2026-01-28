@@ -19,6 +19,19 @@ function json(status: number, body: any) {
 }
 
 /**
+ * GET = DEPLOYMENT PROOF CHECK (does not affect Stripe)
+ * Lets us verify in-browser what code is actually deployed.
+ */
+export async function GET() {
+  return json(200, {
+    ok: true,
+    route: "api/stripe/webhook",
+    version: "entitlements-writer-v1",
+    ts: new Date().toISOString(),
+  });
+}
+
+/**
  * Price → entitlements mapping
  * Set these in Vercel env so you never hardcode IDs:
  *  STRIPE_PRICE_PULSE_STARTER
