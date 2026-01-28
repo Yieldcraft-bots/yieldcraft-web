@@ -1,44 +1,21 @@
-// src/app/go/coinbase/route.ts
+// src/app/api/go/coinbase/route.ts
 import { NextResponse } from "next/server";
 
-const FALLBACK = "https://www.coinbase.com/signup";
+export const runtime = "nodejs";
 
-// Read from env at runtime (works in Vercel). This is PUBLIC by design.
-function getRefUrl() {
-  const v = process.env.NEXT_PUBLIC_COINBASE_REF_URL;
-  const ref = typeof v === "string" ? v.trim() : "";
-  return ref.length > 0 ? ref : FALLBACK;
+function baseUrl(req: Request) {
+  const url = new URL(req.url);
+  return `${url.protocol}//${url.host}`;
 }
 
+// This route should NEVER send users to coinbase.com.
+// It only exists as a safe redirect back into the app.
 export async function GET(req: Request) {
-  const incoming = new URL(req.url);
+  const dest = `${baseUrl(req)}/dashboard`;
+  return NextResponse.redirect(dest, { status: 302 });
+}
 
-  // Destination starts as your Coinbase referral link
-  const dest = new URL(getRefUrl());
-
-  // Optional pass-through params (safe allowlist)
-  // Example: /go/coinbase?utm_source=yieldcraft&utm_campaign=quickstart
-  const allow = [
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_content",
-    "utm_term",
-    "ref",
-    "code",
-  ];
-
-  for (const key of allow) {
-    const val = incoming.searchParams.get(key);
-    if (val && !dest.searchParams.has(key)) {
-      dest.searchParams.set(key, val);
-    }
-  }
-
-  // Always tag clicks (no secrets)
-  if (!dest.searchParams.has("utm_source")) dest.searchParams.set("utm_source", "yieldcraft");
-  if (!dest.searchParams.has("utm_medium")) dest.searchParams.set("utm_medium", "referral");
-  if (!dest.searchParams.has("utm_campaign")) dest.searchParams.set("utm_campaign", "coinbase");
-
-  return NextResponse.redirect(dest.toString(), { status: 302 });
+export async function POST(req: Request) {
+  const dest = `${baseUrl(req)}/dashboard`;
+  return NextResponse.redirect(dest, { status: 302 });
 }
