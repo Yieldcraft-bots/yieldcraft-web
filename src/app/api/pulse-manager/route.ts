@@ -1,6 +1,6 @@
 // src/app/api/pulse-manager/route.ts
 import { NextResponse } from "next/server";
-import jwt from "jsonwebtoken";
+import jwt, { type SignOptions } from "jsonwebtoken";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
@@ -165,7 +165,9 @@ type KeyRow = {
   key_alg?: string | null;
 };
 
-async function loadAllCoinbaseKeys(): Promise<{ ok: true; rows: KeyRow[] } | { ok: false; error: any }> {
+async function loadAllCoinbaseKeys(): Promise<
+  { ok: true; rows: KeyRow[] } | { ok: false; error: any }
+> {
   try {
     const client = sb();
     const { data, error } = await client
@@ -196,14 +198,21 @@ type Ctx = {
 
 function algFor(ctx: Ctx): "ES256" | "EdDSA" {
   const raw = (ctx.key_alg || "").toLowerCase();
-  if (raw.includes("ed") || raw.includes("eddsa") || raw.includes("ed25519")) return "EdDSA";
+  if (raw.includes("ed") || raw.includes("eddsa") || raw.includes("ed25519"))
+    return "EdDSA";
   // default
   return "ES256";
 }
 
+/**
+ * NOTE:
+ * jsonwebtoken's TS Algorithm type often does NOT include "EdDSA" depending on version,
+ * which causes overload mismatch errors at compile-time.
+ * We keep runtime behavior identical, but cast the options to avoid TS picking the callback overload.
+ */
 function buildCdpJwt(ctx: Ctx, method: "GET" | "POST", path: string) {
   const apiKeyName = cleanString(ctx.api_key_name);
-  const privateKey = normalizePem(ctx.private_key);
+  const privateKeyPem = normalizePem(ctx.private_key);
 
   const now = Math.floor(Date.now() / 1000);
   const nonce = crypto.randomBytes(16).toString("hex");
@@ -211,13 +220,17 @@ function buildCdpJwt(ctx: Ctx, method: "GET" | "POST", path: string) {
   const pathForUri = path.split("?")[0];
   const uri = `${method} api.coinbase.com${pathForUri}`;
 
-  const algorithm = algFor(ctx);
+  const alg = algFor(ctx);
 
-  return jwt.sign(
-    { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri },
-    privateKey as any,
-    { algorithm, header: { kid: apiKeyName, nonce } as any }
-  );
+  const payload = { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri };
+
+  // Force TS to treat this as SignOptions (not callback), and allow EdDSA where the type union is missing it.
+  const options: SignOptions = {
+    algorithm: (alg === "EdDSA" ? "EdDSA" : "ES256") as any,
+    header: { kid: apiKeyName, nonce } as any,
+  };
+
+  return jwt.sign(payload as any, privateKeyPem as any, options as any);
 }
 
 async function cbGet(ctx: Ctx, path: string) {
@@ -246,8 +259,13 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
 }
 
 // ---------- price helpers ----------
-async function fetchSpotPrice(ctx: Ctx): Promise<{ ok: true; price: number } | { ok: false; error: any }> {
-  const r = await cbGet(ctx, `/api/v3/brokerage/products/${encodeURIComponent(PRODUCT_ID)}`);
+async function fetchSpotPrice(
+  ctx: Ctx
+): Promise<{ ok: true; price: number } | { ok: false; error: any }> {
+  const r = await cbGet(
+    ctx,
+    `/api/v3/brokerage/products/${encodeURIComponent(PRODUCT_ID)}`
+  );
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const p =
@@ -256,7 +274,8 @@ async function fetchSpotPrice(ctx: Ctx): Promise<{ ok: true; price: number } | {
     Number((r.json as any)?.data?.price) ||
     0;
 
-  if (!Number.isFinite(p) || p <= 0) return { ok: false, error: { bad_price: r.json } };
+  if (!Number.isFinite(p) || p <= 0)
+    return { ok: false, error: { bad_price: r.json } };
   return { ok: true, price: p };
 }
 
@@ -288,7 +307,9 @@ async function fetchBtcPosition(ctx: Ctx) {
 }
 
 // ---------- last BUY fill ----------
-async function fetchLastBuyFill(ctx: Ctx): Promise<
+async function fetchLastBuyFill(
+  ctx: Ctx
+): Promise<
   | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
   | { ok: false; error: any }
 > {
@@ -319,7 +340,9 @@ async function fetchLastBuyFill(ctx: Ctx): Promise<
 }
 
 // ---------- peak window ----------
-async function fetchPeakWindow(ctx: Ctx): Promise<
+async function fetchPeakWindow(
+  ctx: Ctx
+): Promise<
   | { ok: true; peak: number; last: number; startTs: string; endTs: string }
   | { ok: false; error: any }
 > {
@@ -371,7 +394,10 @@ function makerAllowIocFallback(): boolean {
 }
 
 async function fetchOrderStatus(ctx: Ctx, orderId: string) {
-  const r = await cbGet(ctx, `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`);
+  const r = await cbGet(
+    ctx,
+    `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
+  );
   if (!r.ok) return { ok: false as const, status: r.status, raw: r.json ?? r.text };
 
   const o = (r.json as any)?.order ?? (r.json as any);
@@ -382,7 +408,12 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
   return { ok: true as const, status, filled, done, raw: r.json };
 }
 
-async function placeLimitPostOnly(ctx: Ctx, side: "BUY" | "SELL", baseSize: string, limitPrice: string) {
+async function placeLimitPostOnly(
+  ctx: Ctx,
+  side: "BUY" | "SELL",
+  baseSize: string,
+  limitPrice: string
+) {
   const path = "/api/v3/brokerage/orders";
   const payload = {
     client_order_id: `yc_mgr_${ctx.user_id}_${side.toLowerCase()}_maker_${Date.now()}`,
@@ -399,7 +430,12 @@ async function placeLimitPostOnly(ctx: Ctx, side: "BUY" | "SELL", baseSize: stri
   return cbPost(ctx, path, payload);
 }
 
-async function placeMarketIoc(ctx: Ctx, side: "BUY" | "SELL", quoteUsd?: string, baseSize?: string) {
+async function placeMarketIoc(
+  ctx: Ctx,
+  side: "BUY" | "SELL",
+  quoteUsd?: string,
+  baseSize?: string
+) {
   const path = "/api/v3/brokerage/orders";
   const payload =
     side === "BUY"
@@ -523,9 +559,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     key: shortKeyName(ctx.api_key_name),
     alg: algFor(ctx),
     gates,
-    position_ok: position.ok,
-    has_position: position.ok ? position.has_position : null,
-    base_available: position.ok ? position.base_available : null,
+    position_ok: (position as any)?.ok,
+    has_position: (position as any)?.ok ? (position as any).has_position : null,
+    base_available: (position as any)?.ok ? (position as any).base_available : null,
     min_pos: (position as any)?.min_pos ?? null,
     entryQuoteUsd,
     cooldownMs,
@@ -550,7 +586,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     return { ok: true, mode: "NOOP_GATES", gates, position };
   }
 
-  if (!position.ok) {
+  if (!(position as any)?.ok) {
     return {
       ok: false,
       mode: "BLOCKED",
@@ -585,7 +621,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   if (!Number.isFinite(refPrice) || refPrice <= 0) refPrice = 0;
 
   // ---- ENTRY ----
-  if (!position.has_position) {
+  if (!(position as any).has_position) {
     if (!entriesEnabled) {
       return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
     }
@@ -826,7 +862,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     return { ok: true, mode: "HOLD", gates, position, cooldown, decision };
   }
 
-  const baseSize = fmtBaseSize(position.base_available);
+  const baseSize = fmtBaseSize((position as any).base_available);
 
   if (exitsDryRun) {
     return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, decision, would_sell_base_size: baseSize };
@@ -1036,13 +1072,14 @@ async function runForAllUsers(masterRunId: string) {
 
     try {
       const out = await runManagerForUser(runId, ctx);
-      if (out?.ok) okCount++; else failCount++;
+      if ((out as any)?.ok) okCount++;
+      else failCount++;
       results.push({
         runId,
         user_id: ctx.user_id,
         key: shortKeyName(ctx.api_key_name),
         alg: algFor(ctx),
-        ok: !!out?.ok,
+        ok: !!(out as any)?.ok,
         mode: (out as any)?.mode,
         gates: (out as any)?.gates,
         position: (out as any)?.position,
@@ -1092,9 +1129,9 @@ export async function GET(req: Request) {
   // (We can add a true lightweight status-only mode later.)
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: result.ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
 
-  return json(result.ok ? 200 : 500, { runId: masterRunId, action, ...result });
+  return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
 
 export async function POST(req: Request) {
@@ -1116,7 +1153,7 @@ export async function POST(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: result.ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
 
-  return json(result.ok ? 200 : 500, { runId: masterRunId, action, ...result });
+  return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }

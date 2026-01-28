@@ -2,21 +2,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
-import { Geist, Geist_Mono } from "next/font/google";
 import type { ReactNode } from "react";
 import "./globals.css";
 
 import AuthNav from "@/components/AuthNav";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "YieldCraft — Direct Execution AI Trading Engine",
@@ -53,7 +42,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#040914] text-white`}
+        className="antialiased bg-[#040914] text-white"
+        style={{
+          fontFamily:
+            'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"',
+        }}
       >
         {/* Ambient background */}
         <div className="pointer-events-none fixed inset-0 -z-10">

@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -24,10 +23,21 @@ function genCode() {
   return Math.random().toString(16).slice(2, 10);
 }
 
-const stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"));
+async function getStripe() {
+  // IMPORTANT: lazy-load + lazy-require env so builds don't fail during "collect page data"
+  const Stripe = (await import("stripe")).default;
+
+  // DO NOT pin apiVersion here — your installed Stripe types expect a different literal
+  // and Next build will fail on TypeScript.
+  const stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"));
+
+  return stripe;
+}
 
 export async function POST(req: Request) {
   try {
+    const stripe = await getStripe();
+
     const body = await req.json().catch(() => ({}));
     const fullName = String(body?.fullName || "").trim();
     const email = String(body?.email || "").trim().toLowerCase();
@@ -58,7 +68,9 @@ export async function POST(req: Request) {
     // 1) Find existing affiliate by email (if they applied before)
     const { data: existing, error: existingErr } = await sb
       .from("affiliates")
-      .select("id,email,name,status,affiliate_code,commission_rate,stripe_account_id")
+      .select(
+        "id,email,name,status,affiliate_code,commission_rate,stripe_account_id"
+      )
       .eq("email", email)
       .maybeSingle();
 
@@ -86,9 +98,6 @@ export async function POST(req: Request) {
     const affiliateCode = existing?.affiliate_code || genCode();
 
     // 4) Upsert affiliate row
-    // NOTE: your table currently includes: email, name, status, affiliate_code, commission_rate, created_at, approved_at
-    // We also store stripe_account_id + optional fields if your table has them.
-    // If your table doesn't yet have these extra columns, it will still work if we only write known columns.
     const payload: any = {
       email,
       name: fullName,
@@ -107,6 +116,7 @@ export async function POST(req: Request) {
         .from("affiliates")
         .update(payload)
         .eq("id", existing.id);
+
       if (upErr) {
         // fallback: update only core columns if extra cols don't exist
         const { error: upErr2 } = await sb
@@ -155,7 +165,9 @@ export async function POST(req: Request) {
     const accountLink = await stripe.accountLinks.create({
       account: stripeAccountId,
       refresh_url: `${baseUrl}/affiliate?refresh=1`,
-      return_url: `${baseUrl}/affiliate/success?code=${encodeURIComponent(affiliateCode)}`,
+      return_url: `${baseUrl}/affiliate/success?code=${encodeURIComponent(
+        affiliateCode
+      )}`,
       type: "account_onboarding",
     });
 
@@ -181,4 +193,9 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function GET() {
+  // harmless at build / for health checks
+  return NextResponse.json({ ok: true });
 }
