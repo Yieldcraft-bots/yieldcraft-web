@@ -32,7 +32,6 @@ function entitlementsFromPrice(priceId: string) {
   const ATLAS = process.env.STRIPE_PRICE_ATLAS || "";
   const PRO = process.env.STRIPE_PRICE_PRO_SUITE || "";
 
-  // Defaults
   let pulse = false;
   let recon = false;
   let atlas = false;
@@ -48,8 +47,6 @@ function entitlementsFromPrice(priceId: string) {
     pulse = true;
     recon = true;
     atlas = true;
-  } else {
-    // Unknown price id — keep all false (safe)
   }
 
   return { pulse, recon, atlas };
@@ -69,7 +66,6 @@ async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
   }
 
   // 2) Fallback to profiles table (common pattern)
-  // Requires: public.profiles has columns: id (uuid) and email (text)
   try {
     const { data, error } = await supabaseAdmin
       .from("profiles")
@@ -110,7 +106,11 @@ export async function POST(req: Request) {
   });
 
   const supabaseAdmin = createClient(supabaseUrl, serviceRole, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
   });
 
   try {
@@ -123,7 +123,6 @@ export async function POST(req: Request) {
     const type = event.type;
     console.log("[stripe.webhook] received:", type);
 
-    // We care about these (your destination already listens to them)
     const relevant =
       type === "checkout.session.completed" ||
       type === "customer.subscription.created" ||
@@ -136,53 +135,58 @@ export async function POST(req: Request) {
       return json(200, { ok: true, ignored: true, type });
     }
 
-    // Pull the email + customer + subscription depending on event type
     let email: string | null = null;
     let customerId: string | null = null;
     let subscriptionId: string | null = null;
 
     if (type === "checkout.session.completed") {
       const s = event.data.object as Stripe.Checkout.Session;
-      email = (s.customer_details as any)?.email || (s as any)?.customer_email || null;
+      email =
+        (s.customer_details as any)?.email ||
+        (s as any)?.customer_email ||
+        null;
       customerId = (s.customer as any) || null;
       subscriptionId = (s.subscription as any) || null;
     } else if (type.startsWith("customer.subscription.")) {
       const sub = event.data.object as Stripe.Subscription;
       customerId = (sub.customer as any) || null;
       subscriptionId = sub.id || null;
-      // Sub events usually do NOT include email. We'll still map via subscriptions table if you have it,
-      // but email is best from checkout.session.completed.
     } else if (type.startsWith("invoice.")) {
       const inv = event.data.object as Stripe.Invoice;
       customerId = (inv.customer as any) || null;
-      subscriptionId = (inv.subscription as any) || null;
-      email = (inv.customer_email as any) || null;
+      // FIX: Stripe types sometimes omit subscription on Invoice; payload has it.
+      subscriptionId = ((inv as any).subscription as any) || null;
+      email = ((inv as any).customer_email as any) || null;
     }
 
-    // If we can't proceed safely, still return 200 so Stripe doesn't retry forever
     if (!subscriptionId) {
-      return json(200, { ok: true, mapped: false, reason: "no_subscription_id", type });
+      return json(200, {
+        ok: true,
+        mapped: false,
+        reason: "no_subscription_id",
+        type,
+      });
     }
 
-    // For entitlements, we need the price_id from the subscription
     const priceId = await getSubscriptionPriceId(stripe, subscriptionId);
     if (!priceId) {
-      return json(200, { ok: true, mapped: false, reason: "no_price_id", type, subscriptionId });
+      return json(200, {
+        ok: true,
+        mapped: false,
+        reason: "no_price_id",
+        type,
+        subscriptionId,
+      });
     }
 
     const ent = entitlementsFromPrice(priceId);
 
-    // We need a user_id to write entitlements.
-    // Best path: use the checkout email (this is why checkout.session.completed is critical).
     let userId: string | null = null;
-
     if (email) {
       userId = await resolveUserIdByEmail(supabaseAdmin, email);
     }
 
     if (!userId) {
-      // If the user hasn't signed up yet with that email, we can't assign entitlements.
-      // Return 200 to avoid Stripe retries; you can reconcile later.
       return json(200, {
         ok: true,
         mapped: false,
@@ -196,7 +200,6 @@ export async function POST(req: Request) {
       });
     }
 
-    // 1) Insert entitlements snapshot row (your /api/entitlements reads latest by created_at)
     const { error: entErr } = await supabaseAdmin.from("entitlements").insert({
       user_id: userId,
       pulse: ent.pulse,
@@ -206,13 +209,14 @@ export async function POST(req: Request) {
     });
 
     if (entErr) {
-      console.log("[stripe.webhook] entitlements insert error:", entErr?.message || entErr);
+      console.log(
+        "[stripe.webhook] entitlements insert error:",
+        entErr?.message || entErr
+      );
       return json(500, { ok: false, error: "entitlements_insert_failed" });
     }
 
-    // 2) OPTIONAL: upsert subscriptions row if table exists (safe: ignore if it fails)
-    // Expected columns (adjust later if needed):
-    // user_id uuid, stripe_customer_id text, stripe_subscription_id text, stripe_price_id text, status text, updated_at timestamptz
+    // Optional: track subscription (safe if table exists)
     try {
       await supabaseAdmin.from("subscriptions").upsert(
         {
@@ -227,7 +231,7 @@ export async function POST(req: Request) {
         { onConflict: "stripe_subscription_id" }
       );
     } catch {
-      // ignore: not fatal
+      // ignore
     }
 
     return json(200, {
