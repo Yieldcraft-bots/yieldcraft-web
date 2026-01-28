@@ -21,3 +21,6 @@ node_modules/
 *.key
 src/coinbase-sec1.pem
 src/coinbase-pkcs8.pem
+
+.vercel
+.env*.local

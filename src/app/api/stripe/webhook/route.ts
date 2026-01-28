@@ -20,20 +20,19 @@ function json(status: number, body: any) {
 
 /**
  * GET = DEPLOYMENT PROOF CHECK (does not affect Stripe)
- * Lets us verify in-browser what code is actually deployed.
  */
 export async function GET() {
   return json(200, {
     ok: true,
     route: "api/stripe/webhook",
-    version: "entitlements-writer-v2_customerid_fallback",
+    version: "entitlements-writer-v3_idempotent_cancel_fix",
     ts: new Date().toISOString(),
   });
 }
 
 /**
  * Price → entitlements mapping
- * Set these in Vercel env so you never hardcode IDs:
+ * Set these in Vercel env:
  *  STRIPE_PRICE_PULSE_STARTER
  *  STRIPE_PRICE_PULSE_RECON
  *  STRIPE_PRICE_ATLAS
@@ -66,16 +65,16 @@ function entitlementsFromPrice(priceId: string) {
 }
 
 async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
-  // 1) Prefer admin lookup if available (SDK differences)
+  // 1) Try auth.admin.getUserByEmail (if available)
   try {
     const admin = supabaseAdmin.auth?.admin as any;
     if (admin?.getUserByEmail) {
       const res = await admin.getUserByEmail(email);
       const user = res?.data?.user;
-      if (user?.id) return user.id;
+      if (user?.id) return user.id as string;
     }
   } catch {
-    // ignore and fall through
+    // ignore
   }
 
   // 2) Fallback to profiles table (common pattern)
@@ -86,24 +85,7 @@ async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
       .eq("email", email)
       .maybeSingle();
 
-    if (!error && data?.id) return data.id;
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
-async function resolveUserIdByCustomerId(supabaseAdmin: any, customerId: string) {
-  // Look up via subscriptions table
-  try {
-    const { data, error } = await supabaseAdmin
-      .from("subscriptions")
-      .select("user_id")
-      .eq("stripe_customer_id", customerId)
-      .maybeSingle();
-
-    if (!error && data?.user_id) return data.user_id as string;
+    if (!error && data?.id) return data.id as string;
   } catch {
     // ignore
   }
@@ -123,11 +105,92 @@ async function getSubscriptionPriceId(stripe: Stripe, subscriptionId: string) {
   return priceId || null;
 }
 
+/**
+ * Idempotent entitlements write:
+ * - If entitlements row exists for user_id -> UPDATE
+ * - Else INSERT
+ */
+async function setEntitlements(supabaseAdmin: any, userId: string, ent: any) {
+  // Try UPDATE first (safe even if row doesn't exist)
+  const { data: upd, error: updErr } = await supabaseAdmin
+    .from("entitlements")
+    .update({
+      pulse: !!ent.pulse,
+      recon: !!ent.recon,
+      atlas: !!ent.atlas,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId)
+    .select("user_id")
+    .maybeSingle();
+
+  if (!updErr && upd?.user_id) return { ok: true, mode: "update" };
+
+  // If no row updated, INSERT
+  const { error: insErr } = await supabaseAdmin.from("entitlements").insert({
+    user_id: userId,
+    pulse: !!ent.pulse,
+    recon: !!ent.recon,
+    atlas: !!ent.atlas,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  });
+
+  if (insErr) return { ok: false, error: insErr?.message || insErr };
+  return { ok: true, mode: "insert" };
+}
+
+/**
+ * Resolve user by Stripe customer id via our subscriptions table (preferred for subscription.* events)
+ */
+async function resolveUserIdByCustomerId(supabaseAdmin: any, customerId: string) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("subscriptions")
+      .select("user_id")
+      .eq("stripe_customer_id", customerId)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && data?.user_id) return data.user_id as string;
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+async function upsertSubscriptionRow(
+  supabaseAdmin: any,
+  row: {
+    user_id: string;
+    stripe_customer_id: string | null;
+    stripe_subscription_id: string;
+    stripe_price_id: string | null;
+    status: "active" | "canceled" | "past_due";
+  }
+) {
+  try {
+    await supabaseAdmin.from("subscriptions").upsert(
+      {
+        user_id: row.user_id,
+        stripe_customer_id: row.stripe_customer_id,
+        stripe_subscription_id: row.stripe_subscription_id,
+        stripe_price_id: row.stripe_price_id,
+        status: row.status,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "stripe_subscription_id" }
+    );
+  } catch {
+    // ignore if table/constraint not present
+  }
+}
+
 export async function POST(req: Request) {
   const secretKey = mustEnv("STRIPE_SECRET_KEY");
   const webhookSecret = mustEnv("STRIPE_WEBHOOK_SECRET");
 
-  // We need service role to safely write entitlements + look up users
   const supabaseUrl = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const serviceRole = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -161,9 +224,7 @@ export async function POST(req: Request) {
       type === "invoice.paid" ||
       type === "invoice.payment_failed";
 
-    if (!relevant) {
-      return json(200, { ok: true, ignored: true, type });
-    }
+    if (!relevant) return json(200, { ok: true, ignored: true, type });
 
     let email: string | null = null;
     let customerId: string | null = null;
@@ -181,47 +242,49 @@ export async function POST(req: Request) {
       const sub = event.data.object as Stripe.Subscription;
       customerId = (sub.customer as any) || null;
       subscriptionId = sub.id || null;
+      // subscription.* often has no email; we'll resolve by customerId
     } else if (type.startsWith("invoice.")) {
       const inv = event.data.object as Stripe.Invoice;
       customerId = (inv.customer as any) || null;
-      // FIX: Stripe types sometimes omit subscription on Invoice; payload has it.
       subscriptionId = ((inv as any).subscription as any) || null;
       email = ((inv as any).customer_email as any) || null;
     }
 
     if (!subscriptionId) {
-      return json(200, {
-        ok: true,
-        mapped: false,
-        reason: "no_subscription_id",
-        type,
-      });
+      return json(200, { ok: true, mapped: false, reason: "no_subscription_id", type });
     }
 
+    // Determine priceId (from subscription items)
     const priceId = await getSubscriptionPriceId(stripe, subscriptionId);
     if (!priceId) {
-      return json(200, {
-        ok: true,
-        mapped: false,
-        reason: "no_price_id",
-        type,
-        subscriptionId,
-      });
+      return json(200, { ok: true, mapped: false, reason: "no_price_id", type, subscriptionId });
     }
 
-    const ent = entitlementsFromPrice(priceId);
+    // If canceled, entitlements should be OFF regardless of plan
+    const isCanceled = type === "customer.subscription.deleted";
+    const ent = isCanceled ? { pulse: false, recon: false, atlas: false } : entitlementsFromPrice(priceId);
 
-    // Resolve user
+    // Resolve userId
     let userId: string | null = null;
 
-    // 1) Email path (checkout.session.completed / invoice.* w email)
-    if (email) {
-      userId = await resolveUserIdByEmail(supabaseAdmin, email);
-    }
+    // 1) Email match if we have it
+    if (email) userId = await resolveUserIdByEmail(supabaseAdmin, email);
 
-    // 2) Fallback path: customerId -> subscriptions table
+    // 2) If still no user and we have customerId, resolve via subscriptions table
+    if (!userId && customerId) userId = await resolveUserIdByCustomerId(supabaseAdmin, customerId);
+
+    // 3) If still no user and we have customerId, ask Stripe for customer email, then match
     if (!userId && customerId) {
-      userId = await resolveUserIdByCustomerId(supabaseAdmin, customerId);
+      try {
+        const c = await stripe.customers.retrieve(customerId);
+        const cEmail = (c as any)?.email as string | undefined;
+        if (cEmail) {
+          email = email || cEmail;
+          userId = await resolveUserIdByEmail(supabaseAdmin, cEmail);
+        }
+      } catch {
+        // ignore
+      }
     }
 
     if (!userId) {
@@ -229,53 +292,34 @@ export async function POST(req: Request) {
         ok: true,
         mapped: false,
         reason: "no_user_match",
+        type,
         email,
         customerId,
         subscriptionId,
         priceId,
         entitlements: ent,
-        type,
       });
     }
 
-    // ✅ Idempotent entitlement write (prevents duplicates on re-delivery)
-    // Requires unique constraint on entitlements.user_id OR existing primary key on user_id
-    const { error: entErr } = await supabaseAdmin.from("entitlements").upsert(
-      {
-        user_id: userId,
-        pulse: ent.pulse,
-        recon: ent.recon,
-        atlas: ent.atlas,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id" }
-    );
-
-    if (entErr) {
-      console.log(
-        "[stripe.webhook] entitlements upsert error:",
-        entErr?.message || entErr
-      );
-      return json(500, { ok: false, error: "entitlements_upsert_failed" });
+    // Write entitlements idempotently (no duplicates)
+    const entWrite = await setEntitlements(supabaseAdmin, userId, ent);
+    if (!entWrite.ok) {
+      console.log("[stripe.webhook] entitlements write error:", entWrite.error);
+      return json(500, { ok: false, error: "entitlements_write_failed" });
     }
 
-    // Track subscription (safe if table exists)
-    try {
-      await supabaseAdmin.from("subscriptions").upsert(
-        {
-          user_id: userId,
-          stripe_customer_id: customerId,
-          stripe_subscription_id: subscriptionId,
-          stripe_price_id: priceId,
-          status:
-            type === "customer.subscription.deleted" ? "canceled" : "active",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "stripe_subscription_id" }
-      );
-    } catch {
-      // ignore
-    }
+    // Track subscription row (for future customerId->user resolution)
+    await upsertSubscriptionRow(supabaseAdmin, {
+      user_id: userId,
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subscriptionId,
+      stripe_price_id: priceId,
+      status: isCanceled
+        ? "canceled"
+        : type === "invoice.payment_failed"
+        ? "past_due"
+        : "active",
+    });
 
     return json(200, {
       ok: true,
@@ -287,6 +331,7 @@ export async function POST(req: Request) {
       priceId,
       entitlements: ent,
       type,
+      ent_write: entWrite.mode,
     });
   } catch (err: any) {
     console.log("[stripe.webhook] ERROR:", err?.message || err);
