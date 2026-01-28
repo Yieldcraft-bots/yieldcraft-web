@@ -1,3 +1,4 @@
+// src/app/api/entitlements/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
@@ -40,18 +41,16 @@ export async function GET(req: Request) {
   const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-  // 1) Cookie-based auth (SSR cookies)
+  // 1) Cookie-based auth (only works if Supabase auth cookies exist)
   try {
     const cookieStore = await cookies();
 
     const supabase = createServerClient(url, anon, {
       cookies: {
-        // ✅ Next.js async cookies API compatible
         getAll() {
           return cookieStore.getAll();
         },
-        // ✅ We do NOT need to set cookies in this GET route
-        setAll() {},
+        setAll() {}, // no-op for GET
       },
     });
 
@@ -70,16 +69,19 @@ export async function GET(req: Request) {
       });
     }
   } catch {
-    // ignore and fall through
+    // ignore and fall through to bearer mode
   }
 
-  // 2) Bearer token auth (explicit Authorization header)
+  // 2) Bearer token auth (this is the important path for your current setup)
   const authHeader = req.headers.get("authorization") || "";
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
   const token = m?.[1];
 
   if (!token) return json(401, { ok: false, error: "not_authenticated" });
 
+  // CRITICAL:
+  // - include apikey header explicitly
+  // - and pass token directly to auth.getUser(token) (don’t rely on implicit header handling)
   const authed = createClient(url, anon, {
     auth: {
       persistSession: false,
@@ -88,15 +90,22 @@ export async function GET(req: Request) {
     },
     global: {
       headers: {
+        apikey: anon,
         Authorization: `Bearer ${token}`,
       },
     },
   });
 
-  const { data: userRes, error: userErr } = await authed.auth.getUser();
+  const { data: userRes, error: userErr } = await authed.auth.getUser(token);
   const user = userRes?.user;
 
-  if (userErr || !user) return json(401, { ok: false, error: "not_authenticated" });
+  if (userErr || !user) {
+    return json(401, {
+      ok: false,
+      error: "not_authenticated",
+      detail: userErr?.message ?? "no_user",
+    });
+  }
 
   const ent = await fetchLatestEntitlements(authed, user.id);
   if (!ent.ok) return json(500, { ok: false, error: ent.error });
