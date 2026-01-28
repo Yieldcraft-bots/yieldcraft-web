@@ -1,4 +1,3 @@
-// src/app/api/entitlements/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
@@ -41,20 +40,20 @@ export async function GET(req: Request) {
   const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-  // 1) Cookie-based auth (works for normal web sessions)
+  // ✅ Proper SSR cookie handling
   try {
-    const cookieStore = await cookies();
+    const cookieStore = cookies();
 
     const supabase = createServerClient(url, anon, {
       cookies: {
-        getAll() {
-          return cookieStore.getAll();
+        get(name: string) {
+          return cookieStore.get(name)?.value;
         },
-        setAll(cookiesToSet) {
-          // IMPORTANT: without this, createServerClient can fail and you'll fall through to bearer mode
-          for (const c of cookiesToSet) {
-            cookieStore.set(c.name, c.value, c.options);
-          }
+        set(name: string, value: string, options: any) {
+          cookieStore.set({ name, value, ...options });
+        },
+        remove(name: string, options: any) {
+          cookieStore.set({ name, value: "", ...options });
         },
       },
     });
@@ -73,38 +72,23 @@ export async function GET(req: Request) {
         source: "cookie",
       });
     }
-  } catch {
-    // ignore and fall through
-  }
+  } catch {}
 
-  // 2) Bearer token auth (for clients that explicitly pass Authorization)
+  // Fallback bearer (rarely used)
   const authHeader = req.headers.get("authorization") || "";
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
   const token = m?.[1];
 
-  if (!token) {
-    return json(401, { ok: false, error: "not_authenticated" });
-  }
+  if (!token) return json(401, { ok: false, error: "not_authenticated" });
 
   const authed = createClient(url, anon, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-      detectSessionInUrl: false,
-    },
-    global: {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    },
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false },
   });
 
-  const { data: userRes, error: userErr } = await authed.auth.getUser();
+  const { data: userRes } = await authed.auth.getUser();
   const user = userRes?.user;
-
-  if (userErr || !user) {
-    return json(401, { ok: false, error: "not_authenticated" });
-  }
+  if (!user) return json(401, { ok: false, error: "not_authenticated" });
 
   const ent = await fetchLatestEntitlements(authed, user.id);
   if (!ent.ok) return json(500, { ok: false, error: ent.error });
