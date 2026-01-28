@@ -26,7 +26,7 @@ export async function GET() {
   return json(200, {
     ok: true,
     route: "api/stripe/webhook",
-    version: "entitlements-writer-v1",
+    version: "entitlements-writer-v2_customerid_fallback",
     ts: new Date().toISOString(),
   });
 }
@@ -94,6 +94,23 @@ async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
   return null;
 }
 
+async function resolveUserIdByCustomerId(supabaseAdmin: any, customerId: string) {
+  // Look up via subscriptions table
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("subscriptions")
+      .select("user_id")
+      .eq("stripe_customer_id", customerId)
+      .maybeSingle();
+
+    if (!error && data?.user_id) return data.user_id as string;
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
 async function getSubscriptionPriceId(stripe: Stripe, subscriptionId: string) {
   const sub = await stripe.subscriptions.retrieve(subscriptionId, {
     expand: ["items.data.price"],
@@ -110,7 +127,7 @@ export async function POST(req: Request) {
   const secretKey = mustEnv("STRIPE_SECRET_KEY");
   const webhookSecret = mustEnv("STRIPE_WEBHOOK_SECRET");
 
-  // We need service role to safely write entitlements + look up users by email
+  // We need service role to safely write entitlements + look up users
   const supabaseUrl = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const serviceRole = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
 
@@ -194,16 +211,24 @@ export async function POST(req: Request) {
 
     const ent = entitlementsFromPrice(priceId);
 
+    // Resolve user
     let userId: string | null = null;
+
+    // 1) Email path (checkout.session.completed / invoice.* w email)
     if (email) {
       userId = await resolveUserIdByEmail(supabaseAdmin, email);
+    }
+
+    // 2) Fallback path: customerId -> subscriptions table
+    if (!userId && customerId) {
+      userId = await resolveUserIdByCustomerId(supabaseAdmin, customerId);
     }
 
     if (!userId) {
       return json(200, {
         ok: true,
         mapped: false,
-        reason: "no_user_match_for_email",
+        reason: "no_user_match",
         email,
         customerId,
         subscriptionId,
@@ -213,23 +238,28 @@ export async function POST(req: Request) {
       });
     }
 
-    const { error: entErr } = await supabaseAdmin.from("entitlements").insert({
-      user_id: userId,
-      pulse: ent.pulse,
-      recon: ent.recon,
-      atlas: ent.atlas,
-      created_at: new Date().toISOString(),
-    });
+    // ✅ Idempotent entitlement write (prevents duplicates on re-delivery)
+    // Requires unique constraint on entitlements.user_id OR existing primary key on user_id
+    const { error: entErr } = await supabaseAdmin.from("entitlements").upsert(
+      {
+        user_id: userId,
+        pulse: ent.pulse,
+        recon: ent.recon,
+        atlas: ent.atlas,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" }
+    );
 
     if (entErr) {
       console.log(
-        "[stripe.webhook] entitlements insert error:",
+        "[stripe.webhook] entitlements upsert error:",
         entErr?.message || entErr
       );
-      return json(500, { ok: false, error: "entitlements_insert_failed" });
+      return json(500, { ok: false, error: "entitlements_upsert_failed" });
     }
 
-    // Optional: track subscription (safe if table exists)
+    // Track subscription (safe if table exists)
     try {
       await supabaseAdmin.from("subscriptions").upsert(
         {
