@@ -41,16 +41,17 @@ export async function GET(req: Request) {
   const url = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
   const anon = mustEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
-  // 1) Cookie-based auth (only works if Supabase auth cookies exist)
+  // 1) Cookie-based auth (SSR cookies)
   try {
-    const cookieStore = await cookies();
+    const cookieStore = cookies();
 
     const supabase = createServerClient(url, anon, {
       cookies: {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll() {}, // no-op for GET
+        // GET route should not be setting cookies; no-op is fine
+        setAll() {},
       },
     });
 
@@ -69,19 +70,21 @@ export async function GET(req: Request) {
       });
     }
   } catch {
-    // ignore and fall through to bearer mode
+    // ignore and fall through
   }
 
-  // 2) Bearer token auth (this is the important path for your current setup)
+  // 2) Bearer token auth (Authorization header)
   const authHeader = req.headers.get("authorization") || "";
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
   const token = m?.[1];
 
-  if (!token) return json(401, { ok: false, error: "not_authenticated" });
+  if (!token) {
+    return json(401, { ok: false, error: "not_authenticated" });
+  }
 
-  // CRITICAL:
-  // - include apikey header explicitly
-  // - and pass token directly to auth.getUser(token) (don’t rely on implicit header handling)
+  // IMPORTANT:
+  // - Keep Authorization header for RLS on table reads
+  // - BUT pass token explicitly to auth.getUser(token) (persistSession is off)
   const authed = createClient(url, anon, {
     auth: {
       persistSession: false,
@@ -90,7 +93,6 @@ export async function GET(req: Request) {
     },
     global: {
       headers: {
-        apikey: anon,
         Authorization: `Bearer ${token}`,
       },
     },
@@ -100,11 +102,7 @@ export async function GET(req: Request) {
   const user = userRes?.user;
 
   if (userErr || !user) {
-    return json(401, {
-      ok: false,
-      error: "not_authenticated",
-      detail: userErr?.message ?? "no_user",
-    });
+    return json(401, { ok: false, error: "not_authenticated" });
   }
 
   const ent = await fetchLatestEntitlements(authed, user.id);
