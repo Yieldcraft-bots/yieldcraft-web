@@ -43,14 +43,14 @@ export async function GET(req: Request) {
 
   // 1) Cookie-based auth (SSR cookies)
   try {
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
 
     const supabase = createServerClient(url, anon, {
       cookies: {
         getAll() {
           return cookieStore.getAll();
         },
-        // GET route should not be setting cookies; no-op is fine
+        // GET route should not set cookies; no-op
         setAll() {},
       },
     });
@@ -78,13 +78,8 @@ export async function GET(req: Request) {
   const m = authHeader.match(/^Bearer\s+(.+)$/i);
   const token = m?.[1];
 
-  if (!token) {
-    return json(401, { ok: false, error: "not_authenticated" });
-  }
+  if (!token) return json(401, { ok: false, error: "not_authenticated" });
 
-  // IMPORTANT:
-  // - Keep Authorization header for RLS on table reads
-  // - BUT pass token explicitly to auth.getUser(token) (persistSession is off)
   const authed = createClient(url, anon, {
     auth: {
       persistSession: false,
@@ -98,12 +93,11 @@ export async function GET(req: Request) {
     },
   });
 
+  // CRITICAL: pass token explicitly
   const { data: userRes, error: userErr } = await authed.auth.getUser(token);
   const user = userRes?.user;
 
-  if (userErr || !user) {
-    return json(401, { ok: false, error: "not_authenticated" });
-  }
+  if (userErr || !user) return json(401, { ok: false, error: "not_authenticated" });
 
   const ent = await fetchLatestEntitlements(authed, user.id);
   if (!ent.ok) return json(500, { ok: false, error: ent.error });
