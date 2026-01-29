@@ -23,11 +23,9 @@ function json(status: number, body: any) {
  *
  * Reads:
  *  - public.entitlements (by user_id)
- *  - public.subscriptions (by user_id, first row if multiple)
+ *  - public.subscriptions (latest by created_at)
  *
- * This is the SINGLE source-of-truth for:
- *  - Account page subscription status
- *  - Dashboard pills
+ * NOTE: DB schema uses created_at (NOT updated_at).
  */
 export async function GET(req: Request) {
   try {
@@ -43,12 +41,12 @@ export async function GET(req: Request) {
       return json(401, { ok: false, error: "missing_bearer_token" });
     }
 
-    // Auth client (explicit token)
-    const supabaseAuth = createClient(supabaseUrl, anonKey, {
+    // Verify user from token (do not rely on browser session)
+    const supabase = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    const { data: userRes, error: userErr } = await supabaseAuth.auth.getUser(token);
+    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
     if (userErr || !userRes?.user) {
       return json(401, {
         ok: false,
@@ -61,18 +59,18 @@ export async function GET(req: Request) {
     const userId = user.id;
     const email = (user.email || "").toLowerCase();
 
-    // RLS-aware PostgREST client (Bearer token in headers)
-    const db = createClient(supabaseUrl, anonKey, {
+    // Authed PostgREST client for RLS tables
+    const authed = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
 
-    // ENTITLEMENTS: select only known columns (NO updated_at dependency)
-    const { data: entRows, error: entErr } = await db
+    // entitlements: schema uses created_at
+    const { data: ent, error: entErr } = await authed
       .from("entitlements")
-      .select("pulse,recon,atlas")
+      .select("pulse,recon,atlas,created_at")
       .eq("user_id", userId)
-      .limit(1);
+      .maybeSingle();
 
     if (entErr) {
       return json(500, {
@@ -82,15 +80,16 @@ export async function GET(req: Request) {
       });
     }
 
-    const ent = (entRows && entRows[0]) || null;
-
-    // SUBSCRIPTIONS: schema-proof (select *) and don’t assume column names
-    // Also avoid maybeSingle() so multiple rows never error.
-    const { data: subRows, error: subErr } = await db
+    // subscriptions: schema uses created_at
+    const { data: sub, error: subErr } = await authed
       .from("subscriptions")
-      .select("*")
+      .select(
+        "plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,created_at"
+      )
       .eq("user_id", userId)
-      .limit(1);
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (subErr) {
       return json(500, {
@@ -100,14 +99,12 @@ export async function GET(req: Request) {
       });
     }
 
-    const sub = (subRows && subRows[0]) || null;
-
     return json(200, {
       ok: true,
       route: "api/account/status",
       user: { id: userId, email },
       entitlements: ent || { pulse: false, recon: false, atlas: false },
-      subscription: sub,
+      subscription: sub || null,
       ts: new Date().toISOString(),
     });
   } catch (e: any) {
