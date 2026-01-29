@@ -23,7 +23,11 @@ function json(status: number, body: any) {
  *
  * Reads:
  *  - public.entitlements (by user_id)
- *  - public.subscriptions (latest by user_id)
+ *  - public.subscriptions (by user_id, first row if multiple)
+ *
+ * This is the SINGLE source-of-truth for:
+ *  - Account page subscription status
+ *  - Dashboard pills
  */
 export async function GET(req: Request) {
   try {
@@ -39,17 +43,17 @@ export async function GET(req: Request) {
       return json(401, { ok: false, error: "missing_bearer_token" });
     }
 
-    const supabase = createClient(supabaseUrl, anonKey, {
+    // Auth client (explicit token)
+    const supabaseAuth = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // IMPORTANT: pass token explicitly (do NOT rely on global headers/session storage)
-    const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
+    const { data: userRes, error: userErr } = await supabaseAuth.auth.getUser(token);
     if (userErr || !userRes?.user) {
       return json(401, {
         ok: false,
         error: "invalid_session",
-        detail: userErr?.message,
+        detail: userErr?.message || null,
       });
     }
 
@@ -57,32 +61,18 @@ export async function GET(req: Request) {
     const userId = user.id;
     const email = (user.email || "").toLowerCase();
 
-    // Use the same token for PostgREST RLS
-    const authed = createClient(supabaseUrl, anonKey, {
+    // RLS-aware PostgREST client (Bearer token in headers)
+    const db = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
-      global: {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
+      global: { headers: { Authorization: `Bearer ${token}` } },
     });
 
-    // ✅ FIX: entitlements table does NOT have updated_at in your DB
-    const { data: ent, error: entErr } = await authed
+    // ENTITLEMENTS: select only known columns (NO updated_at dependency)
+    const { data: entRows, error: entErr } = await db
       .from("entitlements")
       .select("pulse,recon,atlas")
       .eq("user_id", userId)
-      .maybeSingle();
-
-    const { data: sub, error: subErr } = await authed
-      .from("subscriptions")
-      .select(
-        "plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,updated_at"
-      )
-      .eq("user_id", userId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
 
     if (entErr) {
       return json(500, {
@@ -92,6 +82,16 @@ export async function GET(req: Request) {
       });
     }
 
+    const ent = (entRows && entRows[0]) || null;
+
+    // SUBSCRIPTIONS: schema-proof (select *) and don’t assume column names
+    // Also avoid maybeSingle() so multiple rows never error.
+    const { data: subRows, error: subErr } = await db
+      .from("subscriptions")
+      .select("*")
+      .eq("user_id", userId)
+      .limit(1);
+
     if (subErr) {
       return json(500, {
         ok: false,
@@ -100,12 +100,14 @@ export async function GET(req: Request) {
       });
     }
 
+    const sub = (subRows && subRows[0]) || null;
+
     return json(200, {
       ok: true,
       route: "api/account/status",
       user: { id: userId, email },
       entitlements: ent || { pulse: false, recon: false, atlas: false },
-      subscription: sub || null,
+      subscription: sub,
       ts: new Date().toISOString(),
     });
   } catch (e: any) {
