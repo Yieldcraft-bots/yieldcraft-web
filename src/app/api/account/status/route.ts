@@ -25,7 +25,7 @@ function json(status: number, body: any) {
  *  - public.entitlements (by user_id)
  *  - public.subscriptions (latest by created_at)
  *
- * NOTE: DB schema uses created_at (NOT updated_at).
+ * NOTE: Must match actual DB schema (no updated_at, no stripe_price_id, etc.)
  */
 export async function GET(req: Request) {
   try {
@@ -37,11 +37,9 @@ export async function GET(req: Request) {
       ? authHeader.slice(7).trim()
       : "";
 
-    if (!token) {
-      return json(401, { ok: false, error: "missing_bearer_token" });
-    }
+    if (!token) return json(401, { ok: false, error: "missing_bearer_token" });
 
-    // Verify user from token (do not rely on browser session)
+    // Verify token -> user
     const supabase = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
@@ -59,16 +57,16 @@ export async function GET(req: Request) {
     const userId = user.id;
     const email = (user.email || "").toLowerCase();
 
-    // Authed PostgREST client for RLS tables
+    // Authed PostgREST client (RLS)
     const authed = createClient(supabaseUrl, anonKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { headers: { Authorization: `Bearer ${token}` } },
     });
 
-    // entitlements: schema uses created_at
+    // entitlements: schema = user_id, pulse, recon, atlas, max_trade_size, risk_mode, created_at
     const { data: ent, error: entErr } = await authed
       .from("entitlements")
-      .select("pulse,recon,atlas,created_at")
+      .select("pulse,recon,atlas,max_trade_size,risk_mode,created_at")
       .eq("user_id", userId)
       .maybeSingle();
 
@@ -80,12 +78,10 @@ export async function GET(req: Request) {
       });
     }
 
-    // subscriptions: schema uses created_at
+    // subscriptions: schema = user_id, plan, status, stripe_customer_id, created_at
     const { data: sub, error: subErr } = await authed
       .from("subscriptions")
-      .select(
-        "plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,created_at"
-      )
+      .select("plan,status,stripe_customer_id,created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -103,7 +99,13 @@ export async function GET(req: Request) {
       ok: true,
       route: "api/account/status",
       user: { id: userId, email },
-      entitlements: ent || { pulse: false, recon: false, atlas: false },
+      entitlements: ent || {
+        pulse: false,
+        recon: false,
+        atlas: false,
+        max_trade_size: 0,
+        risk_mode: null,
+      },
       subscription: sub || null,
       ts: new Date().toISOString(),
     });
