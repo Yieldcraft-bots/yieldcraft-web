@@ -46,7 +46,11 @@ export async function GET(req: Request) {
     // IMPORTANT: pass token explicitly (do NOT rely on global headers/session storage)
     const { data: userRes, error: userErr } = await supabase.auth.getUser(token);
     if (userErr || !userRes?.user) {
-      return json(401, { ok: false, error: "invalid_session", detail: userErr?.message });
+      return json(401, {
+        ok: false,
+        error: "invalid_session",
+        detail: userErr?.message,
+      });
     }
 
     const user = userRes.user;
@@ -63,15 +67,18 @@ export async function GET(req: Request) {
       },
     });
 
+    // ✅ FIX: entitlements table does NOT have updated_at in your DB
     const { data: ent, error: entErr } = await authed
       .from("entitlements")
-      .select("pulse,recon,atlas,updated_at")
+      .select("pulse,recon,atlas")
       .eq("user_id", userId)
       .maybeSingle();
 
     const { data: sub, error: subErr } = await authed
       .from("subscriptions")
-      .select("plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,updated_at")
+      .select(
+        "plan,status,stripe_price_id,stripe_subscription_id,stripe_customer_id,updated_at"
+      )
       .eq("user_id", userId)
       .order("updated_at", { ascending: false })
       .limit(1)
