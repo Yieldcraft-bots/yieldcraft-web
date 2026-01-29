@@ -1,6 +1,6 @@
 // src/app/api/admin/stripe-sync/route.ts
-import { NextResponse } from "next/server";
 import Stripe from "stripe";
+import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -19,340 +19,244 @@ function json(status: number, body: any) {
 }
 
 /**
- * Stripe -> Supabase Sync (schema-aligned)
- *
- * Writes ONLY to existing columns:
- *  - public.entitlements: user_id, pulse, recon, atlas, max_trade_size, risk_mode, created_at
- *  - public.subscriptions: user_id, plan, status, stripe_customer_id, created_at
- *
- * NOTE: This endpoint is designed to be run manually (curl) and later by a cron.
- * It will also detect cancellations on subsequent runs (status becomes canceled/unpaid/etc),
- * and will remove entitlements accordingly.
+ * GET = DEPLOYMENT PROOF CHECK
  */
-export async function POST(req: Request) {
+export async function GET() {
+  return json(200, {
+    ok: true,
+    route: "api/admin/stripe-sync",
+    version: "stripe-sync-v4_auth_listusers_email_match__no_apiversion",
+    note: "Use POST with x-admin-token to run sync.",
+    ts: new Date().toISOString(),
+  });
+}
+
+/**
+ * Price → entitlements mapping
+ * (Matches your env var IDs used elsewhere)
+ */
+function entitlementsFromPrice(priceId: string) {
+  const PULSE_STARTER = process.env.STRIPE_PRICE_PULSE_STARTER || "";
+  const PULSE_RECON = process.env.STRIPE_PRICE_PULSE_RECON || "";
+  const ATLAS = process.env.STRIPE_PRICE_ATLAS || "";
+  const PRO = process.env.STRIPE_PRICE_PRO_SUITE || "";
+
+  let pulse = false;
+  let recon = false;
+  let atlas = false;
+
+  if (priceId === PULSE_STARTER) {
+    pulse = true;
+  } else if (priceId === PULSE_RECON) {
+    pulse = true;
+    recon = true;
+  } else if (priceId === ATLAS) {
+    atlas = true;
+  } else if (priceId === PRO) {
+    pulse = true;
+    recon = true;
+    atlas = true;
+  }
+
+  return { pulse, recon, atlas };
+}
+
+function normEmail(email: string) {
+  return (email || "").trim().toLowerCase();
+}
+
+/**
+ * ✅ Robust user lookup:
+ * - Try getUserByEmail if supported
+ * - Else listUsers + match (small userbase now, safe)
+ */
+async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
+  const target = normEmail(email);
+  if (!target) return null;
+
+  // 1) Prefer getUserByEmail when available
   try {
-    // --- Auth gate ---
-    const headerToken = (req.headers.get("x-admin-token") || "").trim();
-    const expected =
-      process.env.YC_ADMIN_TOKEN ||
-      process.env.ADMIN_TOKEN ||
-      process.env.STRIPE_SYNC_TOKEN ||
-      "";
-
-    if (!expected) {
-      return json(500, { ok: false, error: "missing_server_admin_token_env" });
+    const admin = supabaseAdmin.auth?.admin as any;
+    if (admin?.getUserByEmail) {
+      const res = await admin.getUserByEmail(email);
+      const user = res?.data?.user;
+      if (user?.id) return user.id as string;
     }
-    if (!headerToken || headerToken !== expected) {
-      return json(401, { ok: false, error: "unauthorized" });
+  } catch {
+    // fall through
+  }
+
+  // 2) Fallback: listUsers and match
+  try {
+    const admin = supabaseAdmin.auth?.admin as any;
+    if (!admin?.listUsers) return null;
+
+    for (let page = 1; page <= 10; page++) {
+      const res = await admin.listUsers({ page, perPage: 1000 });
+      const users = res?.data?.users || [];
+      for (const u of users) {
+        if (normEmail(u?.email || "") === target) return u.id as string;
+      }
+      if (users.length < 1000) break;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+async function getCustomerEmail(stripe: Stripe, customer: any): Promise<string | null> {
+  if (!customer) return null;
+
+  // expanded customer object
+  if (typeof customer === "object" && customer.email) return customer.email as string;
+
+  // customer id string
+  if (typeof customer === "string") {
+    try {
+      const c = await stripe.customers.retrieve(customer);
+      if (typeof c === "object" && (c as any).email) return (c as any).email as string;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getPriceIdFromSubscription(sub: Stripe.Subscription): string | null {
+  const firstItem = sub.items?.data?.[0];
+  const price = (firstItem as any)?.price;
+  return price?.id || null;
+}
+
+export async function POST(req: Request) {
+  // Admin protection
+  const expected = mustEnv("ADMIN_SYNC_TOKEN");
+  const got = req.headers.get("x-admin-token") || "";
+  if (got !== expected) return json(401, { ok: false, error: "unauthorized" });
+
+  const secretKey = mustEnv("STRIPE_SECRET_KEY");
+
+  // Supabase service role for writes + admin user lookup
+  const supabaseUrl = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const serviceRole = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
+
+  // ✅ IMPORTANT: do NOT set apiVersion here (prevents TS mismatch on Vercel builds)
+  const stripe = new Stripe(secretKey);
+
+  const supabaseAdmin = createClient(supabaseUrl, serviceRole, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+
+  const url = new URL(req.url);
+  const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || "50")));
+
+  const counts = {
+    fetched: 0,
+    updatedEntitlements: 0,
+    updatedSubscriptions: 0,
+    skippedNoEmail: 0,
+    skippedNoUser: 0,
+    skippedNoPrice: 0,
+  };
+
+  const results: any[] = [];
+
+  // Pull subscriptions
+  const list = await stripe.subscriptions.list({
+    limit,
+    status: "all",
+    expand: ["data.customer", "data.items.data.price"],
+  });
+
+  counts.fetched = list.data.length;
+
+  for (const sub of list.data) {
+    const subscriptionId = sub.id;
+    const customerObjOrId = (sub.customer as any) || null;
+    const customerId = typeof customerObjOrId === "string" ? customerObjOrId : null;
+
+    const priceId = getPriceIdFromSubscription(sub);
+    if (!priceId) {
+      counts.skippedNoPrice++;
+      results.push({ subscriptionId, customerId, ok: false, reason: "no_price" });
+      continue;
     }
 
-    // --- Inputs ---
-    const url = new URL(req.url);
-    const limit = Math.max(
-      1,
-      Math.min(50, Number(url.searchParams.get("limit") || "25"))
+    const email = await getCustomerEmail(stripe, customerObjOrId);
+    if (!email) {
+      counts.skippedNoEmail++;
+      results.push({ subscriptionId, customerId, priceId, ok: false, reason: "no_email" });
+      continue;
+    }
+
+    const userId = await resolveUserIdByEmail(supabaseAdmin, email);
+    if (!userId) {
+      counts.skippedNoUser++;
+      results.push({
+        subscriptionId,
+        customerId,
+        priceId,
+        email,
+        ok: false,
+        reason: "no_user_match_for_email",
+      });
+      continue;
+    }
+
+    const ent = entitlementsFromPrice(priceId);
+
+    // 1) Upsert entitlements (align to your real schema: created_at exists, updated_at DOES NOT)
+    const { error: entErr } = await supabaseAdmin.from("entitlements").upsert(
+      {
+        user_id: userId,
+        pulse: ent.pulse,
+        recon: ent.recon,
+        atlas: ent.atlas,
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" }
     );
 
-    // --- Clients ---
-    const stripe = new Stripe(mustEnv("STRIPE_SECRET_KEY"), {
-      apiVersion: "2024-06-20",
-    });
+    if (!entErr) counts.updatedEntitlements++;
 
-    const supabaseUrl = mustEnv("NEXT_PUBLIC_SUPABASE_URL");
-    const serviceKey = mustEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const sb = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-
-    // --- Price -> Plan + Entitlements mapping (your known IDs) ---
-    // Update these any time you add/change Stripe Prices.
-    const PRICE_MAP: Record<
-      string,
-      { plan: string; pulse: boolean; recon: boolean; atlas: boolean }
-    > = {
-      // Pro Suite (All Bots) - $39
-      price_1Sa0gWPzuWqVmXdYa4hlWgFp: {
-        plan: "pro",
-        pulse: true,
-        recon: true,
-        atlas: true,
+    // 2) Upsert subscriptions (align to your real schema columns)
+    const { error: subErr } = await supabaseAdmin.from("subscriptions").upsert(
+      {
+        user_id: userId,
+        plan: ent.pulse && ent.recon && ent.atlas ? "pro" : ent.pulse && ent.recon ? "pulse_recon" : ent.atlas ? "atlas" : "pulse",
+        status: sub.status || "active",
+        stripe_customer_id: customerId,
+        created_at: new Date().toISOString(),
       },
+      // Your schema does NOT include stripe_subscription_id/stripe_price_id — so conflict on user_id is simplest
+      { onConflict: "user_id" }
+    );
 
-      // Pulse + Recon - $9
-      price_1Sa0WlPzuWqVmXdY8DSH2v9b: {
-        plan: "pulse_recon",
-        pulse: true,
-        recon: true,
-        atlas: false,
-      },
+    if (!subErr) counts.updatedSubscriptions++;
 
-      // Atlas - $9
-      price_1Sf61jPzuWqVmXdYQB8xe0BS: {
-        plan: "atlas",
-        pulse: false,
-        recon: false,
-        atlas: true,
-      },
-
-      // Pulse (legacy $9 you showed earlier in logs)
-      price_1Sa0UvPzuWqVmXdYMzw6lCRm: {
-        plan: "pulse",
-        pulse: true,
-        recon: false,
-        atlas: false,
-      },
-    };
-
-    const planRank = (p: string) =>
-      p === "pro" ? 4 : p === "pulse_recon" ? 3 : p === "pulse" ? 2 : p === "atlas" ? 1 : 0;
-
-    // --- Fetch subscriptions from Stripe ---
-    // We pull "all" so we can detect cancellations too.
-    const subs = await stripe.subscriptions.list({
-      limit,
-      status: "all",
-      expand: ["data.customer", "data.items.data.price"],
-    });
-
-    let updatedEntitlements = 0;
-    let updatedSubscriptions = 0;
-    let skippedNoEmail = 0;
-    let skippedNoUser = 0;
-    let skippedNoPrice = 0;
-
-    const results: any[] = [];
-
-    for (const sub of subs.data) {
-      const customer = sub.customer as Stripe.Customer | Stripe.DeletedCustomer;
-      const customerObj =
-        customer && (customer as any).deleted ? null : (customer as Stripe.Customer);
-
-      const email = (customerObj?.email || "").toLowerCase().trim();
-      const stripeCustomerId = customerObj?.id || null;
-
-      if (!email) {
-        skippedNoEmail++;
-        results.push({
-          subscriptionId: sub.id,
-          priceId: null,
-          email: null,
-          ok: false,
-          reason: "no_email_on_customer",
-        });
-        continue;
-      }
-
-      // Find user by email in your public.profiles table (most common pattern)
-      // If your table is named differently, tell me the name and we’ll swap it.
-      const { data: profile, error: profErr } = await sb
-        .from("profiles")
-        .select("id,user_id,email")
-        .ilike("email", email)
-        .limit(1)
-        .maybeSingle();
-
-      if (profErr) {
-        results.push({
-          subscriptionId: sub.id,
-          priceId: null,
-          email,
-          ok: false,
-          reason: "profiles_lookup_failed",
-          detail: profErr.message,
-        });
-        continue;
-      }
-
-      const userId = (profile as any)?.user_id || (profile as any)?.id || null;
-      if (!userId) {
-        skippedNoUser++;
-        results.push({
-          subscriptionId: sub.id,
-          priceId: null,
-          email,
-          ok: false,
-          reason: "no_user_match_for_email",
-        });
-        continue;
-      }
-
-      // Collect mapped priceIds from all items
-      const priceIds: string[] = [];
-      for (const item of sub.items.data || []) {
-        const p = item.price?.id;
-        if (p) priceIds.push(p);
-      }
-
-      // If no priceIds, skip
-      if (!priceIds.length) {
-        skippedNoPrice++;
-        results.push({
-          subscriptionId: sub.id,
-          priceId: null,
-          email,
-          userId,
-          ok: false,
-          reason: "no_price_on_subscription_items",
-        });
-        continue;
-      }
-
-      // Fold entitlements across all recognized prices
-      let ent = { pulse: false, recon: false, atlas: false };
-      let pickedPlan = "free";
-
-      let sawKnownPrice = false;
-      for (const pid of priceIds) {
-        const mapped = PRICE_MAP[pid];
-        if (!mapped) continue;
-        sawKnownPrice = true;
-
-        ent = {
-          pulse: ent.pulse || mapped.pulse,
-          recon: ent.recon || mapped.recon,
-          atlas: ent.atlas || mapped.atlas,
-        };
-
-        if (planRank(mapped.plan) > planRank(pickedPlan)) {
-          pickedPlan = mapped.plan;
-        }
-      }
-
-      if (!sawKnownPrice) {
-        skippedNoPrice++;
-        results.push({
-          subscriptionId: sub.id,
-          priceIds,
-          email,
-          userId,
-          ok: false,
-          reason: "no_known_price_mapping",
-        });
-        continue;
-      }
-
-      // Only grant entitlements when subscription is active or trialing
-      const isPaidActive = sub.status === "active" || sub.status === "trialing";
-      const finalEnt = isPaidActive ? ent : { pulse: false, recon: false, atlas: false };
-
-      // max_trade_size: enforce $10 cap when paid, otherwise 0
-      const maxTradeSize = isPaidActive && (finalEnt.pulse || finalEnt.recon || finalEnt.atlas) ? 10 : 0;
-      const riskMode = isPaidActive ? "normal" : "safe";
-
-      // --- Upsert entitlements by user_id ---
-      const { data: entRow, error: entErr } = await sb
-        .from("entitlements")
-        .upsert(
-          {
-            user_id: userId,
-            pulse: finalEnt.pulse,
-            recon: finalEnt.recon,
-            atlas: finalEnt.atlas,
-            max_trade_size: maxTradeSize,
-            risk_mode: riskMode,
-          },
-          { onConflict: "user_id" }
-        )
-        .select("user_id,pulse,recon,atlas,max_trade_size,risk_mode")
-        .maybeSingle();
-
-      if (entErr) {
-        results.push({
-          subscriptionId: sub.id,
-          priceIds,
-          email,
-          userId,
-          ok: false,
-          reason: "entitlements_write_failed",
-          detail: entErr.message,
-        });
-        continue;
-      } else {
-        updatedEntitlements++;
-      }
-
-      // --- Insert a subscriptions row only if the latest row differs ---
-      // Schema has NO updated_at, and you allow history rows.
-      const { data: latest, error: latestErr } = await sb
-        .from("subscriptions")
-        .select("plan,status,stripe_customer_id,created_at")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (latestErr) {
-        results.push({
-          subscriptionId: sub.id,
-          priceIds,
-          email,
-          userId,
-          ok: false,
-          reason: "subscriptions_read_failed",
-          detail: latestErr.message,
-        });
-        continue;
-      }
-
-      const nextStatus = String(sub.status || "unknown");
-      const shouldInsert =
-        !latest ||
-        latest.plan !== pickedPlan ||
-        latest.status !== nextStatus ||
-        String(latest.stripe_customer_id || "") !== String(stripeCustomerId || "");
-
-      if (shouldInsert) {
-        const { error: insErr } = await sb.from("subscriptions").insert({
-          user_id: userId,
-          plan: pickedPlan,
-          status: nextStatus,
-          stripe_customer_id: stripeCustomerId || "unknown",
-          created_at: new Date().toISOString(),
-        });
-
-        if (insErr) {
-          results.push({
-            subscriptionId: sub.id,
-            priceIds,
-            email,
-            userId,
-            ok: false,
-            reason: "subscriptions_insert_failed",
-            detail: insErr.message,
-          });
-          continue;
-        } else {
-          updatedSubscriptions++;
-        }
-      }
-
-      results.push({
-        subscriptionId: sub.id,
-        priceIds,
-        email,
-        userId,
-        plan: pickedPlan,
-        status: sub.status,
-        entitlements: finalEnt,
-        ok: true,
-      });
-    }
-
-    return json(200, {
+    results.push({
+      subscriptionId,
+      customerId,
+      priceId,
+      email,
+      userId,
+      entitlements: ent,
       ok: true,
-      ran: true,
-      limit,
-      counts: {
-        fetched: subs.data.length,
-        updatedEntitlements,
-        updatedSubscriptions,
-        skippedNoEmail,
-        skippedNoUser,
-        skippedNoPrice,
-      },
-      results,
     });
-  } catch (e: any) {
-    return json(500, { ok: false, error: e?.message || "unknown_error" });
   }
+
+  return json(200, {
+    ok: true,
+    ran: true,
+    limit,
+    counts,
+    results,
+  });
 }
