@@ -18,7 +18,7 @@ function json(status: number, body: any) {
 function truthy(v?: string) {
   return ["1", "true", "yes", "on"].includes((v || "").toLowerCase());
 }
-// if env missing/blank => default
+// like truthy(), but if the env var is missing/blank, we return the default
 function truthyDefault(v: string | undefined, def: boolean) {
   const s = (v || "").trim();
   if (!s) return def;
@@ -164,120 +164,60 @@ function okAuth(req: Request) {
 }
 
 // ---------- Multi-user key source ----------
-type KeyRowPublic = {
+type KeyRow = {
   user_id: string;
   api_key_name: string;
+  private_key: string;
   key_alg?: string | null;
 };
 
-type KeyRowSecret = KeyRowPublic & {
-  private_key: string;
-};
-
-type EntRow = {
-  user_id: string;
-  pulse_enabled: boolean;
-};
-
-function looksValidPublicKeyRow(r: any): r is KeyRowPublic {
+function looksValidKeyRow(r: any): r is KeyRow {
   return !!(
     cleanString(r?.user_id) &&
-    cleanString(r?.api_key_name).startsWith("organizations/")
-  );
-}
-
-function looksValidSecretKeyRow(r: any): r is KeyRowSecret {
-  return (
-    looksValidPublicKeyRow(r) &&
+    cleanString(r?.api_key_name).startsWith("organizations/") &&
     cleanString(r?.private_key).includes("BEGIN")
   );
 }
 
-/**
- * Best-practice: entitlement is separate table.
- * Table: user_entitlements (user_id uuid pk, pulse_enabled boolean)
- */
-async function loadEntitlements(): Promise<
-  { ok: true; map: Map<string, boolean> } | { ok: false; error: any }
-> {
-  const client = sb();
-  const defaultEntitled = truthyDefault(process.env.PULSE_DEFAULT_ENTITLED, false); // SAFE default: false
-  try {
-    const { data, error } = await client
-      .from("user_entitlements")
-      .select("user_id, pulse_enabled");
-    if (error) {
-      // If table not present yet, fall back to default entitlement mode
-      return {
-        ok: true,
-        map: new Map<string, boolean>(),
-      };
-    }
-    const rows = Array.isArray(data) ? (data as any as EntRow[]) : [];
-    const map = new Map<string, boolean>();
-    for (const r of rows) {
-      const uid = cleanString((r as any).user_id);
-      if (!uid) continue;
-      map.set(uid, !!(r as any).pulse_enabled);
-    }
-
-    // NOTE: if a user_id isn’t in the map, we’ll treat as defaultEntitled below.
-    // We do NOT store defaultEntitled in the map; we apply it at read-time.
-    (map as any).__defaultEntitled = defaultEntitled;
-
-    return { ok: true, map };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || String(e) };
-  }
-}
-
-function entitledFor(entMap: Map<string, boolean>, userId: string): boolean {
-  const uid = cleanString(userId);
-  const def = !!(entMap as any).__defaultEntitled;
-  if (!uid) return def;
-  if (entMap.has(uid)) return !!entMap.get(uid);
-  return def;
-}
-
-async function loadAllCoinbaseKeyPublic(): Promise<
-  { ok: true; rows: KeyRowPublic[] } | { ok: false; error: any }
+async function loadAllCoinbaseKeys(): Promise<
+  { ok: true; rows: KeyRow[] } | { ok: false; error: any }
 > {
   try {
     const client = sb();
     const { data, error } = await client
       .from("coinbase_keys")
-      .select("user_id, api_key_name, key_alg");
+      .select("user_id, api_key_name, private_key, key_alg");
     if (error) return { ok: false, error: error.message || error };
-    const rows = Array.isArray(data) ? (data as any as KeyRowPublic[]) : [];
-    const clean = rows.filter(looksValidPublicKeyRow);
+    const rows = Array.isArray(data) ? (data as any as KeyRow[]) : [];
+    const clean = rows.filter(looksValidKeyRow);
     return { ok: true, rows: clean };
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }
 }
 
-async function loadCoinbaseSecretsForUsers(userIds: string[]): Promise<
-  { ok: true; map: Map<string, KeyRowSecret> } | { ok: false; error: any }
-> {
+// ---------- entitlements (DB-backed; safe for scale) ----------
+async function fetchPulseEntitled(user_id: string): Promise<boolean> {
+  // Default behavior if table/row missing:
+  // safer is FALSE, but you can flip this default via env.
+  const defaultEntitled = truthyDefault(process.env.PULSE_ENTITLED_DEFAULT, false);
+
   try {
     const client = sb();
-    if (userIds.length === 0) return { ok: true, map: new Map() };
 
+    // Change table/column names here if yours differ.
     const { data, error } = await client
-      .from("coinbase_keys")
-      .select("user_id, api_key_name, private_key, key_alg")
-      .in("user_id", userIds);
+      .from("user_entitlements")
+      .select("pulse")
+      .eq("user_id", user_id)
+      .maybeSingle();
 
-    if (error) return { ok: false, error: error.message || error };
+    if (error) return defaultEntitled;
+    if (!data) return defaultEntitled;
 
-    const rows = Array.isArray(data) ? (data as any as KeyRowSecret[]) : [];
-    const clean = rows.filter(looksValidSecretKeyRow);
-
-    const map = new Map<string, KeyRowSecret>();
-    for (const r of clean) map.set(r.user_id, r);
-    return { ok: true, map };
-  } catch (e: any) {
-    return { ok: false, error: e?.message || String(e) };
+    return !!(data as any).pulse;
+  } catch {
+    return defaultEntitled;
   }
 }
 
@@ -287,7 +227,6 @@ type Ctx = {
   api_key_name: string;
   private_key: string;
   key_alg?: string | null;
-  pulse_entitled: boolean;
 };
 
 function algFor(ctx: Ctx): "ES256" | "EdDSA" {
@@ -297,6 +236,12 @@ function algFor(ctx: Ctx): "ES256" | "EdDSA" {
   return "ES256";
 }
 
+/**
+ * NOTE:
+ * jsonwebtoken's TS Algorithm type often does NOT include "EdDSA" depending on version,
+ * which causes overload mismatch errors at compile-time.
+ * We keep runtime behavior identical, but cast the options to avoid TS picking the callback overload.
+ */
 function buildCdpJwt(ctx: Ctx, method: "GET" | "POST", path: string) {
   const apiKeyName = cleanString(ctx.api_key_name);
   const privateKeyPem = normalizePem(ctx.private_key);
@@ -308,6 +253,7 @@ function buildCdpJwt(ctx: Ctx, method: "GET" | "POST", path: string) {
   const uri = `${method} api.coinbase.com${pathForUri}`;
 
   const alg = algFor(ctx);
+
   const payload = { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri };
 
   const options: SignOptions = {
@@ -475,7 +421,7 @@ function makerTimeoutMs(): number {
   return num(process.env.MAKER_TIMEOUT_MS, 15000);
 }
 function makerAllowIocFallback(): boolean {
-  return truthyDefault(process.env.MAKER_ALLOW_IOC_FALLBACK, true);
+  return truthy(process.env.MAKER_ALLOW_IOC_FALLBACK);
 }
 
 async function fetchOrderStatus(ctx: Ctx, orderId: string) {
@@ -483,17 +429,12 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
     ctx,
     `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
   );
-  if (!r.ok)
-    return { ok: false as const, status: r.status, raw: r.json ?? r.text };
+  if (!r.ok) return { ok: false as const, status: r.status, raw: r.json ?? r.text };
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(
-    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
-  );
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
-    status
-  );
+  const filled = Number(o?.filled_size || o?.filled_value || o?.filled_quantity || 0);
+  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
 
   return { ok: true as const, status, filled, done, raw: r.json };
 }
@@ -626,10 +567,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0)
   );
 
-  const makerMode = truthyDefault(process.env.MAKER_MODE, true);
+  const makerMode = truthy(process.env.MAKER_MODE) || true;
   const mOffset = makerOffsetBps();
   const mTimeout = makerTimeoutMs();
   const mAllowIoc = makerAllowIocFallback();
+
+  // DB-backed entitlement (scale-safe)
+  const pulseEntitled = await fetchPulseEntitled(ctx.user_id);
 
   const position = await fetchBtcPosition(ctx);
 
@@ -641,7 +585,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     PULSE_ENTRIES_DRY_RUN: entriesDryRun,
     PULSE_EXITS_ENABLED: exitsEnabled,
     PULSE_EXITS_DRY_RUN: exitsDryRun,
-    PULSE_ENTITLED: !!ctx.pulse_entitled,
+    PULSE_ENTITLED: pulseEntitled,
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
@@ -673,7 +617,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     },
   });
 
-  // Gate 1: entitlement enforced
+  // Gate 1: entitlement (enforced)
   if (!gates.PULSE_ENTITLED) {
     return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position };
   }
@@ -949,9 +893,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     shouldTimeStop,
     maker: { makerMode, mOffset, mTimeout, mAllowIoc },
     yc: {
-      defaultAllocationPct: num(process.env.YC_DEFAULT_ALLOCATION_PCT, 0),
-      dailyMaxLossBps: num(process.env.YC_DAILY_MAX_LOSS_BPS, 0),
-      monthlyMaxDdBps: num(process.env.YC_MONTHLY_MAX_DD_BPS, 0),
+      defaultAllocationPct: ycDefaultAllocationPct,
+      dailyMaxLossBps: ycDailyMaxLossBps,
+      monthlyMaxDdBps: ycMonthlyMaxDdBps,
     },
   };
 
@@ -1141,91 +1085,36 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
 // ---------- multi-user orchestrator ----------
 async function runForAllUsers(masterRunId: string) {
-  const ent = await loadEntitlements();
-  if (!ent.ok) {
-    return { ok: false, error: "cannot_load_entitlements", details: ent.error };
+  const loaded = await loadAllCoinbaseKeys();
+  if (!loaded.ok) {
+    return { ok: false, error: "cannot_load_users", details: loaded.error };
   }
 
-  const pub = await loadAllCoinbaseKeyPublic();
-  if (!pub.ok) {
-    return { ok: false, error: "cannot_load_users", details: pub.error };
-  }
+  const rows = loaded.rows;
 
-  const publicRows = pub.rows;
-
-  if (publicRows.length === 0) {
+  // If no users, don't "trade system" by accident.
+  if (rows.length === 0) {
     return { ok: true, usersProcessed: 0, results: [], note: "no coinbase_keys rows found" };
-  }
-
-  // Build entitled list
-  const entitledUserIds: string[] = [];
-  const entitledByUser = new Map<string, boolean>();
-
-  for (const r of publicRows) {
-    const entitled = entitledFor(ent.map, r.user_id);
-    entitledByUser.set(r.user_id, entitled);
-    if (entitled) entitledUserIds.push(r.user_id);
-  }
-
-  // Only fetch secrets for entitled users
-  const sec = await loadCoinbaseSecretsForUsers(entitledUserIds);
-  if (!sec.ok) {
-    return { ok: false, error: "cannot_load_secrets", details: sec.error };
   }
 
   const results: any[] = [];
   let okCount = 0;
   let failCount = 0;
 
-  for (let i = 0; i < publicRows.length; i++) {
-    const r = publicRows[i];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
     const runId = `${masterRunId}:${i + 1}`;
-    const pulse_entitled = !!entitledByUser.get(r.user_id);
-
-    // If not entitled, return NOOP_NOT_ENTITLED without touching secrets
-    if (!pulse_entitled) {
-      okCount++;
-      results.push({
-        runId,
-        user_id: r.user_id,
-        key: shortKeyName(r.api_key_name),
-        alg: (r.key_alg || "").toLowerCase().includes("ed") ? "EdDSA" : "ES256",
-        ok: true,
-        mode: "NOOP_NOT_ENTITLED",
-        gates: { PULSE_ENTITLED: false },
-      });
-      continue;
-    }
-
-    // entitled but missing secret key row -> fail safely
-    const secretRow = sec.map.get(r.user_id);
-    if (!secretRow) {
-      failCount++;
-      results.push({
-        runId,
-        user_id: r.user_id,
-        key: shortKeyName(r.api_key_name),
-        alg: (r.key_alg || "").toLowerCase().includes("ed") ? "EdDSA" : "ES256",
-        ok: false,
-        mode: "BLOCKED",
-        error: "missing_private_key_for_entitled_user",
-      });
-      continue;
-    }
-
     const ctx: Ctx = {
-      user_id: secretRow.user_id,
-      api_key_name: secretRow.api_key_name,
-      private_key: secretRow.private_key,
-      key_alg: secretRow.key_alg ?? null,
-      pulse_entitled: true,
+      user_id: r.user_id,
+      api_key_name: r.api_key_name,
+      private_key: r.private_key,
+      key_alg: r.key_alg ?? null,
     };
 
     try {
       const out = await runManagerForUser(runId, ctx);
       if ((out as any)?.ok) okCount++;
       else failCount++;
-
       results.push({
         runId,
         user_id: ctx.user_id,
@@ -1257,7 +1146,7 @@ async function runForAllUsers(masterRunId: string) {
 
   return {
     ok: failCount === 0,
-    usersProcessed: publicRows.length,
+    usersProcessed: rows.length,
     okCount,
     failCount,
     results,
