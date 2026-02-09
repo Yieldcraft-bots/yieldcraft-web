@@ -8,6 +8,9 @@ export const runtime = "nodejs";
 
 const PRODUCT_ID = "BTC-USD";
 
+// If set, we ONLY run for this user_id (core fund safety gate)
+const ONLY_USER_ID = (process.env.PULSE_ONLY_USER_ID || "").trim() || null;
+
 // ---------- helpers ----------
 function json(status: number, body: any) {
   return NextResponse.json(body, {
@@ -199,17 +202,37 @@ async function fetchEntitlements(user_id: string): Promise<Entitlements> {
   try {
     const client = sb();
 
-    // ✅ FIX: your real table is "entitlements" (NOT "user_entitlements")
-    const { data, error } = await client
-      .from("entitlements")
+    // Try both table names (yours might be "entitlements")
+    // 1) user_entitlements
+    let data: any = null;
+    let error: any = null;
+
+    const r1 = await client
+      .from("user_entitlements")
       .select("pulse, max_trade_size")
       .eq("user_id", user_id)
       .maybeSingle();
 
+    data = r1.data;
+    error = r1.error;
+
+    // 2) fallback to entitlements if the first table doesn't exist / errors
+    if (error) {
+      const r2 = await client
+        .from("entitlements")
+        .select("pulse, max_trade_size")
+        .eq("user_id", user_id)
+        .maybeSingle();
+      data = r2.data;
+      error = r2.error;
+    }
+
     if (error || !data) return { pulse: defaultPulse, max_trade_size: defaultMax };
 
     const pulse =
-      typeof (data as any).pulse === "boolean" ? (data as any).pulse : !!(data as any).pulse;
+      typeof (data as any).pulse === "boolean"
+        ? (data as any).pulse
+        : !!(data as any).pulse;
 
     const m = Number((data as any).max_trade_size);
     const max_trade_size = Number.isFinite(m) && m > 0 ? m : defaultMax;
@@ -395,7 +418,6 @@ async function fetchPeakWindowWithVol(
   let peak = 0;
   let last = 0;
 
-  // volatility estimate: average range in bps over last N candles
   let sumRangeBps = 0;
   let n = 0;
 
@@ -452,12 +474,8 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(
-    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
-  );
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
-    status
-  );
+  const filled = Number(o?.filled_size || o?.filled_value || o?.filled_quantity || 0);
+  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
 
   return { ok: true as const, status, filled, done, raw: r.json };
 }
@@ -480,12 +498,7 @@ async function placeLimitPostOnly(
   return cbPost(ctx, path, payload);
 }
 
-async function placeMarketIoc(
-  ctx: Ctx,
-  side: "BUY" | "SELL",
-  quoteUsd?: string,
-  baseSize?: string
-) {
+async function placeMarketIoc(ctx: Ctx, side: "BUY" | "SELL", quoteUsd?: string, baseSize?: string) {
   const path = "/api/v3/brokerage/orders";
   const payload =
     side === "BUY"
@@ -506,14 +519,7 @@ async function placeMarketIoc(
 
 function extractOrderId(respJson: any): string | null {
   const j = respJson || {};
-  return (
-    j?.order_id ||
-    j?.success_response?.order_id ||
-    j?.order?.order_id ||
-    j?.order?.id ||
-    j?.id ||
-    null
-  );
+  return j?.order_id || j?.success_response?.order_id || j?.order?.order_id || j?.order?.id || j?.id || null;
 }
 
 async function makerFirstBuy(ctx: Ctx, quoteUsd: string, refPrice: number) {
@@ -548,27 +554,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  const profitTargetBps = num(
-    process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
-    120
-  );
-  const trailArmBps = num(
-    process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS,
-    150
-  );
-  const trailOffsetBpsBase = num(
-    process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS,
-    50
-  );
+  const profitTargetBps = num(process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS, 120);
+  const trailArmBps = num(process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS, 150);
+  const trailOffsetBpsBase = num(process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS, 50);
 
   // Anti-churn trailing guards
   const trailMinHoldMin = num(process.env.TRAIL_MIN_HOLD_MIN, 15);
   const trailMinHoldMs = trailMinHoldMin > 0 ? trailMinHoldMin * 60_000 : 0;
 
-  // Volatility floor (bps): trail offset cannot be tighter than this
+  // Volatility floor (bps)
   const trailVolFloorBps = num(process.env.TRAIL_VOL_FLOOR_BPS, 100);
 
-  // Hard stop (required default)
+  // Hard stop (default ON)
   const hardStopEnabled = truthyDefault(process.env.PULSE_HARD_STOP_ENABLED, true);
   const hardStopLossBps = num(
     process.env.PULSE_HARD_STOP_LOSS_BPS,
@@ -576,10 +573,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   );
 
   const timeStopEnabled = truthyDefault(process.env.PULSE_TIME_STOP_ENABLED, false);
-  const maxHoldMinutes = num(
-    process.env.PULSE_MAX_HOLD_MINUTES,
-    num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0)
-  );
+  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0));
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
   // caps
@@ -596,9 +590,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const ent = await fetchEntitlements(ctx.user_id);
   const pulseEntitled = !!ent.pulse;
-  const entMaxUsd = Number.isFinite(Number(ent.max_trade_size))
-    ? Number(ent.max_trade_size)
-    : hardMaxUsd;
+  const entMaxUsd = Number.isFinite(Number(ent.max_trade_size)) ? Number(ent.max_trade_size) : hardMaxUsd;
 
   const finalEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
   const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
@@ -625,13 +617,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     entryQuoteUsd,
     caps: { hardMaxUsd, entMaxUsd, envEntryUsd, finalEntryUsd },
     maker: { makerEntries, makerExits, mOffset, mTimeout, mAllowIoc },
-    trail: {
-      trailMinHoldMin,
-      trailVolFloorBps,
-      trailOffsetBpsBase,
-      trailArmBps,
-      profitTargetBps,
-    },
+    trail: { trailMinHoldMin, trailVolFloorBps, trailOffsetBpsBase, trailArmBps, profitTargetBps },
     hardStop: { hardStopEnabled, hardStopLossBps },
   });
 
@@ -647,12 +633,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const lastFillIso = lastBuy.ok ? lastBuy.entryTime : null;
   const sinceMs = msSince(lastFillIso);
   const cooldownOk = sinceMs >= cooldownMs;
-  const cooldown = {
-    lastFillIso,
-    sinceMs: Number.isFinite(sinceMs) ? sinceMs : null,
-    cooldownMs,
-    cooldownOk,
-  };
+  const cooldown = { lastFillIso, sinceMs: Number.isFinite(sinceMs) ? sinceMs : null, cooldownMs, cooldownOk };
 
   // ref price
   const spot = await fetchSpotPrice(ctx);
@@ -788,7 +769,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const shouldTakeProfit = pnlBps >= profitTargetBps;
   const trailArmed = pnlBps >= trailArmBps;
 
-  // Effective trail offset (anti-churn)
   const halfVol = Number.isFinite(peak.volBps) ? peak.volBps * 0.5 : 0;
   const effectiveTrailOffsetBps = Math.max(trailOffsetBpsBase, trailVolFloorBps, halfVol);
 
@@ -983,8 +963,26 @@ async function runForAllUsers(masterRunId: string) {
   const loaded = await loadAllCoinbaseKeys();
   if (!loaded.ok) return { ok: false, error: "cannot_load_users", details: loaded.error };
 
-  const rows = loaded.rows;
-  if (rows.length === 0) return { ok: true, usersProcessed: 0, results: [], note: "no coinbase_keys rows found" };
+  let rows = loaded.rows;
+
+  // HARD SAFETY FILTER: core fund only if env is set
+  if (ONLY_USER_ID) {
+    rows = rows.filter((r) => r.user_id === ONLY_USER_ID);
+  }
+
+  if (rows.length === 0) {
+    return {
+      ok: true,
+      usersProcessed: 0,
+      okCount: 0,
+      failCount: 0,
+      results: [],
+      note: ONLY_USER_ID
+        ? `PULSE_ONLY_USER_ID set but no matching coinbase_keys row found for user_id=${ONLY_USER_ID}`
+        : "no coinbase_keys rows found",
+      onlyUserId: ONLY_USER_ID,
+    };
+  }
 
   const results: any[] = [];
   let okCount = 0;
@@ -1032,7 +1030,14 @@ async function runForAllUsers(masterRunId: string) {
     }
   }
 
-  return { ok: failCount === 0, usersProcessed: rows.length, okCount, failCount, results };
+  return {
+    ok: failCount === 0,
+    usersProcessed: rows.length,
+    okCount,
+    failCount,
+    onlyUserId: ONLY_USER_ID,
+    results,
+  };
 }
 
 // ---------- handlers ----------
@@ -1046,11 +1051,11 @@ export async function GET(req: Request) {
     ? (crypto as any).randomUUID()
     : crypto.randomBytes(8).toString("hex");
 
-  log(masterRunId, "REQUEST", { method: "GET", url: req.url, action });
+  log(masterRunId, "REQUEST", { method: "GET", url: req.url, action, onlyUserId: ONLY_USER_ID });
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed, onlyUserId: ONLY_USER_ID });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
@@ -1062,7 +1067,7 @@ export async function POST(req: Request) {
     ? (crypto as any).randomUUID()
     : crypto.randomBytes(8).toString("hex");
 
-  log(masterRunId, "REQUEST", { method: "POST", url: req.url });
+  log(masterRunId, "REQUEST", { method: "POST", url: req.url, onlyUserId: ONLY_USER_ID });
 
   let body: any = null;
   try {
@@ -1074,7 +1079,7 @@ export async function POST(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed, onlyUserId: ONLY_USER_ID });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
