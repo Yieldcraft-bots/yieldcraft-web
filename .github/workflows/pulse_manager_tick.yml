@@ -24,9 +24,7 @@ jobs:
             -X POST "https://yieldcraft.co/api/pulse-manager" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${CRON_SECRET}" \
-            -d '{
-              "action": "tick"
-            }')
+            -d '{"action":"tick"}')
 
           echo "Response:"
           echo "$RESPONSE"
