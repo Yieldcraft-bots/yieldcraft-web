@@ -404,12 +404,17 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
     ctx,
     `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
   );
-  if (!r.ok) return { ok: false as const, status: r.status, raw: r.json ?? r.text };
+  if (!r.ok)
+    return { ok: false as const, status: r.status, raw: r.json ?? r.text };
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(o?.filled_size || o?.filled_value || o?.filled_quantity || 0);
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
+  const filled = Number(
+    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
+  );
+  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
+    status
+  );
 
   return { ok: true as const, status, filled, done, raw: r.json };
 }
@@ -593,15 +598,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   });
 
   // Gate 1: entitlement (enforced)
-if (!gates.PULSE_ENTITLED) {
-  return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position };
-}
+  if (!gates.PULSE_ENTITLED) {
+    return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position };
+  }
 
-// Gate 2: overall live allowed
-if (!gates.LIVE_ALLOWED) {
-  return { ok: true, mode: "NOOP_GATES", gates, position };
-}
-
+  // Gate 2: overall live allowed
+  if (!gates.LIVE_ALLOWED) {
+    return { ok: true, mode: "NOOP_GATES", gates, position };
+  }
 
   if (!(position as any)?.ok) {
     return {
@@ -1144,7 +1148,10 @@ export async function GET(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+  });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
@@ -1168,7 +1175,10 @@ export async function POST(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+  });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
