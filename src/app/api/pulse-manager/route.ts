@@ -112,22 +112,37 @@ async function writeTradeLog(row: any) {
     if (error) {
       console.log(
         "[pulse-manager]",
-        JSON.stringify({ t: nowIso(), event: "DB_WRITE_ERR", data: String((error as any)?.message || error) })
+        JSON.stringify({
+          t: nowIso(),
+          event: "DB_WRITE_ERR",
+          data: String((error as any)?.message || error),
+        })
       );
     } else {
-      console.log("[pulse-manager]", JSON.stringify({ t: nowIso(), event: "DB_WRITE_OK" }));
+      console.log(
+        "[pulse-manager]",
+        JSON.stringify({ t: nowIso(), event: "DB_WRITE_OK" })
+      );
     }
   } catch (e: any) {
     console.log(
       "[pulse-manager]",
-      JSON.stringify({ t: nowIso(), event: "DB_WRITE_EX", data: String(e?.message || e) })
+      JSON.stringify({
+        t: nowIso(),
+        event: "DB_WRITE_EX",
+        data: String(e?.message || e),
+      })
     );
   }
 }
 
 // ---------- auth ----------
 function okAuth(req: Request) {
-  const secret = (process.env.CRON_SECRET || process.env.PULSE_MANAGER_SECRET || "").trim();
+  const secret = (
+    process.env.CRON_SECRET ||
+    process.env.PULSE_MANAGER_SECRET ||
+    ""
+  ).trim();
   if (!secret) return false;
 
   const h =
@@ -143,7 +158,12 @@ function okAuth(req: Request) {
 }
 
 // ---------- Multi-user key source ----------
-type KeyRow = { user_id: string; api_key_name: string; private_key: string; key_alg?: string | null };
+type KeyRow = {
+  user_id: string;
+  api_key_name: string;
+  private_key: string;
+  key_alg?: string | null;
+};
 
 function looksValidKeyRow(r: any): r is KeyRow {
   return !!(
@@ -153,7 +173,9 @@ function looksValidKeyRow(r: any): r is KeyRow {
   );
 }
 
-async function loadAllCoinbaseKeys(): Promise<{ ok: true; rows: KeyRow[] } | { ok: false; error: any }> {
+async function loadAllCoinbaseKeys(): Promise<
+  { ok: true; rows: KeyRow[] } | { ok: false; error: any }
+> {
   try {
     const client = sb();
     const { data, error } = await client
@@ -176,15 +198,19 @@ async function fetchEntitlements(user_id: string): Promise<Entitlements> {
 
   try {
     const client = sb();
+
+    // ✅ FIX: your real table is "entitlements" (NOT "user_entitlements")
     const { data, error } = await client
-      .from("user_entitlements")
+      .from("entitlements")
       .select("pulse, max_trade_size")
       .eq("user_id", user_id)
       .maybeSingle();
 
     if (error || !data) return { pulse: defaultPulse, max_trade_size: defaultMax };
 
-    const pulse = typeof (data as any).pulse === "boolean" ? (data as any).pulse : !!(data as any).pulse;
+    const pulse =
+      typeof (data as any).pulse === "boolean" ? (data as any).pulse : !!(data as any).pulse;
+
     const m = Number((data as any).max_trade_size);
     const max_trade_size = Number.isFinite(m) && m > 0 ? m : defaultMax;
 
@@ -195,11 +221,17 @@ async function fetchEntitlements(user_id: string): Promise<Entitlements> {
 }
 
 // ---------- Coinbase CDP JWT ----------
-type Ctx = { user_id: string; api_key_name: string; private_key: string; key_alg?: string | null };
+type Ctx = {
+  user_id: string;
+  api_key_name: string;
+  private_key: string;
+  key_alg?: string | null;
+};
 
 function algFor(ctx: Ctx): "ES256" | "EdDSA" {
   const raw = (ctx.key_alg || "").toLowerCase();
-  if (raw.includes("ed") || raw.includes("eddsa") || raw.includes("ed25519")) return "EdDSA";
+  if (raw.includes("ed") || raw.includes("eddsa") || raw.includes("ed25519"))
+    return "EdDSA";
   return "ES256";
 }
 
@@ -238,7 +270,10 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
   const token = buildCdpJwt(ctx, "POST", path);
   const res = await fetch(`https://api.coinbase.com${path}`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(payload),
   });
   const text = await res.text();
@@ -246,8 +281,13 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
 }
 
 // ---------- price helpers ----------
-async function fetchSpotPrice(ctx: Ctx): Promise<{ ok: true; price: number } | { ok: false; error: any }> {
-  const r = await cbGet(ctx, `/api/v3/brokerage/products/${encodeURIComponent(PRODUCT_ID)}`);
+async function fetchSpotPrice(
+  ctx: Ctx
+): Promise<{ ok: true; price: number } | { ok: false; error: any }> {
+  const r = await cbGet(
+    ctx,
+    `/api/v3/brokerage/products/${encodeURIComponent(PRODUCT_ID)}`
+  );
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const p =
@@ -256,7 +296,8 @@ async function fetchSpotPrice(ctx: Ctx): Promise<{ ok: true; price: number } | {
     Number((r.json as any)?.data?.price) ||
     0;
 
-  if (!Number.isFinite(p) || p <= 0) return { ok: false, error: { bad_price: r.json } };
+  if (!Number.isFinite(p) || p <= 0)
+    return { ok: false, error: { bad_price: r.json } };
   return { ok: true, price: p };
 }
 
@@ -264,7 +305,13 @@ async function fetchSpotPrice(ctx: Ctx): Promise<{ ok: true; price: number } | {
 async function fetchBtcPosition(ctx: Ctx) {
   const r = await cbGet(ctx, "/api/v3/brokerage/accounts");
   if (!r.ok) {
-    return { ok: false as const, has_position: false, base_available: 0, status: r.status, coinbase: r.json ?? r.text };
+    return {
+      ok: false as const,
+      has_position: false,
+      base_available: 0,
+      status: r.status,
+      coinbase: r.json ?? r.text,
+    };
   }
 
   const accounts = (r.json as any)?.accounts || [];
@@ -283,7 +330,10 @@ async function fetchBtcPosition(ctx: Ctx) {
 // ---------- last BUY fill ----------
 async function fetchLastBuyFill(
   ctx: Ctx
-): Promise<{ ok: true; entryPrice: number; entryTime: string; entryQty: number } | { ok: false; error: any }> {
+): Promise<
+  | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
+  | { ok: false; error: any }
+> {
   const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
     PRODUCT_ID
   )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
@@ -292,7 +342,8 @@ async function fetchLastBuyFill(
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
-  if (!Array.isArray(fills) || fills.length === 0) return { ok: false, error: "no_fills_found" };
+  if (!Array.isArray(fills) || fills.length === 0)
+    return { ok: false, error: "no_fills_found" };
 
   const buy =
     fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") ||
@@ -302,7 +353,8 @@ async function fetchLastBuyFill(
   const qty = Number(buy?.size || buy?.filled_size || buy?.base_size || 0);
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
-  if (!Number.isFinite(px) || px <= 0) return { ok: false, error: { bad_price: buy } };
+  if (!Number.isFinite(px) || px <= 0)
+    return { ok: false, error: { bad_price: buy } };
   return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
 }
 
@@ -310,7 +362,14 @@ async function fetchLastBuyFill(
 async function fetchPeakWindowWithVol(
   ctx: Ctx
 ): Promise<
-  | { ok: true; peak: number; last: number; startTs: string; endTs: string; volBps: number }
+  | {
+      ok: true;
+      peak: number;
+      last: number;
+      startTs: string;
+      endTs: string;
+      volBps: number;
+    }
   | { ok: false; error: any }
 > {
   const end = new Date();
@@ -320,15 +379,18 @@ async function fetchPeakWindowWithVol(
   const endTs = String(Math.floor(end.getTime() / 1000));
 
   const gran = optEnv("PULSE_CANDLE_GRANULARITY") || "ONE_MINUTE";
-  const path = `/api/v3/brokerage/products/${encodeURIComponent(PRODUCT_ID)}/candles?start=${encodeURIComponent(
-    startTs
-  )}&end=${encodeURIComponent(endTs)}&granularity=${encodeURIComponent(gran)}`;
+  const path = `/api/v3/brokerage/products/${encodeURIComponent(
+    PRODUCT_ID
+  )}/candles?start=${encodeURIComponent(startTs)}&end=${encodeURIComponent(
+    endTs
+  )}&granularity=${encodeURIComponent(gran)}`;
 
   const r = await cbGet(ctx, path);
   if (!r.ok) return { ok: false, error: r.json ?? r.text };
 
   const candles = (r.json as any)?.candles || [];
-  if (!Array.isArray(candles) || candles.length === 0) return { ok: false, error: "no_candles" };
+  if (!Array.isArray(candles) || candles.length === 0)
+    return { ok: false, error: "no_candles" };
 
   let peak = 0;
   let last = 0;
@@ -345,7 +407,13 @@ async function fetchPeakWindowWithVol(
     if (Number.isFinite(high) && high > peak) peak = high;
     if (Number.isFinite(close) && close > 0) last = close;
 
-    if (Number.isFinite(high) && Number.isFinite(low) && high > 0 && low > 0 && high >= low) {
+    if (
+      Number.isFinite(high) &&
+      Number.isFinite(low) &&
+      high > 0 &&
+      low > 0 &&
+      high >= low
+    ) {
       const mid = (high + low) / 2;
       if (mid > 0) {
         const rangeBps = ((high - low) / mid) * 10_000;
@@ -376,18 +444,30 @@ function makerAllowIocFallback(): boolean {
 }
 
 async function fetchOrderStatus(ctx: Ctx, orderId: string) {
-  const r = await cbGet(ctx, `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`);
+  const r = await cbGet(
+    ctx,
+    `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
+  );
   if (!r.ok) return { ok: false as const, status: r.status, raw: r.json ?? r.text };
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(o?.filled_size || o?.filled_value || o?.filled_quantity || 0);
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
+  const filled = Number(
+    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
+  );
+  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
+    status
+  );
 
   return { ok: true as const, status, filled, done, raw: r.json };
 }
 
-async function placeLimitPostOnly(ctx: Ctx, side: "BUY" | "SELL", baseSize: string, limitPrice: string) {
+async function placeLimitPostOnly(
+  ctx: Ctx,
+  side: "BUY" | "SELL",
+  baseSize: string,
+  limitPrice: string
+) {
   const path = "/api/v3/brokerage/orders";
   const payload = {
     client_order_id: `yc_mgr_${ctx.user_id}_${side.toLowerCase()}_maker_${Date.now()}`,
@@ -400,7 +480,12 @@ async function placeLimitPostOnly(ctx: Ctx, side: "BUY" | "SELL", baseSize: stri
   return cbPost(ctx, path, payload);
 }
 
-async function placeMarketIoc(ctx: Ctx, side: "BUY" | "SELL", quoteUsd?: string, baseSize?: string) {
+async function placeMarketIoc(
+  ctx: Ctx,
+  side: "BUY" | "SELL",
+  quoteUsd?: string,
+  baseSize?: string
+) {
   const path = "/api/v3/brokerage/orders";
   const payload =
     side === "BUY"
@@ -421,7 +506,14 @@ async function placeMarketIoc(ctx: Ctx, side: "BUY" | "SELL", quoteUsd?: string,
 
 function extractOrderId(respJson: any): string | null {
   const j = respJson || {};
-  return j?.order_id || j?.success_response?.order_id || j?.order?.order_id || j?.order?.id || j?.id || null;
+  return (
+    j?.order_id ||
+    j?.success_response?.order_id ||
+    j?.order?.order_id ||
+    j?.order?.id ||
+    j?.id ||
+    null
+  );
 }
 
 async function makerFirstBuy(ctx: Ctx, quoteUsd: string, refPrice: number) {
@@ -456,9 +548,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  const profitTargetBps = num(process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS, 120);
-  const trailArmBps = num(process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS, 150);
-  const trailOffsetBpsBase = num(process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS, 50);
+  const profitTargetBps = num(
+    process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
+    120
+  );
+  const trailArmBps = num(
+    process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS,
+    150
+  );
+  const trailOffsetBpsBase = num(
+    process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS,
+    50
+  );
 
   // Anti-churn trailing guards
   const trailMinHoldMin = num(process.env.TRAIL_MIN_HOLD_MIN, 15);
@@ -469,10 +570,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   // Hard stop (required default)
   const hardStopEnabled = truthyDefault(process.env.PULSE_HARD_STOP_ENABLED, true);
-  const hardStopLossBps = num(process.env.PULSE_HARD_STOP_LOSS_BPS, num(process.env.YC_DEFAULT_HARD_STOP_BPS, 120));
+  const hardStopLossBps = num(
+    process.env.PULSE_HARD_STOP_LOSS_BPS,
+    num(process.env.YC_DEFAULT_HARD_STOP_BPS, 120)
+  );
 
   const timeStopEnabled = truthyDefault(process.env.PULSE_TIME_STOP_ENABLED, false);
-  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0));
+  const maxHoldMinutes = num(
+    process.env.PULSE_MAX_HOLD_MINUTES,
+    num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0)
+  );
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
   // caps
@@ -489,7 +596,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const ent = await fetchEntitlements(ctx.user_id);
   const pulseEntitled = !!ent.pulse;
-  const entMaxUsd = Number.isFinite(Number(ent.max_trade_size)) ? Number(ent.max_trade_size) : hardMaxUsd;
+  const entMaxUsd = Number.isFinite(Number(ent.max_trade_size))
+    ? Number(ent.max_trade_size)
+    : hardMaxUsd;
 
   const finalEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
   const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
@@ -516,7 +625,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     entryQuoteUsd,
     caps: { hardMaxUsd, entMaxUsd, envEntryUsd, finalEntryUsd },
     maker: { makerEntries, makerExits, mOffset, mTimeout, mAllowIoc },
-    trail: { trailMinHoldMin, trailVolFloorBps, trailOffsetBpsBase, trailArmBps, profitTargetBps },
+    trail: {
+      trailMinHoldMin,
+      trailVolFloorBps,
+      trailOffsetBpsBase,
+      trailArmBps,
+      profitTargetBps,
+    },
     hardStop: { hardStopEnabled, hardStopLossBps },
   });
 
@@ -532,7 +647,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const lastFillIso = lastBuy.ok ? lastBuy.entryTime : null;
   const sinceMs = msSince(lastFillIso);
   const cooldownOk = sinceMs >= cooldownMs;
-  const cooldown = { lastFillIso, sinceMs: Number.isFinite(sinceMs) ? sinceMs : null, cooldownMs, cooldownOk };
+  const cooldown = {
+    lastFillIso,
+    sinceMs: Number.isFinite(sinceMs) ? sinceMs : null,
+    cooldownMs,
+    cooldownOk,
+  };
 
   // ref price
   const spot = await fetchSpotPrice(ctx);
@@ -668,16 +788,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const shouldTakeProfit = pnlBps >= profitTargetBps;
   const trailArmed = pnlBps >= trailArmBps;
 
-  // Effective trail offset (anti-churn):
-  // - never tighter than VOL_FLOOR
-  // - never tighter than (0.5 * measured vol) (optional but helpful)
+  // Effective trail offset (anti-churn)
   const halfVol = Number.isFinite(peak.volBps) ? peak.volBps * 0.5 : 0;
   const effectiveTrailOffsetBps = Math.max(trailOffsetBpsBase, trailVolFloorBps, halfVol);
 
-  // Trail stop requires:
-  // - trail armed
-  // - held long enough
-  // - drawdown from peak >= effective offset
   const minHoldOk = trailMinHoldMs > 0 ? heldMs >= trailMinHoldMs : true;
   const shouldTrailStop = trailArmed && minHoldOk && drawdownFromPeakBps >= effectiveTrailOffsetBps;
 
@@ -729,7 +843,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     shouldTimeStop,
   };
 
-  // Always log deterministic exit decision
   log(runId, "EXIT_DECISION", {
     reason,
     pnlBps,
@@ -880,7 +993,12 @@ async function runForAllUsers(masterRunId: string) {
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     const runId = `${masterRunId}:${i + 1}`;
-    const ctx: Ctx = { user_id: r.user_id, api_key_name: r.api_key_name, private_key: r.private_key, key_alg: r.key_alg ?? null };
+    const ctx: Ctx = {
+      user_id: r.user_id,
+      api_key_name: r.api_key_name,
+      private_key: r.private_key,
+      key_alg: r.key_alg ?? null,
+    };
 
     try {
       const out = await runManagerForUser(runId, ctx);
@@ -902,7 +1020,15 @@ async function runForAllUsers(masterRunId: string) {
       });
     } catch (e: any) {
       failCount++;
-      results.push({ runId, user_id: ctx.user_id, key: shortKeyName(ctx.api_key_name), alg: algFor(ctx), ok: false, mode: "EXCEPTION", error: e?.message || String(e) });
+      results.push({
+        runId,
+        user_id: ctx.user_id,
+        key: shortKeyName(ctx.api_key_name),
+        alg: algFor(ctx),
+        ok: false,
+        mode: "EXCEPTION",
+        error: e?.message || String(e),
+      });
     }
   }
 
@@ -916,10 +1042,14 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const action = String(url.searchParams.get("action") || "run").toLowerCase();
 
-  const masterRunId = (crypto as any).randomUUID ? (crypto as any).randomUUID() : crypto.randomBytes(8).toString("hex");
+  const masterRunId = (crypto as any).randomUUID
+    ? (crypto as any).randomUUID()
+    : crypto.randomBytes(8).toString("hex");
+
   log(masterRunId, "REQUEST", { method: "GET", url: req.url, action });
 
   const result = await runForAllUsers(masterRunId);
+
   log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
@@ -928,7 +1058,10 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
-  const masterRunId = (crypto as any).randomUUID ? (crypto as any).randomUUID() : crypto.randomBytes(8).toString("hex");
+  const masterRunId = (crypto as any).randomUUID
+    ? (crypto as any).randomUUID()
+    : crypto.randomBytes(8).toString("hex");
+
   log(masterRunId, "REQUEST", { method: "POST", url: req.url });
 
   let body: any = null;
@@ -940,6 +1073,7 @@ export async function POST(req: Request) {
   const action = String(body?.action || "run").toLowerCase();
 
   const result = await runForAllUsers(masterRunId);
+
   log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
