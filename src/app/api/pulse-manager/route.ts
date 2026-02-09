@@ -177,12 +177,13 @@ type KeyRow = {
 };
 
 function looksValidKeyRow(r: any): r is KeyRow {
-  return (
+  return !!(
     cleanString(r?.user_id) &&
     cleanString(r?.api_key_name).startsWith("organizations/") &&
     cleanString(r?.private_key).includes("BEGIN")
   );
 }
+
 
 async function loadAllCoinbaseKeys(): Promise<
   { ok: true; rows: KeyRow[] } | { ok: false; error: any }
