@@ -86,6 +86,9 @@ function shortKeyName(s: string) {
   const last = s.slice(-6);
   return `…${last}`;
 }
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
+}
 
 // ---------- logging (safe) ----------
 function log(runId: string, event: string, data?: any) {
@@ -96,6 +99,14 @@ function log(runId: string, event: string, data?: any) {
     ...(data ? { data } : {}),
   };
   console.log("[pulse-manager]", JSON.stringify(payload));
+}
+
+// Always-print, greppable decision line (verifiable)
+function exitDecisionLog(runId: string, decision: any) {
+  console.log(
+    "[pulse-manager]",
+    `EXIT_DECISION ${runId} ${JSON.stringify(decision)}`
+  );
 }
 
 // ---------- supabase (server-only) ----------
@@ -165,27 +176,91 @@ type KeyRow = {
   key_alg?: string | null;
 };
 
+function looksValidKeyRow(r: any): r is KeyRow {
+  return (
+    cleanString(r?.user_id) &&
+    cleanString(r?.api_key_name).startsWith("organizations/") &&
+    cleanString(r?.private_key).includes("BEGIN")
+  );
+}
+
 async function loadAllCoinbaseKeys(): Promise<
   { ok: true; rows: KeyRow[] } | { ok: false; error: any }
 > {
   try {
     const client = sb();
-    const { data, error } = await client
-      .from("coinbase_keys")
-      .select("user_id, api_key_name, private_key, key_alg");
-    if (error) return { ok: false, error: error.message || error };
-    const rows = Array.isArray(data) ? (data as any as KeyRow[]) : [];
-    // Only keep rows that look valid (avoid blowing up the whole run)
-    const clean = rows.filter(
-      (r) =>
-        cleanString(r.user_id) &&
-        cleanString(r.api_key_name).startsWith("organizations/") &&
-        cleanString(r.private_key).includes("BEGIN")
-    );
-    return { ok: true, rows: clean };
+
+    // Prefer user_coinbase_keys if present, but keep legacy coinbase_keys too.
+    const [qNew, qLegacy] = await Promise.all([
+      client
+        .from("user_coinbase_keys")
+        .select("user_id, api_key_name, private_key, key_alg"),
+      client
+        .from("coinbase_keys")
+        .select("user_id, api_key_name, private_key, key_alg"),
+    ]);
+
+    // If a table doesn't exist in a given project, Supabase returns an error.
+    const newRows = qNew.error ? [] : (Array.isArray(qNew.data) ? qNew.data : []);
+    const legacyRows = qLegacy.error
+      ? []
+      : (Array.isArray(qLegacy.data) ? qLegacy.data : []);
+
+    const merged = [...newRows, ...legacyRows].filter(looksValidKeyRow);
+
+    // Dedup by user_id, keep the first occurrence (new table rows come first)
+    const seen = new Set<string>();
+    const dedup: KeyRow[] = [];
+    for (const r of merged) {
+      if (seen.has(r.user_id)) continue;
+      seen.add(r.user_id);
+      dedup.push({
+        user_id: r.user_id,
+        api_key_name: r.api_key_name,
+        private_key: r.private_key,
+        key_alg: r.key_alg ?? null,
+      });
+    }
+
+    return { ok: true, rows: dedup };
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
   }
+}
+
+// ---------- Entitlements (risk cap) ----------
+type EntRow = {
+  user_id: string;
+  pulse: boolean | null;
+  recon: boolean | null;
+  atlas: boolean | null;
+  max_trade_size: number | null; // USD
+  risk_mode: string | null;
+};
+
+async function fetchEntitlements(userId: string): Promise<
+  { ok: true; ent: EntRow | null } | { ok: false; error: any }
+> {
+  try {
+    const client = sb();
+    const { data, error } = await client
+      .from("entitlements")
+      .select("user_id, pulse, recon, atlas, max_trade_size, risk_mode")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (error) return { ok: false, error: error.message || error };
+    return { ok: true, ent: (data as any as EntRow) ?? null };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+function effectiveMaxTradeUsd(ent: EntRow | null): number {
+  // default to 10 if null/invalid
+  const raw = Number(ent?.max_trade_size ?? NaN);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return 10;
 }
 
 // ---------- Coinbase CDP JWT (per-user) ----------
@@ -200,16 +275,9 @@ function algFor(ctx: Ctx): "ES256" | "EdDSA" {
   const raw = (ctx.key_alg || "").toLowerCase();
   if (raw.includes("ed") || raw.includes("eddsa") || raw.includes("ed25519"))
     return "EdDSA";
-  // default
   return "ES256";
 }
 
-/**
- * NOTE:
- * jsonwebtoken's TS Algorithm type often does NOT include "EdDSA" depending on version,
- * which causes overload mismatch errors at compile-time.
- * We keep runtime behavior identical, but cast the options to avoid TS picking the callback overload.
- */
 function buildCdpJwt(ctx: Ctx, method: "GET" | "POST", path: string) {
   const apiKeyName = cleanString(ctx.api_key_name);
   const privateKeyPem = normalizePem(ctx.private_key);
@@ -221,10 +289,8 @@ function buildCdpJwt(ctx: Ctx, method: "GET" | "POST", path: string) {
   const uri = `${method} api.coinbase.com${pathForUri}`;
 
   const alg = algFor(ctx);
-
   const payload = { iss: "cdp", sub: apiKeyName, nbf: now, exp: now + 60, uri };
 
-  // Force TS to treat this as SignOptions (not callback), and allow EdDSA where the type union is missing it.
   const options: SignOptions = {
     algorithm: (alg === "EdDSA" ? "EdDSA" : "ES256") as any,
     header: { kid: apiKeyName, nonce } as any,
@@ -339,15 +405,21 @@ async function fetchLastBuyFill(
   return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
 }
 
-// ---------- peak window ----------
-async function fetchPeakWindow(
-  ctx: Ctx
+// ---------- peak since entry (better trailing) ----------
+async function fetchPeakSince(
+  ctx: Ctx,
+  entryIso: string,
+  maxLookbackHours: number
 ): Promise<
-  | { ok: true; peak: number; last: number; startTs: string; endTs: string }
+  | { ok: true; peak: number; startTs: string; endTs: string; candles: number }
   | { ok: false; error: any }
 > {
+  const entryMs = Date.parse(entryIso);
+  if (!Number.isFinite(entryMs)) return { ok: false, error: "bad_entry_time" };
+
   const end = new Date();
-  const start = new Date(end.getTime() - 2 * 3600 * 1000);
+  const maxStart = new Date(end.getTime() - maxLookbackHours * 3600 * 1000);
+  const start = new Date(Math.max(entryMs, maxStart.getTime()));
 
   const startTs = String(Math.floor(start.getTime() / 1000));
   const endTs = String(Math.floor(end.getTime() / 1000));
@@ -367,19 +439,15 @@ async function fetchPeakWindow(
     return { ok: false, error: "no_candles" };
 
   let peak = 0;
-  let last = 0;
-
   for (const c of candles) {
     const high = Number((c as any)?.high ?? (c as any)?.h ?? 0);
-    const close = Number((c as any)?.close ?? (c as any)?.c ?? 0);
     if (Number.isFinite(high) && high > peak) peak = high;
-    if (Number.isFinite(close) && close > 0) last = close;
   }
 
-  if (!peak || peak <= 0) return { ok: false, error: { bad_peak: candles[0] } };
-  if (!last || last <= 0) last = peak;
+  if (!Number.isFinite(peak) || peak <= 0)
+    return { ok: false, error: { bad_peak: candles[0] } };
 
-  return { ok: true, peak, last, startTs, endTs };
+  return { ok: true, peak, startTs, endTs, candles: candles.length };
 }
 
 // ---------- maker helpers ----------
@@ -398,12 +466,17 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
     ctx,
     `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
   );
-  if (!r.ok) return { ok: false as const, status: r.status, raw: r.json ?? r.text };
+  if (!r.ok)
+    return { ok: false as const, status: r.status, raw: r.json ?? r.text };
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(o?.filled_size || o?.filled_value || o?.filled_quantity || 0);
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
+  const filled = Number(
+    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
+  );
+  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
+    status
+  );
 
   return { ok: true as const, status, filled, done, raw: r.json };
 }
@@ -515,31 +588,31 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const ycDefaultHardStopBps = num(process.env.YC_DEFAULT_HARD_STOP_BPS, 0);
   const ycDefaultTimeStopMin = num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0);
-  const ycDailyMaxLossBps = num(process.env.YC_DAILY_MAX_LOSS_BPS, 0);
-  const ycMonthlyMaxDdBps = num(process.env.YC_MONTHLY_MAX_DD_BPS, 0);
-  const ycDefaultAllocationPct = num(process.env.YC_DEFAULT_ALLOCATION_PCT, 0);
 
   const hardStopEnabled = truthy(process.env.PULSE_HARD_STOP_ENABLED);
-  const hardStopLossBps = num(
-    process.env.PULSE_HARD_STOP_LOSS_BPS,
-    ycDefaultHardStopBps
-  );
+  const hardStopLossBps = num(process.env.PULSE_HARD_STOP_LOSS_BPS, ycDefaultHardStopBps);
 
   const timeStopEnabled = truthy(process.env.PULSE_TIME_STOP_ENABLED);
-  const maxHoldMinutes = num(
-    process.env.PULSE_MAX_HOLD_MINUTES,
-    ycDefaultTimeStopMin
-  );
+  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, ycDefaultTimeStopMin);
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
-  const entryQuoteUsd = fmtQuoteSizeUsd(
-    num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0)
-  );
+  // Base entry size (will be capped by entitlements.max_trade_size)
+  const rawEntryUsd = num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0);
 
-  const makerMode = truthy(process.env.MAKER_MODE) || true;
+  // FIX: honor MAKER_MODE=false
+  const makerMode =
+    process.env.MAKER_MODE == null ? true : truthy(process.env.MAKER_MODE);
+
   const mOffset = makerOffsetBps();
   const mTimeout = makerTimeoutMs();
   const mAllowIoc = makerAllowIocFallback();
+
+  // Entitlements: enforce plan + max_trade_size
+  const entR = await fetchEntitlements(ctx.user_id);
+  const ent = entR.ok ? entR.ent : null;
+
+  const pulseAllowed = !!ent?.pulse; // require pulse entitlement true to run
+  const maxTradeUsd = effectiveMaxTradeUsd(ent);
 
   const position = await fetchBtcPosition(ctx);
 
@@ -551,7 +624,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     PULSE_ENTRIES_DRY_RUN: entriesDryRun,
     PULSE_EXITS_ENABLED: exitsEnabled,
     PULSE_EXITS_DRY_RUN: exitsDryRun,
-    LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
+    PULSE_ENTITLED: pulseAllowed,
+    LIVE_ALLOWED: botEnabled && tradingEnabled && armed && pulseAllowed,
   };
 
   log(runId, "START", {
@@ -559,11 +633,19 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     key: shortKeyName(ctx.api_key_name),
     alg: algFor(ctx),
     gates,
+    ent: entR.ok
+      ? {
+          pulse: ent?.pulse ?? null,
+          recon: ent?.recon ?? null,
+          atlas: ent?.atlas ?? null,
+          max_trade_size: maxTradeUsd,
+          risk_mode: ent?.risk_mode ?? null,
+        }
+      : { error: entR.error },
     position_ok: (position as any)?.ok,
     has_position: (position as any)?.ok ? (position as any).has_position : null,
     base_available: (position as any)?.ok ? (position as any).base_available : null,
     min_pos: (position as any)?.min_pos ?? null,
-    entryQuoteUsd,
     cooldownMs,
     profitTargetBps,
     trailArmBps,
@@ -573,13 +655,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     timeStopEnabled,
     maxHoldMinutes,
     maker: { makerMode, mOffset, mTimeout, mAllowIoc },
-    yc: {
-      defaultAllocationPct: ycDefaultAllocationPct,
-      defaultHardStopBps: ycDefaultHardStopBps,
-      defaultTimeStopMin: ycDefaultTimeStopMin,
-      dailyMaxLossBps: ycDailyMaxLossBps,
-      monthlyMaxDdBps: ycMonthlyMaxDdBps,
-    },
   });
 
   if (!gates.LIVE_ALLOWED) {
@@ -609,16 +684,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     cooldownOk,
   };
 
-  // ---- get reference price for maker ----
-  let refPrice = 0;
+  // ---- live spot price (use for current + sizing) ----
   const spot = await fetchSpotPrice(ctx);
-  if (spot.ok) {
-    refPrice = spot.price;
-  } else {
-    const peak = await fetchPeakWindow(ctx);
-    if (peak.ok) refPrice = peak.last;
-  }
-  if (!Number.isFinite(refPrice) || refPrice <= 0) refPrice = 0;
+  const currentSpot = spot.ok ? spot.price : 0;
 
   // ---- ENTRY ----
   if (!(position as any).has_position) {
@@ -629,6 +697,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
     }
 
+    // Enforce max_trade_size (USD) for everyone
+    const entryUsd = clamp(rawEntryUsd, 0.01, maxTradeUsd);
+    const entryQuoteUsd = fmtQuoteSizeUsd(entryUsd);
+
     if (entriesDryRun) {
       return {
         ok: true,
@@ -636,9 +708,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        maxTradeUsd,
         would_buy_quote_usd: entryQuoteUsd,
       };
     }
+
+    // Need a reference price for maker (use spot if available)
+    const refPrice = currentSpot > 0 ? currentSpot : 0;
 
     if (!makerMode || !refPrice) {
       if (!mAllowIoc) {
@@ -656,6 +732,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: buy.status,
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
+        maxTradeUsd,
+        entryQuoteUsd,
       });
 
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, buy };
@@ -678,6 +756,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           status: attempt.maker.status,
           user_id: ctx.user_id,
           raw: attempt.maker.json ?? attempt.maker.text ?? null,
+          maxTradeUsd,
+          entryQuoteUsd,
         });
         return {
           ok: false,
@@ -701,6 +781,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: buy.status,
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
+        maxTradeUsd,
+        entryQuoteUsd,
       });
 
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, buy };
@@ -735,6 +817,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: attempt.maker.status,
         user_id: ctx.user_id,
         raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
+        maxTradeUsd,
+        entryQuoteUsd,
       });
 
       return {
@@ -759,6 +843,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: attempt.maker.status,
         user_id: ctx.user_id,
         raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
+        maxTradeUsd,
+        entryQuoteUsd,
       });
 
       return {
@@ -783,6 +869,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       status: buy.status,
       user_id: ctx.user_id,
       raw: buy.json ?? buy.text ?? null,
+      maxTradeUsd,
+      entryQuoteUsd,
     });
 
     return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, buy };
@@ -797,13 +885,20 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_entry", lastBuy };
   }
 
-  const peak = await fetchPeakWindow(ctx);
+  // Use live spot as "current"
+  const current = currentSpot > 0 ? currentSpot : 0;
+  if (!Number.isFinite(current) || current <= 0) {
+    return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_current_spot", spot };
+  }
+
+  // Compute peak since entry (cap lookback to avoid huge candle pulls)
+  const peakLookbackHours = clamp(num(process.env.PULSE_PEAK_LOOKBACK_HOURS, 24), 2, 168);
+  const peak = await fetchPeakSince(ctx, lastBuy.entryTime, peakLookbackHours);
   if (!peak.ok) {
-    return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_peak", peak };
+    return { ok: false, mode: "BLOCKED", gates, position, cooldown, error: "cannot_read_peak_since_entry", peak };
   }
 
   const entryPrice = lastBuy.entryPrice;
-  const current = peak.last;
   const peakPrice = peak.peak;
 
   const pnlBpsRaw = ((current - entryPrice) / entryPrice) * 10_000;
@@ -828,14 +923,17 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     heldMs >= maxHoldMs &&
     pnlBps < 0;
 
+  const baseAvail = Number((position as any).base_available || 0);
+  const posUsd = Number.isFinite(baseAvail) ? baseAvail * current : null;
+
   const decision = {
     entryPrice,
     entryTime: lastBuy.entryTime,
     entryQty: Number.isFinite(lastBuy.entryQty) ? lastBuy.entryQty : null,
     heldMs: Number.isFinite(heldMs) ? heldMs : null,
-    candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
     current,
     peakPrice,
+    peakWindow: { startTs: peak.startTs, endTs: peak.endTs, candles: peak.candles, lookbackHours: peakLookbackHours },
     pnlBps,
     drawdownFromPeakBps,
     profitTargetBps,
@@ -850,19 +948,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     timeStopEnabled,
     maxHoldMinutes,
     shouldTimeStop,
+    position: { baseAvail, posUsd, maxTradeUsd },
     maker: { makerMode, mOffset, mTimeout, mAllowIoc },
-    yc: {
-      defaultAllocationPct: ycDefaultAllocationPct,
-      dailyMaxLossBps: ycDailyMaxLossBps,
-      monthlyMaxDdBps: ycMonthlyMaxDdBps,
-    },
   };
+
+  // REQUIRED verifiable line every cycle
+  exitDecisionLog(runId, decision);
 
   if (!shouldHardStop && !shouldTimeStop && !shouldTakeProfit && !shouldTrailStop) {
     return { ok: true, mode: "HOLD", gates, position, cooldown, decision };
   }
 
-  const baseSize = fmtBaseSize((position as any).base_available);
+  const baseSize = fmtBaseSize(baseAvail);
 
   if (exitsDryRun) {
     return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, decision, would_sell_base_size: baseSize };
@@ -874,6 +971,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     shouldTakeProfit ? "take_profit" :
     "trail_stop";
 
+  // Use live current for exit reference
   const exitRef = current;
 
   if (!makerMode || !Number.isFinite(exitRef) || exitRef <= 0) {
@@ -1051,9 +1149,8 @@ async function runForAllUsers(masterRunId: string) {
 
   const rows = loaded.rows;
 
-  // If no users, don't "trade system" by accident.
   if (rows.length === 0) {
-    return { ok: true, usersProcessed: 0, results: [], note: "no coinbase_keys rows found" };
+    return { ok: true, usersProcessed: 0, results: [], note: "no coinbase key rows found" };
   }
 
   const results: any[] = [];
@@ -1074,6 +1171,7 @@ async function runForAllUsers(masterRunId: string) {
       const out = await runManagerForUser(runId, ctx);
       if ((out as any)?.ok) okCount++;
       else failCount++;
+
       results.push({
         runId,
         user_id: ctx.user_id,
@@ -1125,11 +1223,12 @@ export async function GET(req: Request) {
 
   log(masterRunId, "REQUEST", { method: "GET", url: req.url, action });
 
-  // For now, action=status returns the same multi-user results but without extra special casing.
-  // (We can add a true lightweight status-only mode later.)
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+  });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
@@ -1153,7 +1252,10 @@ export async function POST(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+  });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
