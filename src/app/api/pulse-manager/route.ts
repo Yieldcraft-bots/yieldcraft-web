@@ -592,15 +592,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     },
   });
 
-  // Gate 1: overall live allowed
-  if (!gates.LIVE_ALLOWED) {
-    return { ok: true, mode: "NOOP_GATES", gates, position };
-  }
+  // Gate 1: entitlement (enforced)
+if (!gates.PULSE_ENTITLED) {
+  return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position };
+}
 
-  // Gate 2: entitlement (enforced)
-  if (!gates.PULSE_ENTITLED) {
-    return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position };
-  }
+// Gate 2: overall live allowed
+if (!gates.LIVE_ALLOWED) {
+  return { ok: true, mode: "NOOP_GATES", gates, position };
+}
+
 
   if (!(position as any)?.ok) {
     return {
