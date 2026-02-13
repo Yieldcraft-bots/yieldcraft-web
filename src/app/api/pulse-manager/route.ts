@@ -227,7 +227,8 @@ async function fetchEntitlements(user_id: string): Promise<Entitlements> {
       error = r2.error;
     }
 
-    if (error || !data) return { pulse: defaultPulse, max_trade_size: defaultMax };
+    if (error || !data)
+      return { pulse: defaultPulse, max_trade_size: defaultMax };
 
     const pulse =
       typeof (data as any).pulse === "boolean"
@@ -301,6 +302,58 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
   });
   const text = await res.text();
   return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
+}
+
+// ---------- Step 2: Recon gate helpers (SAFE: does nothing unless RECON_ENABLED=true) ----------
+type ReconSignal = {
+  side?: string;        // "BUY" | "SELL"
+  confidence?: number;  // 0..1
+  regime?: string;      // e.g. "trending_up" | "trending_down" | "bullish" | "bearish" | "neutral"
+};
+
+async function fetchReconSignal(): Promise<
+  { ok: true; sig: ReconSignal } | { ok: false; error: any }
+> {
+  const url = (process.env.RECON_SIGNAL_URL || "").trim();
+  if (!url) return { ok: false, error: "RECON_SIGNAL_URL_not_set" };
+
+  const timeoutMs = num(process.env.RECON_TIMEOUT_MS, 2500);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { method: "GET", cache: "no-store", signal: ctrl.signal });
+    const text = await res.text();
+    const j = safeJsonParse(text);
+
+    if (!res.ok) return { ok: false, error: j ?? text };
+    if (!j || typeof j !== "object") return { ok: false, error: "bad_recon_json" };
+
+    return { ok: true, sig: j as ReconSignal };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e) };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function reconAllowsEntry(sig: ReconSignal) {
+  const minConf = num(process.env.RECON_MIN_CONF, 0.60);
+
+  const side = String(sig?.side || "").toUpperCase();      // "BUY" | "SELL" | ""
+  const conf = Number(sig?.confidence ?? 0);               // 0..1
+  const regime = String(sig?.regime || "").toLowerCase();  // "trending_down", etc.
+
+  const allowed = (process.env.RECON_ALLOWED_REGIMES || "trending_up,bullish,neutral")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
+  const confOk = Number.isFinite(conf) && conf >= minConf;
+  const regimeOk = regime ? allowed.includes(regime) : false;
+  const sideOk = side ? side !== "SELL" : true; // if side missing, don't block on side alone
+
+  return { confOk, regimeOk, sideOk, minConf, allowed, side, conf, regime };
 }
 
 // ---------- price helpers ----------
@@ -648,6 +701,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     if (entriesDryRun) {
       return { ok: true, mode: "DRY_RUN_BUY", gates, position, cooldown, would_buy_quote_usd: entryQuoteUsd };
     }
+
+    // NOTE: Step 3 will insert the actual Recon gate HERE (entry-only).
+    // Step 2 only adds helper functions safely.
 
     if (!makerEntries || !refPrice) {
       const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
