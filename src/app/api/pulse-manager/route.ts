@@ -306,9 +306,9 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
 
 // ---------- Step 2: Recon gate helpers (SAFE: does nothing unless RECON_ENABLED=true) ----------
 type ReconSignal = {
-  side?: string;        // "BUY" | "SELL"
-  confidence?: number;  // 0..1
-  regime?: string;      // e.g. "trending_up" | "trending_down" | "bullish" | "bearish" | "neutral"
+  side?: string; // "BUY" | "SELL"
+  confidence?: number; // 0..1
+  regime?: string; // e.g. "trending_up" | "trending_down" | "bullish" | "bearish" | "neutral"
 };
 
 async function fetchReconSignal(): Promise<
@@ -322,7 +322,11 @@ async function fetchReconSignal(): Promise<
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
   try {
-    const res = await fetch(url, { method: "GET", cache: "no-store", signal: ctrl.signal });
+    const res = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
     const text = await res.text();
     const j = safeJsonParse(text);
 
@@ -340,9 +344,9 @@ async function fetchReconSignal(): Promise<
 function reconAllowsEntry(sig: ReconSignal) {
   const minConf = num(process.env.RECON_MIN_CONF, 0.60);
 
-  const side = String(sig?.side || "").toUpperCase();      // "BUY" | "SELL" | ""
-  const conf = Number(sig?.confidence ?? 0);               // 0..1
-  const regime = String(sig?.regime || "").toLowerCase();  // "trending_down", etc.
+  const side = String(sig?.side || "").toUpperCase(); // "BUY" | "SELL" | ""
+  const conf = Number(sig?.confidence ?? 0); // 0..1
+  const regime = String(sig?.regime || "").toLowerCase(); // "trending_down", etc.
 
   const allowed = (process.env.RECON_ALLOWED_REGIMES || "trending_up,bullish,neutral")
     .split(",")
@@ -432,6 +436,38 @@ async function fetchLastBuyFill(
   if (!Number.isFinite(px) || px <= 0)
     return { ok: false, error: { bad_price: buy } };
   return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
+}
+
+// ---------- last fill (ANY side) ----------
+async function fetchLastFillAny(
+  ctx: Ctx
+): Promise<
+  | { ok: true; side: "BUY" | "SELL"; price: number; time: string; qty: number }
+  | { ok: false; error: any }
+> {
+  const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
+    PRODUCT_ID
+  )}&limit=1&sort_by=TRADE_TIME`;
+
+  const r = await cbGet(ctx, path);
+  if (!r.ok) return { ok: false, error: r.json ?? r.text };
+
+  const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
+  if (!Array.isArray(fills) || fills.length === 0)
+    return { ok: false, error: "no_fills_found" };
+
+  const f = fills[0];
+  const sideRaw = String(f?.side || "").toUpperCase();
+  const side: "BUY" | "SELL" = sideRaw === "SELL" ? "SELL" : "BUY";
+
+  const px = Number(f?.price || f?.fill_price || 0);
+  const qty = Number(f?.size || f?.filled_size || f?.base_size || 0);
+  const t = String(f?.trade_time || f?.created_time || f?.time || "");
+
+  if (!Number.isFinite(px) || px <= 0)
+    return { ok: false, error: { bad_price: f } };
+
+  return { ok: true, side, price: px, time: t || nowIso(), qty };
 }
 
 // ---------- peak window + volatility ----------
@@ -572,7 +608,14 @@ async function placeMarketIoc(ctx: Ctx, side: "BUY" | "SELL", quoteUsd?: string,
 
 function extractOrderId(respJson: any): string | null {
   const j = respJson || {};
-  return j?.order_id || j?.success_response?.order_id || j?.order?.order_id || j?.order?.id || j?.id || null;
+  return (
+    j?.order_id ||
+    j?.success_response?.order_id ||
+    j?.order?.order_id ||
+    j?.order?.id ||
+    j?.id ||
+    null
+  );
 }
 
 async function makerFirstBuy(ctx: Ctx, quoteUsd: string, refPrice: number) {
@@ -607,9 +650,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  const profitTargetBps = num(process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS, 120);
-  const trailArmBps = num(process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS, 150);
-  const trailOffsetBpsBase = num(process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS, 50);
+  const profitTargetBps = num(
+    process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
+    120
+  );
+  const trailArmBps = num(
+    process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS,
+    150
+  );
+  const trailOffsetBpsBase = num(
+    process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS,
+    50
+  );
 
   // Anti-churn trailing guards
   const trailMinHoldMin = num(process.env.TRAIL_MIN_HOLD_MIN, 15);
@@ -626,7 +678,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   );
 
   const timeStopEnabled = truthyDefault(process.env.PULSE_TIME_STOP_ENABLED, false);
-  const maxHoldMinutes = num(process.env.PULSE_MAX_HOLD_MINUTES, num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0));
+  const maxHoldMinutes = num(
+    process.env.PULSE_MAX_HOLD_MINUTES,
+    num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0)
+  );
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
   // caps
@@ -643,7 +698,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const ent = await fetchEntitlements(ctx.user_id);
   const pulseEntitled = !!ent.pulse;
-  const entMaxUsd = Number.isFinite(Number(ent.max_trade_size)) ? Number(ent.max_trade_size) : hardMaxUsd;
+  const entMaxUsd = Number.isFinite(Number(ent.max_trade_size))
+    ? Number(ent.max_trade_size)
+    : hardMaxUsd;
 
   const finalEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
   const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
@@ -681,12 +738,29 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position };
   }
 
-  // cooldown
+  // cooldown + re-entry guard (post-exit anti-churn)
   const lastBuy = await fetchLastBuyFill(ctx);
-  const lastFillIso = lastBuy.ok ? lastBuy.entryTime : null;
+  const lastFill = await fetchLastFillAny(ctx);
+
+  const lastFillIso = lastFill.ok ? lastFill.time : (lastBuy.ok ? lastBuy.entryTime : null);
   const sinceMs = msSince(lastFillIso);
+
   const cooldownOk = sinceMs >= cooldownMs;
-  const cooldown = { lastFillIso, sinceMs: Number.isFinite(sinceMs) ? sinceMs : null, cooldownMs, cooldownOk };
+
+  // NEW: block re-entry after a SELL for N minutes
+  const reentryCooldownMs = num(process.env.REENTRY_COOLDOWN_MS, 10 * 60_000);
+  const reentryBlocked =
+    lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
+
+  const cooldown = {
+    lastFillIso,
+    sinceMs: Number.isFinite(sinceMs) ? sinceMs : null,
+    cooldownMs,
+    cooldownOk,
+    lastFillSide: lastFill.ok ? lastFill.side : null,
+    reentryCooldownMs,
+    reentryBlocked,
+  };
 
   // ref price
   const spot = await fetchSpotPrice(ctx);
@@ -697,6 +771,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   if (!(position as any).has_position) {
     if (!entriesEnabled) return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
     if (!cooldownOk) return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
+
+    // NEW: Post-exit re-entry block to stop churn
+    if (reentryBlocked) {
+      return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown };
+    }
 
     if (entriesDryRun) {
       return { ok: true, mode: "DRY_RUN_BUY", gates, position, cooldown, would_buy_quote_usd: entryQuoteUsd };
@@ -728,7 +807,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const makerOrderId = extractOrderId(makerJson);
 
     if (!makerOk || !makerOrderId) {
-      if (!mAllowIoc) return { ok: false, mode: "ENTRY_BUY_MAKER_FAILED", gates, position, cooldown, error: "maker_order_failed" };
+      if (!mAllowIoc) {
+        return {
+          ok: false,
+          mode: "ENTRY_BUY_MAKER_FAILED",
+          gates,
+          position,
+          cooldown,
+          error: "maker_order_failed",
+        };
+      }
 
       const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
       await writeTradeLog({
@@ -909,9 +997,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       ok: sell.ok,
       status: sell.status,
       user_id: ctx.user_id,
-      raw: sell.json ?? sell.text ?? null,
+      raw: { resp: sell.json ?? sell.text ?? null, decision }, // <— keep decision inside raw to avoid schema issues
       reason,
-      decision,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, decision, sell, reason };
   }
@@ -919,7 +1006,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   // Maker exit path if explicitly enabled
   const exitRef = current;
   if (!Number.isFinite(exitRef) || exitRef <= 0) {
-    if (!mAllowIoc) return { ok: false, mode: "BLOCKED", gates, position, cooldown, decision, error: "no_ref_price_for_exit" };
+    if (!mAllowIoc) {
+      return { ok: false, mode: "BLOCKED", gates, position, cooldown, decision, error: "no_ref_price_for_exit" };
+    }
 
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
     await writeTradeLog({
@@ -931,9 +1020,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       ok: sell.ok,
       status: sell.status,
       user_id: ctx.user_id,
-      raw: sell.json ?? sell.text ?? null,
+      raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
-      decision,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, decision, sell, reason };
   }
@@ -944,7 +1032,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const makerOrderId = extractOrderId(makerJson);
 
   if (!makerOk || !makerOrderId) {
-    if (!mAllowIoc) return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, decision, reason, error: "maker_exit_failed" };
+    if (!mAllowIoc) {
+      return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, decision, reason, error: "maker_exit_failed" };
+    }
 
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
     await writeTradeLog({
@@ -956,9 +1046,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       ok: sell.ok,
       status: sell.status,
       user_id: ctx.user_id,
-      raw: sell.json ?? sell.text ?? null,
+      raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
-      decision,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, decision, sell, reason };
   }
@@ -988,9 +1077,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       ok: true,
       status: attempt.maker.status,
       user_id: ctx.user_id,
-      raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
+      raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus, decision },
       reason,
-      decision,
     });
     return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, decision, reason, maker_order_id: makerOrderId };
   }
@@ -1007,9 +1095,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     ok: sell.ok,
     status: sell.status,
     user_id: ctx.user_id,
-    raw: sell.json ?? sell.text ?? null,
+    raw: { resp: sell.json ?? sell.text ?? null, decision },
     reason,
-    decision,
   });
   return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, decision, sell, reason };
 }
