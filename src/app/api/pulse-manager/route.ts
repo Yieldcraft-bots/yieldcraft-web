@@ -303,9 +303,9 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
 
 // ---------- Recon gate helpers (ENTRY ONLY enforcement, status always visible) ----------
 type ReconSignal = {
-  side?: string;        // "BUY" | "SELL"
-  confidence?: number;  // 0..1
-  regime?: string;      // e.g. "bullish_trending", "bearish_trending", "chop", etc
+  side?: string; // "BUY" | "SELL"
+  confidence?: number; // 0..1
+  regime?: string; // e.g. "bullish_trending", "bearish_trending", "chop", etc
 
   // optional alternate keys for future models
   state?: string;
@@ -446,12 +446,11 @@ async function fetchReconDecision(): Promise<ReconDecision> {
 
     const entryAllowed = !(blocksOnSell || blocksOnChop);
 
-    const why =
-      entryAllowed
-        ? "recon_allows_entries"
-        : blocksOnSell
-          ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
-          : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
+    const why = entryAllowed
+      ? "recon_allows_entries"
+      : blocksOnSell
+      ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
+      : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
 
     return {
       enabled,
@@ -532,6 +531,199 @@ async function fetchBtcPosition(ctx: Ctx) {
     base_available: Number.isFinite(available) ? available : 0,
     min_pos: minPos,
   };
+}
+
+// ---------- equity governor (A) ----------
+type EquityGov = {
+  enabled: boolean;
+  ok: boolean;
+  source: "disabled" | "db" | "error";
+  equityUsd: number | null;
+  peakEquityUsd: number | null;
+  ddPct: number | null;
+  multiplier: number;
+  defense: boolean;
+  reason: string;
+};
+
+async function fetchUsdAndBtcBalances(ctx: Ctx): Promise<
+  | { ok: true; usd: number; btc: number }
+  | { ok: false; error: any }
+> {
+  const r = await cbGet(ctx, "/api/v3/brokerage/accounts");
+  if (!r.ok) return { ok: false, error: r.json ?? r.text };
+
+  const accounts = (r.json as any)?.accounts || [];
+  const usdAcct = accounts.find((a: any) => a?.currency === "USD");
+  const btcAcct = accounts.find((a: any) => a?.currency === "BTC");
+
+  const usd = Number(usdAcct?.available_balance?.value || 0);
+  const btc = Number(btcAcct?.available_balance?.value || 0);
+
+  return {
+    ok: true,
+    usd: Number.isFinite(usd) ? usd : 0,
+    btc: Number.isFinite(btc) ? btc : 0,
+  };
+}
+
+function computeMultiplierFromDdPct(ddPct: number) {
+  if (ddPct < 2) return 1.0;
+  if (ddPct < 3) return 0.8;
+  if (ddPct < 4) return 0.65;
+  if (ddPct < 5) return 0.4;
+  return 0.0; // Defense mode
+}
+
+async function getOrInitEquityState(user_id: string) {
+  const client = sb();
+
+  const r = await client
+    .from("equity_state")
+    .select("user_id, peak_equity_usd, last_equity_usd")
+    .eq("user_id", user_id)
+    .maybeSingle();
+
+  if (r.error && !r.data) {
+    return { ok: false as const, error: r.error };
+  }
+
+  if (!r.data) {
+    const ins = await client.from("equity_state").insert([
+      { user_id, peak_equity_usd: 0, last_equity_usd: 0 },
+    ]);
+    if (ins.error) return { ok: false as const, error: ins.error };
+    return { ok: true as const, peak: 0, last: 0 };
+  }
+
+  return {
+    ok: true as const,
+    peak: Number(r.data.peak_equity_usd || 0),
+    last: Number(r.data.last_equity_usd || 0),
+  };
+}
+
+async function upsertEquityState(user_id: string, peak: number, last: number) {
+  const client = sb();
+  const u = await client.from("equity_state").upsert(
+    {
+      user_id,
+      peak_equity_usd: peak,
+      last_equity_usd: last,
+      updated_at: nowIso(),
+    },
+    { onConflict: "user_id" }
+  );
+  return { ok: !u.error, error: u.error };
+}
+
+async function computeEquityGovernor(
+  ctx: Ctx,
+  spotPrice: number
+): Promise<EquityGov> {
+  const enabled = truthyDefault(process.env.EQUITY_GOV_ENABLED, true);
+
+  if (!enabled) {
+    return {
+      enabled,
+      ok: true,
+      source: "disabled",
+      equityUsd: null,
+      peakEquityUsd: null,
+      ddPct: null,
+      multiplier: 1.0,
+      defense: false,
+      reason: "equity_gov_disabled",
+    };
+  }
+
+  try {
+    if (!Number.isFinite(spotPrice) || spotPrice <= 0) {
+      return {
+        enabled,
+        ok: false,
+        source: "error",
+        equityUsd: null,
+        peakEquityUsd: null,
+        ddPct: null,
+        multiplier: 1.0, // FAIL OPEN
+        defense: false,
+        reason: "spot_price_invalid_for_equity",
+      };
+    }
+
+    const bal = await fetchUsdAndBtcBalances(ctx);
+    if (!bal.ok) {
+      return {
+        enabled,
+        ok: false,
+        source: "error",
+        equityUsd: null,
+        peakEquityUsd: null,
+        ddPct: null,
+        multiplier: 1.0, // FAIL OPEN
+        defense: false,
+        reason: "equity_balance_fetch_failed",
+      };
+    }
+
+    const equityUsd = bal.usd + bal.btc * spotPrice;
+
+    const state = await getOrInitEquityState(ctx.user_id);
+    if (!state.ok) {
+      return {
+        enabled,
+        ok: false,
+        source: "error",
+        equityUsd: Number(equityUsd.toFixed(2)),
+        peakEquityUsd: null,
+        ddPct: null,
+        multiplier: 1.0, // FAIL OPEN
+        defense: false,
+        reason: "equity_state_read_failed_or_table_missing",
+      };
+    }
+
+    const prevPeak = Number.isFinite(state.peak) ? state.peak : 0;
+    const peakEquityUsd = Math.max(prevPeak, equityUsd);
+
+    // best-effort writeback
+    await upsertEquityState(ctx.user_id, peakEquityUsd, equityUsd);
+
+    const ddPct =
+      peakEquityUsd > 0
+        ? ((peakEquityUsd - equityUsd) / peakEquityUsd) * 100
+        : 0;
+
+    const multiplier = computeMultiplierFromDdPct(ddPct);
+    const defense = ddPct >= 5;
+
+    return {
+      enabled,
+      ok: true,
+      source: "db",
+      equityUsd: Number(equityUsd.toFixed(2)),
+      peakEquityUsd: Number(peakEquityUsd.toFixed(2)),
+      ddPct: Number(ddPct.toFixed(3)),
+      multiplier,
+      defense,
+      reason: defense
+        ? `defense_mode_dd_${ddPct.toFixed(2)}pct`
+        : `throttle_dd_${ddPct.toFixed(2)}pct_mult_${multiplier}`,
+    };
+  } catch (e: any) {
+    return {
+      enabled,
+      ok: false,
+      source: "error",
+      equityUsd: null,
+      peakEquityUsd: null,
+      ddPct: null,
+      multiplier: 1.0, // FAIL OPEN
+      defense: false,
+      reason: `equity_gov_exception_${String(e?.message || e)}`,
+    };
+  }
 }
 
 // ---------- last BUY fill ----------
@@ -694,7 +886,9 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
   const filled = Number(
     o?.filled_size || o?.filled_value || o?.filled_quantity || 0
   );
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
+  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
+    status
+  );
 
   return { ok: true as const, status, filled, done, raw: r.json };
 }
@@ -810,13 +1004,19 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const trailVolFloorBps = num(process.env.TRAIL_VOL_FLOOR_BPS, 100);
 
   // Hard stop (default ON)
-  const hardStopEnabled = truthyDefault(process.env.PULSE_HARD_STOP_ENABLED, true);
+  const hardStopEnabled = truthyDefault(
+    process.env.PULSE_HARD_STOP_ENABLED,
+    true
+  );
   const hardStopLossBps = num(
     process.env.PULSE_HARD_STOP_LOSS_BPS,
     num(process.env.YC_DEFAULT_HARD_STOP_BPS, 120)
   );
 
-  const timeStopEnabled = truthyDefault(process.env.PULSE_TIME_STOP_ENABLED, false);
+  const timeStopEnabled = truthyDefault(
+    process.env.PULSE_TIME_STOP_ENABLED,
+    false
+  );
   const maxHoldMinutes = num(
     process.env.PULSE_MAX_HOLD_MINUTES,
     num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0)
@@ -841,7 +1041,23 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     ? Number(ent.max_trade_size)
     : hardMaxUsd;
 
-  const finalEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
+  // ref price (also used for equity calc)
+  const spot = await fetchSpotPrice(ctx);
+  const refPrice = spot.ok ? spot.price : 0;
+
+  // Equity Governor (A) — scales entries only (fails open)
+  const gov = await computeEquityGovernor(ctx, refPrice);
+
+  // Defense knobs
+  const DEFENSE_CONF = num(process.env.DEFENSE_CONF, 0.8);
+  const DEFENSE_MULT = num(process.env.DEFENSE_MULT, 0.2); // 20% size in defense
+
+  // Base entry USD bounded by caps, then scaled, then bounded again
+  const baseEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
+  const scaledEntryUsd = gov.defense
+    ? Math.max(0.01, baseEntryUsd * DEFENSE_MULT)
+    : Math.max(0.01, baseEntryUsd * gov.multiplier);
+  const finalEntryUsd = Math.max(0.01, Math.min(scaledEntryUsd, entMaxUsd, hardMaxUsd));
   const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
 
   const position = await fetchBtcPosition(ctx);
@@ -868,25 +1084,43 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     alg: algFor(ctx),
     gates,
     entryQuoteUsd,
-    caps: { hardMaxUsd, entMaxUsd, envEntryUsd, finalEntryUsd },
+    caps: { hardMaxUsd, entMaxUsd, envEntryUsd, baseEntryUsd, scaledEntryUsd, finalEntryUsd },
+    equityGov: gov,
+    defense: { DEFENSE_CONF, DEFENSE_MULT },
     maker: { makerEntries, makerExits, mOffset, mTimeout, mAllowIoc },
-    trail: { trailMinHoldMin, trailVolFloorBps, trailOffsetBpsBase, trailArmBps, profitTargetBps },
+    trail: {
+      trailMinHoldMin,
+      trailVolFloorBps,
+      trailOffsetBpsBase,
+      trailArmBps,
+      profitTargetBps,
+    },
     hardStop: { hardStopEnabled, hardStopLossBps },
     reconStatus,
   });
 
-  if (!gates.PULSE_ENTITLED) return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position, reconStatus };
-  if (!gates.LIVE_ALLOWED) return { ok: true, mode: "NOOP_GATES", gates, position, reconStatus };
+  if (!gates.PULSE_ENTITLED)
+    return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position, reconStatus, equityGov: gov };
+  if (!gates.LIVE_ALLOWED)
+    return { ok: true, mode: "NOOP_GATES", gates, position, reconStatus, equityGov: gov };
 
   if (!(position as any)?.ok) {
-    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position, reconStatus };
+    return {
+      ok: false,
+      mode: "BLOCKED",
+      gates,
+      error: "cannot_read_position",
+      position,
+      reconStatus,
+      equityGov: gov,
+    };
   }
 
   // cooldown + re-entry guard (post-exit anti-churn)
   const lastBuy = await fetchLastBuyFill(ctx);
   const lastFill = await fetchLastFillAny(ctx);
 
-  const lastFillIso = lastFill.ok ? lastFill.time : (lastBuy.ok ? lastBuy.entryTime : null);
+  const lastFillIso = lastFill.ok ? lastFill.time : lastBuy.ok ? lastBuy.entryTime : null;
   const sinceMs = msSince(lastFillIso);
 
   const cooldownOk = sinceMs >= cooldownMs;
@@ -906,23 +1140,42 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     reentryBlocked,
   };
 
-  // ref price
-  const spot = await fetchSpotPrice(ctx);
-  let refPrice = spot.ok ? spot.price : 0;
-  if (!Number.isFinite(refPrice) || refPrice <= 0) refPrice = 0;
-
   // ---------------- ENTRY ----------------
   if (!(position as any).has_position) {
-    if (!entriesEnabled) return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown, reconStatus };
-    if (!cooldownOk) return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown, reconStatus };
+    if (!entriesEnabled)
+      return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown, reconStatus, equityGov: gov };
+    if (!cooldownOk)
+      return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
+    if (reentryBlocked)
+      return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
 
-    if (reentryBlocked) {
-      return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown, reconStatus };
+    // Defense Mode: only allow entries if Recon confidence >= DEFENSE_CONF AND recon allows entry
+    if (gov.defense) {
+      const conf = Number(reconStatus.confidence ?? 0);
+      const okDefense =
+        Number.isFinite(conf) && conf >= DEFENSE_CONF && reconStatus.entryAllowed;
+      if (!okDefense) {
+        log(runId, "DEFENSE_BLOCK_ENTRY", { ddPct: gov.ddPct, reqConf: DEFENSE_CONF, reconStatus });
+        return {
+          ok: true,
+          mode: "NO_POSITION_DEFENSE_BLOCK",
+          gates,
+          position,
+          cooldown,
+          reconStatus,
+          equityGov: gov,
+        };
+      }
     }
 
     // Recon gate (ENTRY ONLY) — fail-open already handled in reconStatus.entryAllowed
     if (!reconStatus.entryAllowed) {
-      log(runId, "RECON_BLOCK_ENTRY", { reason: reconStatus.reason, regime: reconStatus.regime, conf: reconStatus.confidence, side: reconStatus.side });
+      log(runId, "RECON_BLOCK_ENTRY", {
+        reason: reconStatus.reason,
+        regime: reconStatus.regime,
+        conf: reconStatus.confidence,
+        side: reconStatus.side,
+      });
       return {
         ok: true,
         mode: "NO_POSITION_RECON_BLOCK",
@@ -930,6 +1183,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         position,
         cooldown,
         reconStatus,
+        equityGov: gov,
       };
     }
 
@@ -941,11 +1195,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         position,
         cooldown,
         reconStatus,
+        equityGov: gov,
         would_buy_quote_usd: entryQuoteUsd,
       };
     }
 
-    if (!makerEntries || !refPrice) {
+    if (!makerEntries || !spot.ok || !refPrice) {
       const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
       await writeTradeLog({
         t: nowIso(),
@@ -957,10 +1212,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: buy.status,
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
-        caps: { hardMaxUsd, entMaxUsd, envEntryUsd, finalEntryUsd },
+        caps: { hardMaxUsd, entMaxUsd, envEntryUsd, baseEntryUsd, scaledEntryUsd, finalEntryUsd },
+        equityGov: gov,
         reconStatus,
       });
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, reconStatus, buy };
+      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, reconStatus, equityGov: gov, buy };
     }
 
     const attempt = await makerFirstBuy(ctx, entryQuoteUsd, refPrice);
@@ -977,6 +1233,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           position,
           cooldown,
           reconStatus,
+          equityGov: gov,
           error: "maker_order_failed",
         };
       }
@@ -992,9 +1249,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: buy.status,
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
+        equityGov: gov,
         reconStatus,
       });
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, buy };
+      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, buy };
     }
 
     // poll maker order
@@ -1024,13 +1282,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: attempt.maker.status,
         user_id: ctx.user_id,
         raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
+        equityGov: gov,
         reconStatus,
       });
-      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, maker_order_id: makerOrderId };
+      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
     }
 
     if (!mAllowIoc) {
-      return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, maker_order_id: makerOrderId };
+      return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
     }
 
     const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
@@ -1044,26 +1303,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       status: buy.status,
       user_id: ctx.user_id,
       raw: buy.json ?? buy.text ?? null,
+      equityGov: gov,
       reconStatus,
     });
-    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, buy };
+    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, buy };
   }
 
   // ---------------- EXIT ----------------
   if (!exitsEnabled) {
     log(runId, "EXIT_DECISION", { reason: "exits_disabled", pnlBps: null });
-    return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown, reconStatus };
+    return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown, reconStatus, equityGov: gov };
   }
 
   if (!lastBuy.ok) {
     log(runId, "EXIT_DECISION", { reason: "blocked_cannot_read_entry", pnlBps: null });
-    return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, error: "cannot_read_entry", lastBuy };
+    return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, error: "cannot_read_entry", lastBuy };
   }
 
   const peak = await fetchPeakWindowWithVol(ctx);
   if (!peak.ok) {
     log(runId, "EXIT_DECISION", { reason: "blocked_cannot_read_peak", pnlBps: null });
-    return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, error: "cannot_read_peak", peak };
+    return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, error: "cannot_read_peak", peak };
   }
 
   const entryPrice = lastBuy.entryPrice;
@@ -1145,12 +1405,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     minHoldOk,
   });
 
-  if (!anyExit) return { ok: true, mode: "HOLD", gates, position, cooldown, reconStatus, decision };
+  if (!anyExit)
+    return { ok: true, mode: "HOLD", gates, position, cooldown, reconStatus, equityGov: gov, decision };
 
   const baseSize = fmtBaseSize((position as any).base_available);
 
   if (exitsDryRun) {
-    return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, reconStatus, decision, would_sell_base_size: baseSize };
+    return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, reconStatus, equityGov: gov, decision, would_sell_base_size: baseSize };
   }
 
   // Exits default IOC for reliability (maker exits optional)
@@ -1167,16 +1428,17 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
+      equityGov: gov,
       reconStatus,
     });
-    return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, reconStatus, decision, sell, reason };
+    return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
   }
 
   // Maker exit path if explicitly enabled
   const exitRef = current;
   if (!Number.isFinite(exitRef) || exitRef <= 0) {
     if (!mAllowIoc) {
-      return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, decision, error: "no_ref_price_for_exit" };
+      return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, decision, error: "no_ref_price_for_exit" };
     }
 
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
@@ -1191,9 +1453,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
+      equityGov: gov,
       reconStatus,
     });
-    return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, reconStatus, decision, sell, reason };
+    return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
   }
 
   const attempt = await makerFirstSell(ctx, baseSize, exitRef);
@@ -1203,7 +1466,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   if (!makerOk || !makerOrderId) {
     if (!mAllowIoc) {
-      return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, reconStatus, decision, reason, error: "maker_exit_failed" };
+      return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, error: "maker_exit_failed" };
     }
 
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
@@ -1218,9 +1481,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
+      equityGov: gov,
       reconStatus,
     });
-    return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, reconStatus, decision, sell, reason };
+    return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
   }
 
   const deadline = Date.now() + mTimeout;
@@ -1250,12 +1514,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus, decision },
       reason,
+      equityGov: gov,
       reconStatus,
     });
-    return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, decision, reason, maker_order_id: makerOrderId };
+    return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
   }
 
-  if (!mAllowIoc) return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, decision, reason, maker_order_id: makerOrderId };
+  if (!mAllowIoc)
+    return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
 
   const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
   await writeTradeLog({
@@ -1269,9 +1535,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     user_id: ctx.user_id,
     raw: { resp: sell.json ?? sell.text ?? null, decision },
     reason,
+    equityGov: gov,
     reconStatus,
   });
-  return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, decision, sell, reason };
+  return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
 }
 
 // ---------- orchestrator ----------
@@ -1330,6 +1597,7 @@ async function runForAllUsers(masterRunId: string) {
         cooldown: (out as any)?.cooldown,
         decision: (out as any)?.decision,
         reconStatus: (out as any)?.reconStatus,
+        equityGov: (out as any)?.equityGov,
         reason: (out as any)?.reason,
         error: (out as any)?.error,
       });
@@ -1368,11 +1636,20 @@ export async function GET(req: Request) {
     ? (crypto as any).randomUUID()
     : crypto.randomBytes(8).toString("hex");
 
-  log(masterRunId, "REQUEST", { method: "GET", url: req.url, action, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "REQUEST", {
+    method: "GET",
+    url: req.url,
+    action,
+    onlyUserId: ONLY_USER_ID,
+  });
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+    onlyUserId: ONLY_USER_ID,
+  });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
@@ -1396,7 +1673,11 @@ export async function POST(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+    onlyUserId: ONLY_USER_ID,
+  });
 
   return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
 }
