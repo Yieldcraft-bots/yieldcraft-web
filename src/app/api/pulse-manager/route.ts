@@ -7,6 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 
 const PRODUCT_ID = "BTC-USD";
+const BOT_NAME = "pulse";
 
 // If set, we ONLY run for this user_id (core fund safety gate)
 const ONLY_USER_ID = (process.env.PULSE_ONLY_USER_ID || "").trim() || null;
@@ -59,6 +60,23 @@ function safeJsonParse(text: string) {
     return null;
   }
 }
+function nowIso() {
+  return new Date().toISOString();
+}
+function msSince(iso?: string | null) {
+  if (!iso) return Number.POSITIVE_INFINITY;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
+  return Date.now() - t;
+}
+async function sleep(ms: number) {
+  await new Promise((r) => setTimeout(r, ms));
+}
+function shortKeyName(s: string) {
+  if (!s) return "";
+  const last = s.slice(-6);
+  return `…${last}`;
+}
 function minPositionBaseBtc() {
   const raw = (process.env.PULSE_MIN_POSITION_BASE_BTC || "").trim();
   const n = raw ? Number(raw) : NaN;
@@ -77,23 +95,6 @@ function fmtPriceUsd(x: number) {
   const v = Math.max(0, x);
   return v.toFixed(2);
 }
-function nowIso() {
-  return new Date().toISOString();
-}
-function msSince(iso?: string | null) {
-  if (!iso) return Number.POSITIVE_INFINITY;
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return Number.POSITIVE_INFINITY;
-  return Date.now() - t;
-}
-async function sleep(ms: number) {
-  await new Promise((r) => setTimeout(r, ms));
-}
-function shortKeyName(s: string) {
-  if (!s) return "";
-  const last = s.slice(-6);
-  return `…${last}`;
-}
 
 // ---------- logging ----------
 function log(runId: string, event: string, data?: any) {
@@ -108,35 +109,79 @@ function sb() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-async function writeTradeLog(row: any) {
-  try {
-    const client = sb();
-    const { error } = await client.from("trade_logs").insert([row]);
-    if (error) {
-      console.log(
-        "[pulse-manager]",
-        JSON.stringify({
-          t: nowIso(),
-          event: "DB_WRITE_ERR",
-          data: String((error as any)?.message || error),
-        })
-      );
-    } else {
+/**
+ * Inserts into trade_logs with best-effort schema compatibility:
+ * - Always uses created_at (not "t")
+ * - If Supabase says "column X does not exist", we delete X and retry.
+ */
+async function writeTradeLog(row: Record<string, any>) {
+  const client = sb();
+
+  // Force table-friendly timestamp column name
+  const payload: Record<string, any> = {
+    created_at: row.created_at || nowIso(),
+    ...row,
+  };
+  delete payload.t; // never send "t" (common cause of failures)
+
+  // retry loop: strip unknown columns (up to 8 times)
+  let attempt = 0;
+  let lastErr: any = null;
+
+  while (attempt < 8) {
+    attempt++;
+    const { error } = await client.from("trade_logs").insert([payload]);
+
+    if (!error) {
       console.log(
         "[pulse-manager]",
         JSON.stringify({ t: nowIso(), event: "DB_WRITE_OK" })
       );
+      return;
     }
-  } catch (e: any) {
+
+    lastErr = error;
+    const msg = String((error as any)?.message || error);
+
     console.log(
       "[pulse-manager]",
       JSON.stringify({
         t: nowIso(),
-        event: "DB_WRITE_EX",
-        data: String(e?.message || e),
+        event: "DB_WRITE_ERR",
+        attempt,
+        data: msg,
       })
     );
+
+    // Example: column "equity_gov" of relation "trade_logs" does not exist
+    const m = msg.match(/column\s+"([^"]+)"\s+of\s+relation\s+"trade_logs"\s+does\s+not\s+exist/i);
+    if (m && m[1]) {
+      const badCol = m[1];
+      delete payload[badCol];
+      continue; // retry after stripping column
+    }
+
+    // Some Supabase errors come formatted slightly differently:
+    const m2 = msg.match(/column\s+"([^"]+)"\s+does\s+not\s+exist/i);
+    if (m2 && m2[1]) {
+      const badCol = m2[1];
+      delete payload[badCol];
+      continue;
+    }
+
+    // Not a column-mismatch error -> stop retrying
+    break;
   }
+
+  // final exception trace (non-fatal)
+  console.log(
+    "[pulse-manager]",
+    JSON.stringify({
+      t: nowIso(),
+      event: "DB_WRITE_GAVE_UP",
+      data: String((lastErr as any)?.message || lastErr),
+    })
+  );
 }
 
 // ---------- auth ----------
@@ -172,7 +217,7 @@ function looksValidKeyRow(r: any): r is KeyRow {
   return !!(
     cleanString(r?.user_id) &&
     cleanString(r?.api_key_name).startsWith("organizations/") &&
-    cleanString(r?.private_key).includes("BEGIN")
+    cleanString(r?.private_key).length > 0
   );
 }
 
@@ -303,9 +348,9 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
 
 // ---------- Recon gate (ENTRY ONLY enforcement; status always visible) ----------
 type ReconSignal = {
-  side?: string; // "BUY" | "SELL"
-  confidence?: number; // 0..1
-  regime?: string; // e.g. "bullish_trending", "bearish_trending", "chop", etc
+  side?: string;
+  confidence?: number;
+  regime?: string;
   state?: string;
   marketRegime?: string;
   score?: number;
@@ -430,9 +475,6 @@ async function fetchReconDecision(): Promise<ReconDecision> {
     const confident = confidence !== null && confidence >= minConf;
     const isChop = regimeRaw ? looksChoppy(regimeRaw) : false;
 
-    // Block entries ONLY when confident and:
-    // - signal is SELL, OR
-    // - chopBlock enabled and regime is choppy
     const blocksOnSell = confident && side === "SELL";
     const blocksOnChop = confident && chopBlock && isChop;
 
@@ -442,8 +484,8 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       entryAllowed
         ? "recon_allows_entries"
         : blocksOnSell
-          ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
-          : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
+        ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
+        : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
 
     return {
       enabled,
@@ -526,7 +568,7 @@ async function fetchBtcPosition(ctx: Ctx) {
   };
 }
 
-// ---------- equity governor (A): entry sizing + defense gating ----------
+// ---------- equity governor ----------
 type EquityGov = {
   enabled: boolean;
   ok: boolean;
@@ -561,12 +603,11 @@ async function fetchUsdAndBtcBalances(ctx: Ctx): Promise<
 }
 
 function computeMultiplierFromDdPct(ddPct: number) {
-  // 100-year curve (smooth throttle)
   if (ddPct < 2) return 1.0;
   if (ddPct < 3) return 0.8;
   if (ddPct < 4) return 0.65;
   if (ddPct < 5) return 0.4;
-  return 1.0; // Defense mode uses gating, not panic-freeze
+  return 1.0; // defense mode gating handles the rest
 }
 
 async function getOrInitEquityState(user_id: string) {
@@ -665,7 +706,6 @@ async function computeEquityGovernor(
     const prevPeak = Number.isFinite(state.peak) ? state.peak : 0;
     const peakEquityUsd = Math.max(prevPeak, equityUsd);
 
-    // best-effort write
     await upsertEquityState(ctx.user_id, peakEquityUsd, equityUsd);
 
     const ddPct =
@@ -1035,19 +1075,20 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   if (!Number.isFinite(refPrice) || refPrice <= 0) refPrice = 0;
 
   // Equity governor (entry sizing throttle + defense flag). FAIL OPEN.
-  const gov = refPrice > 0
-    ? await computeEquityGovernor(ctx, refPrice)
-    : {
-        enabled: truthyDefault(process.env.EQUITY_GOV_ENABLED, true),
-        ok: false,
-        source: "error" as const,
-        equityUsd: null,
-        peakEquityUsd: null,
-        ddPct: null,
-        multiplier: 1.0,
-        defense: false,
-        reason: "missing_ref_price_for_equity",
-      };
+  const gov: EquityGov =
+    refPrice > 0
+      ? await computeEquityGovernor(ctx, refPrice)
+      : {
+          enabled: truthyDefault(process.env.EQUITY_GOV_ENABLED, true),
+          ok: false,
+          source: "error",
+          equityUsd: null,
+          peakEquityUsd: null,
+          ddPct: null,
+          multiplier: 1.0,
+          defense: false,
+          reason: "missing_ref_price_for_equity",
+        };
 
   // Entry USD: bounded by caps, then scaled by gov.multiplier, then bounded again
   const baseEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
@@ -1065,14 +1106,23 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     entryQuoteUsd,
     caps: { hardMaxUsd, entMaxUsd, envEntryUsd, baseEntryUsd, scaledEntryUsd, finalEntryUsd },
     equityGov: gov,
-    maker: { makerEntries, makerExits, makerOffsetBps: makerOffsetBps(), makerTimeoutMs: mTimeout, makerAllowIocFallback: mAllowIoc },
+    maker: {
+      makerEntries,
+      makerExits,
+      makerOffsetBps: makerOffsetBps(),
+      makerTimeoutMs: mTimeout,
+      makerAllowIocFallback: mAllowIoc,
+    },
     trail: { trailMinHoldMin, trailVolFloorBps, trailOffsetBpsBase, trailArmBps, profitTargetBps },
     hardStop: { hardStopEnabled, hardStopLossBps },
     reconStatus,
   });
 
-  if (!gates.PULSE_ENTITLED) return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position, reconStatus, equityGov: gov };
-  if (!gates.LIVE_ALLOWED) return { ok: true, mode: "NOOP_GATES", gates, position, reconStatus, equityGov: gov };
+  if (!gates.PULSE_ENTITLED)
+    return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position, reconStatus, equityGov: gov };
+
+  if (!gates.LIVE_ALLOWED)
+    return { ok: true, mode: "NOOP_GATES", gates, position, reconStatus, equityGov: gov };
 
   if (!(position as any)?.ok) {
     return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position, reconStatus, equityGov: gov };
@@ -1082,15 +1132,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const lastBuy = await fetchLastBuyFill(ctx);
   const lastFill = await fetchLastFillAny(ctx);
 
-  const lastFillIso = lastFill.ok ? lastFill.time : (lastBuy.ok ? lastBuy.entryTime : null);
+  const lastFillIso = lastFill.ok ? lastFill.time : lastBuy.ok ? lastBuy.entryTime : null;
   const sinceMs = msSince(lastFillIso);
 
   const cooldownOk = sinceMs >= cooldownMs;
 
   // block re-entry after a SELL for N minutes
   const reentryCooldownMs = num(process.env.REENTRY_COOLDOWN_MS, 10 * 60_000);
-  const reentryBlocked =
-    lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
+  const reentryBlocked = lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
 
   const cooldown = {
     lastFillIso,
@@ -1104,9 +1153,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   // ---------------- ENTRY ----------------
   if (!(position as any).has_position) {
-    if (!entriesEnabled) return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown, reconStatus, equityGov: gov };
-    if (!cooldownOk) return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
-    if (reentryBlocked) return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
+    if (!entriesEnabled)
+      return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown, reconStatus, equityGov: gov };
+
+    if (!cooldownOk)
+      return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
+
+    if (reentryBlocked)
+      return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
 
     // Equity defense mode: only allow entry if Recon confidence >= DEFENSE_CONF AND recon allows entry
     if (gov.defense) {
@@ -1120,7 +1174,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     // Recon gate (ENTRY ONLY) — already fail-open when errors occur
     if (!reconStatus.entryAllowed) {
-      log(runId, "RECON_BLOCK_ENTRY", { reason: reconStatus.reason, regime: reconStatus.regime, conf: reconStatus.confidence, side: reconStatus.side });
+      log(runId, "RECON_BLOCK_ENTRY", {
+        reason: reconStatus.reason,
+        regime: reconStatus.regime,
+        conf: reconStatus.confidence,
+        side: reconStatus.side,
+      });
       return { ok: true, mode: "NO_POSITION_RECON_BLOCK", gates, position, cooldown, reconStatus, equityGov: gov };
     }
 
@@ -1131,20 +1190,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     // If maker entries disabled or no ref price: BUY IOC
     if (!makerEntries || !refPrice) {
       const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
+
       await writeTradeLog({
-        t: nowIso(),
-        run_id: runId,
-        product_id: PRODUCT_ID,
+        created_at: nowIso(),
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
         side: "BUY",
+        quote_size: Number(entryQuoteUsd),
+        price: refPrice || null,
+
+        user_id: ctx.user_id,
+        run_id: runId,
         mode: "ENTRY_BUY_IOC",
+        reason: "entry",
+        decision: null,
+        recon_status: reconStatus,
+        equity_gov: gov,
+
         ok: buy.ok,
         status: buy.status,
-        user_id: ctx.user_id,
-        raw: buy.json ?? buy.text ?? null,
-        caps: { hardMaxUsd, entMaxUsd, envEntryUsd, baseEntryUsd, scaledEntryUsd, finalEntryUsd },
-        equityGov: gov,
-        reconStatus,
       });
+
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, reconStatus, equityGov: gov, buy };
     }
 
@@ -1160,19 +1226,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       }
 
       const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
+
       await writeTradeLog({
-        t: nowIso(),
-        run_id: runId,
-        product_id: PRODUCT_ID,
+        created_at: nowIso(),
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
         side: "BUY",
+        quote_size: Number(entryQuoteUsd),
+        price: refPrice || null,
+
+        user_id: ctx.user_id,
+        run_id: runId,
         mode: "ENTRY_BUY_IOC_FALLBACK",
+        reason: "maker_failed_fallback_ioc",
+        decision: { makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice } },
+        recon_status: reconStatus,
+        equity_gov: gov,
+
         ok: buy.ok,
         status: buy.status,
-        user_id: ctx.user_id,
-        raw: buy.json ?? buy.text ?? null,
-        equityGov: gov,
-        reconStatus,
       });
+
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, buy };
     }
 
@@ -1194,18 +1268,26 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     if (filled > 0 || done) {
       await writeTradeLog({
-        t: nowIso(),
-        run_id: runId,
-        product_id: PRODUCT_ID,
+        created_at: nowIso(),
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
         side: "BUY",
-        mode: "ENTRY_BUY_MAKER",
-        ok: true,
-        status: attempt.maker.status,
+        quote_size: Number(entryQuoteUsd),
+        base_size: attempt.baseSize ? Number(attempt.baseSize) : null,
+        price: attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null,
+
         user_id: ctx.user_id,
-        raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
-        equityGov: gov,
-        reconStatus,
+        run_id: runId,
+        mode: "ENTRY_BUY_MAKER",
+        reason: "maker_filled_or_done",
+        decision: { maker_order_id: makerOrderId, status: lastStatus },
+        recon_status: reconStatus,
+        equity_gov: gov,
+
+        ok: true,
+        status: 200,
       });
+
       return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
     }
 
@@ -1214,19 +1296,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     }
 
     const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
+
     await writeTradeLog({
-      t: nowIso(),
-      run_id: runId,
-      product_id: PRODUCT_ID,
+      created_at: nowIso(),
+      bot: BOT_NAME,
+      symbol: PRODUCT_ID,
       side: "BUY",
+      quote_size: Number(entryQuoteUsd),
+      price: refPrice || null,
+
+      user_id: ctx.user_id,
+      run_id: runId,
       mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT",
+      reason: "maker_timeout_fallback_ioc",
+      decision: { maker_order_id: makerOrderId, status: lastStatus },
+      recon_status: reconStatus,
+      equity_gov: gov,
+
       ok: buy.ok,
       status: buy.status,
-      user_id: ctx.user_id,
-      raw: buy.json ?? buy.text ?? null,
-      equityGov: gov,
-      reconStatus,
     });
+
     return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, buy };
   }
 
@@ -1337,20 +1427,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   // Exits default IOC for reliability
   if (!makerExits) {
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+
     await writeTradeLog({
-      t: nowIso(),
-      run_id: runId,
-      product_id: PRODUCT_ID,
+      created_at: nowIso(),
+      bot: BOT_NAME,
+      symbol: PRODUCT_ID,
       side: "SELL",
+      base_size: Number(baseSize),
+      price: current || null,
+
+      user_id: ctx.user_id,
+      run_id: runId,
       mode: "EXIT_SELL_IOC",
+      reason,
+      decision,
+      recon_status: reconStatus,
+      equity_gov: gov,
+
       ok: sell.ok,
       status: sell.status,
-      user_id: ctx.user_id,
-      raw: { resp: sell.json ?? sell.text ?? null, decision },
-      reason,
-      equityGov: gov,
-      reconStatus,
     });
+
     return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
   }
 
@@ -1362,20 +1459,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     }
 
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+
     await writeTradeLog({
-      t: nowIso(),
-      run_id: runId,
-      product_id: PRODUCT_ID,
+      created_at: nowIso(),
+      bot: BOT_NAME,
+      symbol: PRODUCT_ID,
       side: "SELL",
+      base_size: Number(baseSize),
+      price: null,
+
+      user_id: ctx.user_id,
+      run_id: runId,
       mode: "EXIT_SELL_IOC_FALLBACK_NO_REF",
+      reason,
+      decision,
+      recon_status: reconStatus,
+      equity_gov: gov,
+
       ok: sell.ok,
       status: sell.status,
-      user_id: ctx.user_id,
-      raw: { resp: sell.json ?? sell.text ?? null, decision },
-      reason,
-      equityGov: gov,
-      reconStatus,
     });
+
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
   }
 
@@ -1390,20 +1494,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     }
 
     const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+
     await writeTradeLog({
-      t: nowIso(),
-      run_id: runId,
-      product_id: PRODUCT_ID,
+      created_at: nowIso(),
+      bot: BOT_NAME,
+      symbol: PRODUCT_ID,
       side: "SELL",
+      base_size: Number(baseSize),
+      price: exitRef || null,
+
+      user_id: ctx.user_id,
+      run_id: runId,
       mode: "EXIT_SELL_IOC_FALLBACK",
+      reason,
+      decision: { ...decision, makerAttempt: { limitPrice: attempt.limitPrice, maker_order_id: makerOrderId } },
+      recon_status: reconStatus,
+      equity_gov: gov,
+
       ok: sell.ok,
       status: sell.status,
-      user_id: ctx.user_id,
-      raw: { resp: sell.json ?? sell.text ?? null, decision },
-      reason,
-      equityGov: gov,
-      reconStatus,
     });
+
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
   }
 
@@ -1424,39 +1535,52 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   if (filled > 0 || done) {
     await writeTradeLog({
-      t: nowIso(),
-      run_id: runId,
-      product_id: PRODUCT_ID,
+      created_at: nowIso(),
+      bot: BOT_NAME,
+      symbol: PRODUCT_ID,
       side: "SELL",
-      mode: "EXIT_SELL_MAKER",
-      ok: true,
-      status: attempt.maker.status,
+      base_size: Number(baseSize),
+      price: attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null,
+
       user_id: ctx.user_id,
-      raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus, decision },
+      run_id: runId,
+      mode: "EXIT_SELL_MAKER",
       reason,
-      equityGov: gov,
-      reconStatus,
+      decision: { ...decision, maker_order_id: makerOrderId, status: lastStatus },
+      recon_status: reconStatus,
+      equity_gov: gov,
+
+      ok: true,
+      status: 200,
     });
+
     return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
   }
 
   if (!mAllowIoc) return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
 
   const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+
   await writeTradeLog({
-    t: nowIso(),
-    run_id: runId,
-    product_id: PRODUCT_ID,
+    created_at: nowIso(),
+    bot: BOT_NAME,
+    symbol: PRODUCT_ID,
     side: "SELL",
+    base_size: Number(baseSize),
+    price: exitRef || null,
+
+    user_id: ctx.user_id,
+    run_id: runId,
     mode: "EXIT_SELL_IOC_AFTER_TIMEOUT",
+    reason,
+    decision: { ...decision, maker_order_id: makerOrderId, status: lastStatus },
+    recon_status: reconStatus,
+    equity_gov: gov,
+
     ok: sell.ok,
     status: sell.status,
-    user_id: ctx.user_id,
-    raw: { resp: sell.json ?? sell.text ?? null, decision },
-    reason,
-    equityGov: gov,
-    reconStatus,
   });
+
   return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
 }
 
