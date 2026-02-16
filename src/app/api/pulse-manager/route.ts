@@ -301,14 +301,18 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
   return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
 }
 
-// ---------- Recon gate helpers (ENTRY ONLY) ----------
+// ---------- Recon gate helpers (ENTRY ONLY enforcement, status always visible) ----------
 type ReconSignal = {
-  confidence?: number; // 0..1
-  regime?: string;     // "trend" | "rotation" | "compression" | "expansion" | "chop" | etc
+  side?: string;        // "BUY" | "SELL"
+  confidence?: number;  // 0..1
+  regime?: string;      // e.g. "bullish_trending", "bearish_trending", "chop", etc
+
+  // optional alternate keys for future models
   state?: string;
   marketRegime?: string;
   score?: number;
   conf?: number;
+
   [k: string]: any;
 };
 
@@ -321,8 +325,11 @@ type ReconDecision = {
   ok: boolean;
   source: "disabled" | "url" | "error";
   regime: string | null;
+  side: "BUY" | "SELL" | null;
   confidence: number | null;
-  entryAllowed: boolean; // <-- only enforcement on ENTRIES
+
+  // the ONLY enforcement we use (on entries)
+  entryAllowed: boolean;
   reason: string;
 };
 
@@ -331,26 +338,15 @@ function parseBool(v: any, def = false) {
   return ["1", "true", "yes", "on"].includes(String(v).toLowerCase());
 }
 
-function makeReconStatusOnly(): ReconDecision {
-  const enabled = parseBool(process.env.RECON_ENABLED, false);
-  const mode = (process.env.RECON_MODE || "OFF").trim();
-  const chopBlock = parseBool(process.env.RECON_CHOP_BLOCK, false);
-  const minConf = num(process.env.RECON_MIN_CONF, 0.65);
-  const url = (process.env.RECON_SIGNAL_URL || "").trim();
-
-  return {
-    enabled,
-    mode,
-    minConf,
-    chopBlock,
-    urlSet: !!url,
-    ok: true,
-    source: enabled && mode === "GATE_ENTRIES_ONLY" ? "url" : "disabled",
-    regime: null,
-    confidence: null,
-    entryAllowed: true,
-    reason: "status_only",
-  };
+function looksChoppy(regime: string) {
+  const r = (regime || "").toLowerCase();
+  return (
+    r.includes("chop") ||
+    r.includes("rotation") ||
+    r.includes("range") ||
+    r.includes("compression") ||
+    r.includes("sideways")
+  );
 }
 
 async function fetchReconDecision(): Promise<ReconDecision> {
@@ -361,7 +357,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
   const url = (process.env.RECON_SIGNAL_URL || "").trim();
   const timeoutMs = num(process.env.RECON_TIMEOUT_MS, 2500);
 
-  // If not enabled or not in gate mode, Recon is effectively off
+  // If recon is off, do nothing
   if (!enabled || mode !== "GATE_ENTRIES_ONLY") {
     return {
       enabled,
@@ -372,12 +368,14 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       ok: true,
       source: "disabled",
       regime: null,
+      side: null,
       confidence: null,
       entryAllowed: true,
       reason: "recon_disabled_or_mode_off",
     };
   }
 
+  // Missing URL -> fail open
   if (!url) {
     return {
       enabled,
@@ -388,8 +386,9 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       ok: false,
       source: "error",
       regime: null,
+      side: null,
       confidence: null,
-      entryAllowed: true, // FAIL OPEN
+      entryAllowed: true,
       reason: "missing_RECON_SIGNAL_URL",
     };
   }
@@ -404,6 +403,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       headers: { Accept: "application/json" },
       signal: ctrl.signal,
     });
+
     const text = await res.text();
     const j = safeJsonParse(text) as ReconSignal | null;
 
@@ -417,49 +417,41 @@ async function fetchReconDecision(): Promise<ReconDecision> {
         ok: false,
         source: "error",
         regime: null,
+        side: null,
         confidence: null,
         entryAllowed: true, // FAIL OPEN
         reason: `recon_bad_response_status_${res.status}`,
       };
     }
 
-    const regimeRaw = String((j.regime ?? j.state ?? j.marketRegime ?? "") || "")
+    const regimeRaw = String(j.regime ?? j.state ?? j.marketRegime ?? "")
       .trim()
       .toLowerCase();
+
+    const sideRaw = String(j.side || "").trim().toUpperCase();
+    const side: "BUY" | "SELL" | null =
+      sideRaw === "BUY" ? "BUY" : sideRaw === "SELL" ? "SELL" : null;
 
     const confRaw = j.confidence ?? j.conf ?? j.score;
     const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
 
-    // If we can't interpret confidence, FAIL OPEN (don’t block entries)
-    if (confidence === null) {
-      return {
-        enabled,
-        mode,
-        minConf,
-        chopBlock,
-        urlSet: true,
-        ok: true,
-        source: "url",
-        regime: regimeRaw || null,
-        confidence: null,
-        entryAllowed: true,
-        reason: "recon_missing_confidence_fail_open",
-      };
-    }
+    const confident = confidence !== null && confidence >= minConf;
+    const isChop = regimeRaw ? looksChoppy(regimeRaw) : false;
 
-    const isChop =
-      regimeRaw.includes("chop") ||
-      regimeRaw.includes("rotation") ||
-      regimeRaw.includes("range") ||
-      regimeRaw.includes("compression");
+    // Entry is blocked ONLY when confident and:
+    // - signal is SELL (don't open a BUY against it), OR
+    // - chopBlock is ON and regime looks choppy
+    const blocksOnSell = confident && side === "SELL";
+    const blocksOnChop = confident && chopBlock && isChop;
 
-    // ENFORCEMENT:
-    // - must meet min confidence
-    // - if chopBlock=true, block known chop regimes even if confident
-    const confident = confidence >= minConf;
+    const entryAllowed = !(blocksOnSell || blocksOnChop);
 
-    let entryAllowed = confident;
-    if (entryAllowed && chopBlock && isChop) entryAllowed = false;
+    const why =
+      entryAllowed
+        ? "recon_allows_entries"
+        : blocksOnSell
+          ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
+          : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
 
     return {
       enabled,
@@ -470,13 +462,10 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       ok: true,
       source: "url",
       regime: regimeRaw || null,
+      side,
       confidence,
       entryAllowed,
-      reason: entryAllowed
-        ? "recon_allows_entries"
-        : !confident
-          ? `recon_blocks_low_conf_${confidence.toFixed(2)}_min_${minConf.toFixed(2)}`
-          : `recon_blocks_chop_${regimeRaw}_conf_${confidence.toFixed(2)}`,
+      reason: why,
     };
   } catch (e: any) {
     return {
@@ -488,6 +477,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       ok: false,
       source: "error",
       regime: null,
+      side: null,
       confidence: null,
       entryAllowed: true, // FAIL OPEN
       reason: `recon_fetch_error_${String(e?.name || "unknown")}`,
@@ -696,11 +686,14 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
     ctx,
     `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
   );
-  if (!r.ok) return { ok: false as const, status: r.status, raw: r.json ?? r.text };
+  if (!r.ok)
+    return { ok: false as const, status: r.status, raw: r.json ?? r.text };
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(o?.filled_size || o?.filled_value || o?.filled_quantity || 0);
+  const filled = Number(
+    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
+  );
   const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(status);
 
   return { ok: true as const, status, filled, done, raw: r.json };
@@ -718,13 +711,22 @@ async function placeLimitPostOnly(
     product_id: PRODUCT_ID,
     side,
     order_configuration: {
-      limit_limit_gtc: { base_size: baseSize, limit_price: limitPrice, post_only: true },
+      limit_limit_gtc: {
+        base_size: baseSize,
+        limit_price: limitPrice,
+        post_only: true,
+      },
     },
   };
   return cbPost(ctx, path, payload);
 }
 
-async function placeMarketIoc(ctx: Ctx, side: "BUY" | "SELL", quoteUsd?: string, baseSize?: string) {
+async function placeMarketIoc(
+  ctx: Ctx,
+  side: "BUY" | "SELL",
+  quoteUsd?: string,
+  baseSize?: string
+) {
   const path = "/api/v3/brokerage/orders";
   const payload =
     side === "BUY"
@@ -856,8 +858,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  // Always surface Recon status (no network call) so you can confirm it's configured while holding
-  const reconStatus = makeReconStatusOnly();
+  // Fetch recon ONCE per run so we can show status even while holding.
+  // Enforcement happens only in the entry block below.
+  const reconStatus = await fetchReconDecision();
 
   log(runId, "START", {
     user_id: ctx.user_id,
@@ -869,13 +872,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     maker: { makerEntries, makerExits, mOffset, mTimeout, mAllowIoc },
     trail: { trailMinHoldMin, trailVolFloorBps, trailOffsetBpsBase, trailArmBps, profitTargetBps },
     hardStop: { hardStopEnabled, hardStopLossBps },
-    reconStatus: {
-      enabled: reconStatus.enabled,
-      mode: reconStatus.mode,
-      minConf: reconStatus.minConf,
-      chopBlock: reconStatus.chopBlock,
-      urlSet: reconStatus.urlSet,
-    },
+    reconStatus,
   });
 
   if (!gates.PULSE_ENTITLED) return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position, reconStatus };
@@ -923,19 +920,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown, reconStatus };
     }
 
-    // Recon gate (ENTRY ONLY) — fails open on error
-    const recon = await fetchReconDecision();
-    const reconBlocks = !recon.entryAllowed;
-
-    if (reconBlocks) {
-      log(runId, "RECON_BLOCK_ENTRY", { reason: recon.reason, regime: recon.regime, conf: recon.confidence });
+    // Recon gate (ENTRY ONLY) — fail-open already handled in reconStatus.entryAllowed
+    if (!reconStatus.entryAllowed) {
+      log(runId, "RECON_BLOCK_ENTRY", { reason: reconStatus.reason, regime: reconStatus.regime, conf: reconStatus.confidence, side: reconStatus.side });
       return {
         ok: true,
         mode: "NO_POSITION_RECON_BLOCK",
         gates,
         position,
         cooldown,
-        recon,
         reconStatus,
       };
     }
@@ -947,7 +940,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
-        recon,
         reconStatus,
         would_buy_quote_usd: entryQuoteUsd,
       };
@@ -966,9 +958,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
         caps: { hardMaxUsd, entMaxUsd, envEntryUsd, finalEntryUsd },
-        recon,
+        reconStatus,
       });
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, recon, reconStatus, buy };
+      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, reconStatus, buy };
     }
 
     const attempt = await makerFirstBuy(ctx, entryQuoteUsd, refPrice);
@@ -984,7 +976,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           gates,
           position,
           cooldown,
-          recon,
           reconStatus,
           error: "maker_order_failed",
         };
@@ -1001,9 +992,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: buy.status,
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
-        recon,
+        reconStatus,
       });
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, recon, reconStatus, buy };
+      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, buy };
     }
 
     // poll maker order
@@ -1033,13 +1024,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: attempt.maker.status,
         user_id: ctx.user_id,
         raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
-        recon,
+        reconStatus,
       });
-      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, recon, reconStatus, maker_order_id: makerOrderId };
+      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, maker_order_id: makerOrderId };
     }
 
     if (!mAllowIoc) {
-      return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, recon, reconStatus, maker_order_id: makerOrderId };
+      return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, maker_order_id: makerOrderId };
     }
 
     const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
@@ -1053,9 +1044,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       status: buy.status,
       user_id: ctx.user_id,
       raw: buy.json ?? buy.text ?? null,
-      recon,
+      reconStatus,
     });
-    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, recon, reconStatus, buy };
+    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, buy };
   }
 
   // ---------------- EXIT ----------------
@@ -1176,6 +1167,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
+      reconStatus,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, reconStatus, decision, sell, reason };
   }
@@ -1199,6 +1191,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
+      reconStatus,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, reconStatus, decision, sell, reason };
   }
@@ -1225,6 +1218,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
+      reconStatus,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, reconStatus, decision, sell, reason };
   }
@@ -1256,6 +1250,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       user_id: ctx.user_id,
       raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus, decision },
       reason,
+      reconStatus,
     });
     return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, decision, reason, maker_order_id: makerOrderId };
   }
@@ -1274,6 +1269,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     user_id: ctx.user_id,
     raw: { resp: sell.json ?? sell.text ?? null, decision },
     reason,
+    reconStatus,
   });
   return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, decision, sell, reason };
 }
@@ -1333,7 +1329,6 @@ async function runForAllUsers(masterRunId: string) {
         position: (out as any)?.position,
         cooldown: (out as any)?.cooldown,
         decision: (out as any)?.decision,
-        recon: (out as any)?.recon,
         reconStatus: (out as any)?.reconStatus,
         reason: (out as any)?.reason,
         error: (out as any)?.error,
