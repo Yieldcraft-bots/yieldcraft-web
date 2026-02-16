@@ -202,8 +202,6 @@ async function fetchEntitlements(user_id: string): Promise<Entitlements> {
   try {
     const client = sb();
 
-    // Try both table names (yours might be "entitlements")
-    // 1) user_entitlements
     let data: any = null;
     let error: any = null;
 
@@ -216,7 +214,6 @@ async function fetchEntitlements(user_id: string): Promise<Entitlements> {
     data = r1.data;
     error = r1.error;
 
-    // 2) fallback to entitlements if the first table doesn't exist / errors
     if (error) {
       const r2 = await client
         .from("entitlements")
@@ -304,20 +301,76 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
   return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
 }
 
-// ---------- Step 2: Recon gate helpers (SAFE: does nothing unless RECON_ENABLED=true) ----------
+// ---------- Recon gate helpers (ENTRY ONLY) ----------
 type ReconSignal = {
-  side?: string; // "BUY" | "SELL"
   confidence?: number; // 0..1
-  regime?: string; // e.g. "trending_up" | "trending_down" | "bullish" | "bearish" | "neutral"
+  regime?: string; // e.g. "trend" | "rotation" | "compression" | "expansion" | "chop"
+  state?: string;
+  marketRegime?: string;
+  score?: number;
+  conf?: number;
+  [k: string]: any;
 };
 
-async function fetchReconSignal(): Promise<
-  { ok: true; sig: ReconSignal } | { ok: false; error: any }
-> {
-  const url = (process.env.RECON_SIGNAL_URL || "").trim();
-  if (!url) return { ok: false, error: "RECON_SIGNAL_URL_not_set" };
+type ReconDecision = {
+  enabled: boolean;
+  mode: string;
+  minConf: number;
+  chopBlock: boolean;
+  urlSet: boolean;
+  ok: boolean;
+  source: "disabled" | "url" | "error";
+  regime: string | null;
+  confidence: number | null;
+  entryAllowed: boolean; // <-- the only enforcement
+  reason: string;
+};
 
+function parseBool(v: any, def = false) {
+  if (v === undefined || v === null) return def;
+  return ["1", "true", "yes", "on"].includes(String(v).toLowerCase());
+}
+
+async function fetchReconDecision(): Promise<ReconDecision> {
+  const enabled = parseBool(process.env.RECON_ENABLED, false);
+  const mode = (process.env.RECON_MODE || "OFF").trim();
+  const chopBlock = parseBool(process.env.RECON_CHOP_BLOCK, false);
+  const minConf = num(process.env.RECON_MIN_CONF, 0.65);
+  const url = (process.env.RECON_SIGNAL_URL || "").trim();
   const timeoutMs = num(process.env.RECON_TIMEOUT_MS, 2500);
+
+  if (!enabled || mode !== "GATE_ENTRIES_ONLY") {
+    return {
+      enabled,
+      mode,
+      minConf,
+      chopBlock,
+      urlSet: !!url,
+      ok: true,
+      source: "disabled",
+      regime: null,
+      confidence: null,
+      entryAllowed: true,
+      reason: "recon_disabled_or_mode_off",
+    };
+  }
+
+  if (!url) {
+    return {
+      enabled,
+      mode,
+      minConf,
+      chopBlock,
+      urlSet: false,
+      ok: false,
+      source: "error",
+      regime: null,
+      confidence: null,
+      entryAllowed: true, // FAIL OPEN
+      reason: "missing_RECON_SIGNAL_URL",
+    };
+  }
+
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
 
@@ -325,39 +378,79 @@ async function fetchReconSignal(): Promise<
     const res = await fetch(url, {
       method: "GET",
       cache: "no-store",
+      headers: { Accept: "application/json" },
       signal: ctrl.signal,
     });
     const text = await res.text();
-    const j = safeJsonParse(text);
+    const j = safeJsonParse(text) as ReconSignal | null;
 
-    if (!res.ok) return { ok: false, error: j ?? text };
-    if (!j || typeof j !== "object") return { ok: false, error: "bad_recon_json" };
+    if (!res.ok || !j || typeof j !== "object") {
+      return {
+        enabled,
+        mode,
+        minConf,
+        chopBlock,
+        urlSet: true,
+        ok: false,
+        source: "error",
+        regime: null,
+        confidence: null,
+        entryAllowed: true, // FAIL OPEN
+        reason: `recon_bad_response_status_${res.status}`,
+      };
+    }
 
-    return { ok: true, sig: j as ReconSignal };
+    const regimeRaw = String(
+      (j.regime ?? j.state ?? j.marketRegime ?? "") || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const confRaw = j.confidence ?? j.conf ?? j.score;
+    const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
+
+    const isChop =
+      regimeRaw.includes("chop") ||
+      regimeRaw.includes("rotation") ||
+      regimeRaw.includes("range") ||
+      regimeRaw.includes("compression");
+
+    const confident = confidence !== null && confidence >= minConf;
+
+    const entryAllowed = !(chopBlock && isChop && confident);
+
+    return {
+      enabled,
+      mode,
+      minConf,
+      chopBlock,
+      urlSet: true,
+      ok: true,
+      source: "url",
+      regime: regimeRaw || null,
+      confidence,
+      entryAllowed,
+      reason: entryAllowed
+        ? "recon_allows_entries"
+        : `recon_blocks_entries_${regimeRaw}_conf_${confidence?.toFixed(2)}`,
+    };
   } catch (e: any) {
-    return { ok: false, error: String(e?.message || e) };
+    return {
+      enabled,
+      mode,
+      minConf,
+      chopBlock,
+      urlSet: true,
+      ok: false,
+      source: "error",
+      regime: null,
+      confidence: null,
+      entryAllowed: true, // FAIL OPEN
+      reason: `recon_fetch_error_${String(e?.name || "unknown")}`,
+    };
   } finally {
     clearTimeout(t);
   }
-}
-
-function reconAllowsEntry(sig: ReconSignal) {
-  const minConf = num(process.env.RECON_MIN_CONF, 0.60);
-
-  const side = String(sig?.side || "").toUpperCase(); // "BUY" | "SELL" | ""
-  const conf = Number(sig?.confidence ?? 0); // 0..1
-  const regime = String(sig?.regime || "").toLowerCase(); // "trending_down", etc.
-
-  const allowed = (process.env.RECON_ALLOWED_REGIMES || "trending_up,bullish,neutral")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-
-  const confOk = Number.isFinite(conf) && conf >= minConf;
-  const regimeOk = regime ? allowed.includes(regime) : false;
-  const sideOk = side ? side !== "SELL" : true; // if side missing, don't block on side alone
-
-  return { confOk, regimeOk, sideOk, minConf, allowed, side, conf, regime };
 }
 
 // ---------- price helpers ----------
@@ -747,7 +840,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const cooldownOk = sinceMs >= cooldownMs;
 
-  // NEW: block re-entry after a SELL for N minutes
+  // block re-entry after a SELL for N minutes
   const reentryCooldownMs = num(process.env.REENTRY_COOLDOWN_MS, 10 * 60_000);
   const reentryBlocked =
     lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
@@ -772,17 +865,37 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     if (!entriesEnabled) return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown };
     if (!cooldownOk) return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown };
 
-    // NEW: Post-exit re-entry block to stop churn
     if (reentryBlocked) {
       return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown };
     }
 
-    if (entriesDryRun) {
-      return { ok: true, mode: "DRY_RUN_BUY", gates, position, cooldown, would_buy_quote_usd: entryQuoteUsd };
+    // Recon gate (ENTRY ONLY) — fails open on error
+    const recon = await fetchReconDecision();
+    const reconBlocks = !recon.entryAllowed;
+
+    if (reconBlocks) {
+      log(runId, "RECON_BLOCK_ENTRY", { reason: recon.reason, regime: recon.regime, conf: recon.confidence });
+      return {
+        ok: true,
+        mode: "NO_POSITION_RECON_BLOCK",
+        gates,
+        position,
+        cooldown,
+        recon,
+      };
     }
 
-    // NOTE: Step 3 will insert the actual Recon gate HERE (entry-only).
-    // Step 2 only adds helper functions safely.
+    if (entriesDryRun) {
+      return {
+        ok: true,
+        mode: "DRY_RUN_BUY",
+        gates,
+        position,
+        cooldown,
+        recon,
+        would_buy_quote_usd: entryQuoteUsd,
+      };
+    }
 
     if (!makerEntries || !refPrice) {
       const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
@@ -797,8 +910,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
         caps: { hardMaxUsd, entMaxUsd, envEntryUsd, finalEntryUsd },
+        recon,
       });
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, buy };
+      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, recon, buy };
     }
 
     const attempt = await makerFirstBuy(ctx, entryQuoteUsd, refPrice);
@@ -814,6 +928,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           gates,
           position,
           cooldown,
+          recon,
           error: "maker_order_failed",
         };
       }
@@ -829,8 +944,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: buy.status,
         user_id: ctx.user_id,
         raw: buy.json ?? buy.text ?? null,
+        recon,
       });
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, buy };
+      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, recon, buy };
     }
 
     // poll maker order
@@ -860,11 +976,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         status: attempt.maker.status,
         user_id: ctx.user_id,
         raw: { maker: attempt.maker.json ?? attempt.maker.text ?? null, status: lastStatus },
+        recon,
       });
-      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, maker_order_id: makerOrderId };
+      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, recon, maker_order_id: makerOrderId };
     }
 
-    if (!mAllowIoc) return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, maker_order_id: makerOrderId };
+    if (!mAllowIoc) {
+      return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, recon, maker_order_id: makerOrderId };
+    }
 
     const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
     await writeTradeLog({
@@ -877,8 +996,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       status: buy.status,
       user_id: ctx.user_id,
       raw: buy.json ?? buy.text ?? null,
+      recon,
     });
-    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, buy };
+    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, recon, buy };
   }
 
   // ---------------- EXIT ----------------
@@ -997,7 +1117,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       ok: sell.ok,
       status: sell.status,
       user_id: ctx.user_id,
-      raw: { resp: sell.json ?? sell.text ?? null, decision }, // <— keep decision inside raw to avoid schema issues
+      raw: { resp: sell.json ?? sell.text ?? null, decision },
       reason,
     });
     return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, decision, sell, reason };
@@ -1108,7 +1228,6 @@ async function runForAllUsers(masterRunId: string) {
 
   let rows = loaded.rows;
 
-  // HARD SAFETY FILTER: core fund only if env is set
   if (ONLY_USER_ID) {
     rows = rows.filter((r) => r.user_id === ONLY_USER_ID);
   }
@@ -1145,6 +1264,7 @@ async function runForAllUsers(masterRunId: string) {
       const out = await runManagerForUser(runId, ctx);
       if ((out as any)?.ok) okCount++;
       else failCount++;
+
       results.push({
         runId,
         user_id: ctx.user_id,
@@ -1156,6 +1276,7 @@ async function runForAllUsers(masterRunId: string) {
         position: (out as any)?.position,
         cooldown: (out as any)?.cooldown,
         decision: (out as any)?.decision,
+        recon: (out as any)?.recon, // <-- surfaced when in entry path
         reason: (out as any)?.reason,
         error: (out as any)?.error,
       });
