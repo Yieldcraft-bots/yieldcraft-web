@@ -4,16 +4,25 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-// --- helpers ---
+/**
+ * Admin-only Performance Snapshot
+ * - Reads public.trade_logs via SUPABASE_SERVICE_ROLE_KEY
+ * - Computes trades/wins/losses/win_rate/avg bps/net pnl/fees/equity curve/max DD
+ * - Supports:
+ *    ?secret=...   (required)
+ *    ?since=ISO    (optional override; default = last 30 days)
+ *    ?limit=NUM    (optional; default 2000; max 10000)
+ */
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
 function json(status: number, body: any) {
   return NextResponse.json(body, {
     status,
     headers: { "Cache-Control": "no-store" },
   });
-}
-
-function nowIso() {
-  return new Date().toISOString();
 }
 
 function requireEnv(name: string) {
@@ -22,212 +31,261 @@ function requireEnv(name: string) {
   return v;
 }
 
-function toNumber(v: any): number | null {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : null;
+function clampInt(n: number, min: number, max: number) {
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(n)));
 }
 
-function parseSince(param: string | null, fallbackDays = 90): string {
-  if (param) {
-    const d = new Date(param);
-    if (!Number.isNaN(d.getTime())) return d.toISOString();
-  }
-  const d = new Date(Date.now() - fallbackDays * 24 * 60 * 60 * 1000);
+function parseSinceOrDefault(sinceRaw: string | null) {
+  // default: last 30 days
+  const dflt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  if (!sinceRaw) return dflt.toISOString();
+  const d = new Date(sinceRaw);
+  if (!Number.isFinite(d.getTime())) return dflt.toISOString();
   return d.toISOString();
 }
 
-function pickFirstNumber(obj: any, keys: string[]): number | null {
+function pickNumber(obj: any, keys: string[]): number | null {
   for (const k of keys) {
     const v = obj?.[k];
-    const n = toNumber(v);
-    if (n !== null) return n;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim() !== "") {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
   }
   return null;
 }
 
-function extractPnlUsd(row: any): number {
-  // Prefer explicit columns if you have them (or added them later)
-  const direct =
-    pickFirstNumber(row, ["net_realized_pnl_usd", "realized_pnl_usd", "pnl_usd", "net_pnl_usd"]) ??
-    null;
-  if (direct !== null) return direct;
-
-  // Fallback: parse from jsonb raw
-  const raw = row?.raw || {};
-  const rawPnl =
-    pickFirstNumber(raw, ["net_realized_pnl_usd", "realized_pnl_usd", "pnl_usd", "net_pnl_usd"]) ??
-    pickFirstNumber(raw, ["realizedPnlUsd", "pnlUsd", "netPnlUsd"]) ??
-    null;
-
-  return rawPnl ?? 0;
+function safeObj(v: any) {
+  return v && typeof v === "object" ? v : {};
 }
 
-function extractFeeUsd(row: any): number {
-  const direct = pickFirstNumber(row, ["fees_paid_usd", "fee_usd", "fees_usd"]) ?? null;
-  if (direct !== null) return direct;
-
-  const raw = row?.raw || {};
-  const rawFee =
-    pickFirstNumber(raw, ["fees_paid_usd", "fee_usd", "fees_usd"]) ??
-    pickFirstNumber(raw, ["feesPaidUsd", "feeUsd", "feesUsd"]) ??
-    null;
-
-  return rawFee ?? 0;
+function computeMaxDrawdownPct(equityCurve: number[]) {
+  // equityCurve is cumulative equity (starting at 0)
+  let peak = -Infinity;
+  let maxDd = 0; // as fraction (0.12 = 12%)
+  for (const e of equityCurve) {
+    if (e > peak) peak = e;
+    const dd = peak > 0 ? (peak - e) / peak : peak === 0 ? 0 : 0;
+    if (dd > maxDd) maxDd = dd;
+  }
+  return maxDd * 100;
 }
 
-function computeStats(rows: any[]) {
+function computeStatsFromRows(rows: any[]) {
+  // Field candidates (row-level OR inside row.raw)
+  const PNL_USD_KEYS = ["realized_pnl_usd", "pnl_usd", "net_pnl_usd", "realizedPnlUsd", "realizedPnLUsd"];
+  const FEES_USD_KEYS = ["fees_paid_usd", "fees_usd", "fee_usd", "feesUsd", "feeUsd", "commission_usd"];
+  const PNL_BPS_KEYS = ["avg_bps", "pnl_bps", "pnlBps", "realized_bps", "realizedBps", "realized_bps_total"];
+
+  // For derived bps if missing
+  const QUOTE_KEYS = ["quote_size", "quote_usd", "quoteUsd", "quote"];
+  const PRICE_KEYS = ["price", "price_usd", "fill_price", "fillPrice"];
+  const BASE_KEYS = ["base_size", "base", "baseSize", "size"];
+
+  // We treat "fills_used" as rows that look like actual orders
+  // Best-effort: keep rows where raw.kind is "live_order" or where order_id exists
+  const normalized = rows.map((r) => {
+    const raw = safeObj(r?.raw);
+    const merged = { ...safeObj(r), ...raw };
+
+    // pnl/fees can be on row OR raw
+    const pnlUsd = pickNumber(merged, PNL_USD_KEYS);
+    const feesUsd = pickNumber(merged, FEES_USD_KEYS) ?? 0;
+
+    let pnlBps = pickNumber(merged, PNL_BPS_KEYS);
+
+    // Derive bps if missing and we have quote size + pnlUsd
+    if ((pnlBps === null || pnlBps === undefined) && typeof pnlUsd === "number") {
+      const quote = pickNumber(merged, QUOTE_KEYS);
+      if (typeof quote === "number" && quote > 0) {
+        pnlBps = (pnlUsd / quote) * 10_000;
+      } else {
+        // fallback: if we can estimate notional from base*price
+        const base = pickNumber(merged, BASE_KEYS);
+        const price = pickNumber(merged, PRICE_KEYS);
+        if (typeof base === "number" && base > 0 && typeof price === "number" && price > 0) {
+          const notional = base * price;
+          if (notional > 0) pnlBps = (pnlUsd / notional) * 10_000;
+        }
+      }
+    }
+
+    const createdAt = r?.created_at ?? raw?.created_at ?? null;
+
+    const looksLikeFill =
+      raw?.kind === "live_order" ||
+      typeof r?.order_id === "string" ||
+      typeof raw?.order_id === "string" ||
+      typeof r?.side === "string";
+
+    return {
+      created_at: createdAt,
+      pnl_usd: typeof pnlUsd === "number" ? pnlUsd : null,
+      fees_usd: typeof feesUsd === "number" ? feesUsd : 0,
+      pnl_bps: typeof pnlBps === "number" && Number.isFinite(pnlBps) ? pnlBps : null,
+      looksLikeFill,
+      row: r,
+    };
+  });
+
+  const fills = normalized.filter((x) => x.looksLikeFill);
+
   let total_trades = 0;
   let wins = 0;
   let losses = 0;
 
-  let sum_win_bps = 0;
-  let sum_loss_bps = 0;
-  let win_count = 0;
-  let loss_count = 0;
+  let sumWinBps = 0;
+  let cntWinBps = 0;
 
-  let net_realized_pnl_usd = 0;
-  let fees_paid_usd = 0;
+  let sumLossBps = 0;
+  let cntLossBps = 0;
 
-  // Running equity & max drawdown from realized pnl (simple + reliable)
+  let realizedPnlUsd = 0;
+  let feesPaidUsd = 0;
+
+  // Equity curve from realized pnl - fees (starting at 0)
+  const equityCurve: number[] = [];
   let equity = 0;
-  let peak = 0;
-  let max_dd_pct = 0;
 
-  for (const r of rows) {
-    // treat rows that represent an executed trade (you can tighten this later)
+  for (const f of fills) {
     total_trades += 1;
 
-    const pnlUsd = extractPnlUsd(r);
-    const feeUsd = extractFeeUsd(r);
+    const pnl = f.pnl_usd;
+    const fees = f.fees_usd ?? 0;
 
-    net_realized_pnl_usd += pnlUsd;
-    fees_paid_usd += feeUsd;
+    feesPaidUsd += fees;
 
-    if (pnlUsd > 0) wins += 1;
-    else if (pnlUsd < 0) losses += 1;
+    if (typeof pnl === "number" && Number.isFinite(pnl)) {
+      realizedPnlUsd += pnl;
 
-    // If you store pnl bps anywhere, we’ll use it; otherwise keep 0.
-    const pnlBps =
-      pickFirstNumber(r, ["pnl_bps", "pnlBps", "realized_bps", "realizedBps"]) ??
-      pickFirstNumber(r?.raw, ["pnl_bps", "pnlBps", "realized_bps", "realizedBps"]) ??
-      null;
+      if (pnl > 0) wins += 1;
+      else if (pnl < 0) losses += 1;
+    }
 
-    if (pnlBps !== null) {
-      if (pnlBps > 0) {
-        sum_win_bps += pnlBps;
-        win_count += 1;
-      } else if (pnlBps < 0) {
-        sum_loss_bps += pnlBps;
-        loss_count += 1;
+    // avg bps tracking (best effort)
+    if (typeof f.pnl_bps === "number" && Number.isFinite(f.pnl_bps)) {
+      if ((pnl ?? 0) > 0) {
+        sumWinBps += f.pnl_bps;
+        cntWinBps += 1;
+      } else if ((pnl ?? 0) < 0) {
+        sumLossBps += f.pnl_bps;
+        cntLossBps += 1;
       }
     }
 
-    equity += pnlUsd;
-    if (equity > peak) peak = equity;
-
-    // drawdown % based on peak equity (avoid div by 0)
-    const dd = peak > 0 ? (peak - equity) / peak : 0;
-    if (dd * 100 > max_dd_pct) max_dd_pct = dd * 100;
+    equity += (typeof pnl === "number" ? pnl : 0) - (typeof fees === "number" ? fees : 0);
+    equityCurve.push(equity);
   }
 
-  const win_rate = total_trades > 0 ? wins / total_trades : 0;
+  const netRealized = realizedPnlUsd - feesPaidUsd;
+  const winRate = total_trades > 0 ? wins / total_trades : 0;
 
-  const avg_win_bps = win_count > 0 ? sum_win_bps / win_count : 0;
-  const avg_loss_bps = loss_count > 0 ? sum_loss_bps / loss_count : 0;
+  const avgWinBps = cntWinBps > 0 ? sumWinBps / cntWinBps : 0;
+  const avgLossBps = cntLossBps > 0 ? sumLossBps / cntLossBps : 0;
+
+  const maxDrawdownPct = equityCurve.length ? computeMaxDrawdownPct(equityCurve) : 0;
 
   return {
+    rows_scanned: rows.length,
+    fills_used: fills.length,
     total_trades,
     wins,
     losses,
-    win_rate,
-    avg_win_bps,
-    avg_loss_bps,
-    net_realized_pnl_usd,
-    fees_paid_usd,
-    running_equity: equity,
-    max_drawdown_pct: max_dd_pct,
+    win_rate: Number(winRate.toFixed(4)),
+    avg_win_bps: Number(avgWinBps.toFixed(2)),
+    avg_loss_bps: Number(avgLossBps.toFixed(2)),
+    realized_pnl_usd: Number(realizedPnlUsd.toFixed(8)),
+    fees_paid_usd: Number(feesPaidUsd.toFixed(8)),
+    net_realized_pnl_usd: Number(netRealized.toFixed(8)),
+    running_equity: Number(equity.toFixed(8)),
+    max_drawdown_pct: Number(maxDrawdownPct.toFixed(3)),
   };
-}
-
-function sbAdmin() {
-  const url = requireEnv("SUPABASE_URL");
-  const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, key, { auth: { persistSession: false } });
 }
 
 export async function GET(req: Request) {
   const runId = `pnl_${Math.random().toString(16).slice(2, 10)}`;
 
   try {
-    const u = new URL(req.url);
+    // --- Admin secret gate ---
+    const url = new URL(req.url);
+    const secret = (url.searchParams.get("secret") || "").trim();
 
-    // ✅ secret gate (admin-only)
-    const secret = (u.searchParams.get("secret") || "").trim();
-    const expected = (process.env.CRON_SECRET || "").trim(); // your existing pattern
-    if (!expected) return json(500, { ok: false, runId, error: "missing_env:CRON_SECRET" });
-    if (!secret || secret !== expected) return json(401, { ok: false, runId, error: "unauthorized" });
+    const expected =
+      (process.env.CRON_SECRET || "").trim() ||
+      (process.env.YC_CRON_SECRET || "").trim() ||
+      (process.env.PNL_SNAPSHOT_SECRET || "").trim();
 
-    // optional filters
-    const user_id = (u.searchParams.get("user_id") || "").trim() || null;
-    const since = parseSince(u.searchParams.get("since"), 90);
+    if (!expected) {
+      return json(500, { ok: false, runId, error: "missing_server_secret_env" });
+    }
+    if (!secret || secret !== expected) {
+      return json(401, { ok: false, runId, error: "unauthorized" });
+    }
 
-    const limitParam = u.searchParams.get("limit");
-    const limit = Math.max(1, Math.min(1000, Number(limitParam || 250) || 250));
+    // --- Params ---
+    const since = parseSinceOrDefault(url.searchParams.get("since"));
+    const limitRaw = Number(url.searchParams.get("limit") || "2000");
+    const limit = clampInt(limitRaw, 1, 10000);
 
-    const client = sbAdmin();
+    // --- Supabase admin client ---
+    const supabaseUrl = requireEnv("SUPABASE_URL");
+    const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+    const sb = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false },
+    });
 
-    // Pull rows (you can tighten fields later; keep it flexible now)
-    let q = client
+    // Pull rows since timestamp
+    // Order ASC so equity curve makes sense.
+    const { data, error } = await sb
       .from("trade_logs")
       .select("*")
       .gte("created_at", since)
       .order("created_at", { ascending: true })
       .limit(limit);
 
-    if (user_id) q = q.eq("user_id", user_id);
-
-    const { data, error } = await q;
-
     if (error) {
       return json(500, {
         ok: false,
         runId,
         error: "db_read_failed",
-        details: error.message || String(error),
+        details: String((error as any)?.message || error),
       });
     }
 
     const rows = Array.isArray(data) ? data : [];
-    const stats = computeStats(rows);
+
+    const statsAll = computeStatsFromRows(rows);
 
     // last 24h window
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const rows24h = rows.filter((r) => {
+    const rows24h = rows.filter((r: any) => {
       const t = new Date(r?.created_at || 0).getTime();
       return Number.isFinite(t) && t >= new Date(since24h).getTime();
     });
-    const stats24h = computeStats(rows24h);
+    const stats24h = computeStatsFromRows(rows24h);
 
-    // current_open_pnl_usd: placeholder (you can compute later from Coinbase position)
+    // MVP: open pnl unknown (we don’t call Coinbase here)
     const payload = {
       ok: true,
       runId,
-      user_id,
+      user_id: null,
       since,
-      rows_scanned: rows.length,
-      fills_used: rows.length, // keep simple for now
-      total_trades: stats.total_trades,
-      wins: stats.wins,
-      losses: stats.losses,
-      win_rate: stats.win_rate,
-      avg_win_bps: stats.avg_win_bps,
-      avg_loss_bps: stats.avg_loss_bps,
-      net_realized_pnl_usd: stats.net_realized_pnl_usd,
-      fees_paid_usd: stats.fees_paid_usd,
+      rows_scanned: statsAll.rows_scanned,
+      fills_used: statsAll.fills_used,
+      total_trades: statsAll.total_trades,
+      wins: statsAll.wins,
+      losses: statsAll.losses,
+      win_rate: statsAll.win_rate,
+      avg_win_bps: statsAll.avg_win_bps,
+      avg_loss_bps: statsAll.avg_loss_bps,
+      net_realized_pnl_usd: statsAll.net_realized_pnl_usd,
+      fees_paid_usd: statsAll.fees_paid_usd,
       current_open_pnl_usd: null,
       open_position_base: 0,
-      running_equity: stats.running_equity,
-      max_drawdown_pct: stats.max_drawdown_pct,
+      running_equity: statsAll.running_equity,
+      max_drawdown_pct: statsAll.max_drawdown_pct,
       last_24h: {
         since: since24h,
         total_trades: stats24h.total_trades,
@@ -245,6 +303,10 @@ export async function GET(req: Request) {
 
     return json(200, payload);
   } catch (e: any) {
-    return json(500, { ok: false, runId, error: String(e?.message || e) });
+    return json(500, {
+      ok: false,
+      runId,
+      error: String(e?.message || e),
+    });
   }
 }
