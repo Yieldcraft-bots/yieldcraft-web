@@ -95,6 +95,13 @@ function fmtPriceUsd(x: number) {
   const v = Math.max(0, x);
   return v.toFixed(2);
 }
+function uuid() {
+  // Node 18+ typically supports crypto.randomUUID; guard anyway
+  const anyCrypto = crypto as any;
+  return typeof anyCrypto.randomUUID === "function"
+    ? anyCrypto.randomUUID()
+    : crypto.randomBytes(16).toString("hex");
+}
 
 // ---------- logging ----------
 function log(runId: string, event: string, data?: any) {
@@ -232,7 +239,7 @@ async function loadAllCoinbaseKeys(): Promise<
       .from("coinbase_keys")
       .select("user_id, api_key_name, private_key, key_alg");
     if (error) return { ok: false, error: error.message || error };
-    const rows = Array.isArray(data) ? (data as any as KeyRow[]) : [];
+    const rows = Array.isArray(data) ? ((data as any) as KeyRow[]) : [];
     return { ok: true, rows: rows.filter(looksValidKeyRow) };
   } catch (e: any) {
     return { ok: false, error: e?.message || String(e) };
@@ -927,10 +934,13 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
 
   const filledBase =
-    Number(o?.filled_size ?? o?.filled_quantity ?? o?.filled_base_size ?? 0) || 0;
+    Number(o?.filled_size ?? o?.filled_quantity ?? o?.filled_base_size ?? 0) ||
+    0;
 
   const filledQuote =
-    Number(o?.filled_value ?? o?.executed_value ?? o?.filled_quote_value ?? 0) || 0;
+    Number(
+      o?.filled_value ?? o?.executed_value ?? o?.filled_quote_value ?? 0
+    ) || 0;
 
   const avgPrice =
     Number(
@@ -949,7 +959,15 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
     "EXPIRED",
   ].includes(status);
 
-  return { ok: true as const, status, done, filledBase, filledQuote, avgPrice, raw: r.json };
+  return {
+    ok: true as const,
+    status,
+    done,
+    filledBase,
+    filledQuote,
+    avgPrice,
+    raw: r.json,
+  };
 }
 
 async function placeLimitPostOnly(
@@ -1261,6 +1279,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         symbol: PRODUCT_ID,
         side: "BUY",
         order_id: orderId,
+
         // fill fields (prefer actual fill; fallback to intent)
         base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
         quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
@@ -1675,7 +1694,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   // Maker exit path if explicitly enabled
   const exitRef = current;
   if (!Number.isFinite(exitRef) || exitRef <= 0) {
-    if (!mAllowIoc) {
+    if (!makerAllowIocFallback()) {
       return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, decision, error: "no_ref_price_for_exit" };
     }
 
@@ -1748,7 +1767,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const makerOrderId = extractOrderId(makerJson);
 
   if (!makerOk || !makerOrderId) {
-    if (!mAllowIoc) {
+    if (!makerAllowIocFallback()) {
       return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, error: "maker_exit_failed" };
     }
 
@@ -1881,7 +1900,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
   }
 
-  if (!mAllowIoc) return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
+  if (!makerAllowIocFallback())
+    return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
 
   const path = "/api/v3/brokerage/orders";
   const reqPayload = {
@@ -2039,9 +2059,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const action = String(url.searchParams.get("action") || "run").toLowerCase();
 
-  const masterRunId = (crypto as any).randomUUID
-    ? (crypto as any).randomUUID()
-    : crypto.randomBytes(8).toString("hex");
+  const masterRunId = uuid();
 
   log(masterRunId, "REQUEST", { method: "GET", url: req.url, action, onlyUserId: ONLY_USER_ID });
 
@@ -2055,9 +2073,7 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
-  const masterRunId = (crypto as any).randomUUID
-    ? (crypto as any).randomUUID()
-    : crypto.randomBytes(8).toString("hex");
+  const masterRunId = uuid();
 
   log(masterRunId, "REQUEST", { method: "POST", url: req.url, onlyUserId: ONLY_USER_ID });
 
