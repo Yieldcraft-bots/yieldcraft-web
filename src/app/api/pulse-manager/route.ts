@@ -154,7 +154,9 @@ async function writeTradeLog(row: Record<string, any>) {
     );
 
     // Example: column "equity_gov" of relation "trade_logs" does not exist
-    const m = msg.match(/column\s+"([^"]+)"\s+of\s+relation\s+"trade_logs"\s+does\s+not\s+exist/i);
+    const m = msg.match(
+      /column\s+"([^"]+)"\s+of\s+relation\s+"trade_logs"\s+does\s+not\s+exist/i
+    );
     if (m && m[1]) {
       const badCol = m[1];
       delete payload[badCol];
@@ -346,6 +348,29 @@ async function cbPost(ctx: Ctx, path: string, payload: any) {
   return { ok: res.ok, status: res.status, json: safeJsonParse(text), text };
 }
 
+// ---------- raw wrapper helper ----------
+function mkRawWrapper(params: {
+  kind: string;
+  action: string;
+  gates?: any;
+  request?: any;
+  payload?: any;
+  response_status?: number | null;
+  response?: any;
+}) {
+  return {
+    kind: params.kind,
+    action: params.action,
+    ...(params.gates !== undefined ? { gates: params.gates } : {}),
+    ...(params.request !== undefined ? { request: params.request } : {}),
+    ...(params.payload !== undefined ? { payload: params.payload } : {}),
+    ...(params.response_status !== undefined
+      ? { response_status: params.response_status }
+      : {}),
+    ...(params.response !== undefined ? { response: params.response } : {}),
+  };
+}
+
 // ---------- Recon gate (ENTRY ONLY enforcement; status always visible) ----------
 type ReconSignal = {
   side?: string;
@@ -480,12 +505,11 @@ async function fetchReconDecision(): Promise<ReconDecision> {
 
     const entryAllowed = !(blocksOnSell || blocksOnChop);
 
-    const why =
-      entryAllowed
-        ? "recon_allows_entries"
-        : blocksOnSell
-        ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
-        : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
+    const why = entryAllowed
+      ? "recon_allows_entries"
+      : blocksOnSell
+      ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
+      : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
 
     return {
       enabled,
@@ -901,14 +925,31 @@ async function fetchOrderStatus(ctx: Ctx, orderId: string) {
 
   const o = (r.json as any)?.order ?? (r.json as any);
   const status = String(o?.status || o?.order?.status || "").toUpperCase();
-  const filled = Number(
-    o?.filled_size || o?.filled_value || o?.filled_quantity || 0
-  );
-  const done = ["FILLED", "DONE", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED"].includes(
-    status
-  );
 
-  return { ok: true as const, status, filled, done, raw: r.json };
+  const filledBase =
+    Number(o?.filled_size ?? o?.filled_quantity ?? o?.filled_base_size ?? 0) || 0;
+
+  const filledQuote =
+    Number(o?.filled_value ?? o?.executed_value ?? o?.filled_quote_value ?? 0) || 0;
+
+  const avgPrice =
+    Number(
+      o?.average_filled_price ??
+        o?.avg_price ??
+        o?.filled_average_price ??
+        0
+    ) || 0;
+
+  const done = [
+    "FILLED",
+    "DONE",
+    "CANCELLED",
+    "CANCELED",
+    "REJECTED",
+    "EXPIRED",
+  ].includes(status);
+
+  return { ok: true as const, status, done, filledBase, filledQuote, avgPrice, raw: r.json };
 }
 
 async function placeLimitPostOnly(
@@ -1189,15 +1230,41 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     // If maker entries disabled or no ref price: BUY IOC
     if (!makerEntries || !refPrice) {
-      const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
+      const path = "/api/v3/brokerage/orders";
+      const reqPayload = {
+        client_order_id: `yc_mgr_${ctx.user_id}_buy_ioc_${Date.now()}`,
+        product_id: PRODUCT_ID,
+        side: "BUY",
+        order_configuration: { market_market_ioc: { quote_size: entryQuoteUsd } },
+      };
+
+      // Use cbPost directly so we can persist request/response in raw
+      const buy = await cbPost(ctx, path, reqPayload);
+      const orderId = extractOrderId(buy.json);
+
+      let fill: any = null;
+      if (orderId) {
+        // short poll to let Coinbase finalize
+        for (let i = 0; i < 3; i++) {
+          const st = await fetchOrderStatus(ctx, orderId);
+          if (st.ok) {
+            fill = st;
+            if (st.done || (st.filledBase ?? 0) > 0) break;
+          }
+          await sleep(600);
+        }
+      }
 
       await writeTradeLog({
         created_at: nowIso(),
         bot: BOT_NAME,
         symbol: PRODUCT_ID,
         side: "BUY",
-        quote_size: Number(entryQuoteUsd),
-        price: refPrice || null,
+        order_id: orderId,
+        // fill fields (prefer actual fill; fallback to intent)
+        base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
+        quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
+        price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : refPrice || null,
 
         user_id: ctx.user_id,
         run_id: runId,
@@ -1209,6 +1276,20 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
         ok: buy.ok,
         status: buy.status,
+        raw: mkRawWrapper({
+          kind: "coinbase_order",
+          action: "ENTRY_BUY_IOC",
+          gates,
+          request: { path, method: "POST" },
+          payload: reqPayload,
+          response_status: buy.status,
+          response: {
+            submit: buy.json ?? buy.text,
+            order_id: orderId,
+            final: fill?.raw ?? null,
+            final_status: fill?.status ?? null,
+          },
+        }),
       });
 
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, reconStatus, equityGov: gov, buy };
@@ -1225,26 +1306,65 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         return { ok: false, mode: "ENTRY_BUY_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, error: "maker_order_failed" };
       }
 
-      const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
+      const path = "/api/v3/brokerage/orders";
+      const reqPayload = {
+        client_order_id: `yc_mgr_${ctx.user_id}_buy_ioc_${Date.now()}`,
+        product_id: PRODUCT_ID,
+        side: "BUY",
+        order_configuration: { market_market_ioc: { quote_size: entryQuoteUsd } },
+      };
+      const buy = await cbPost(ctx, path, reqPayload);
+      const orderId = extractOrderId(buy.json);
+
+      let fill: any = null;
+      if (orderId) {
+        for (let i = 0; i < 3; i++) {
+          const st = await fetchOrderStatus(ctx, orderId);
+          if (st.ok) {
+            fill = st;
+            if (st.done || (st.filledBase ?? 0) > 0) break;
+          }
+          await sleep(600);
+        }
+      }
 
       await writeTradeLog({
         created_at: nowIso(),
         bot: BOT_NAME,
         symbol: PRODUCT_ID,
         side: "BUY",
-        quote_size: Number(entryQuoteUsd),
-        price: refPrice || null,
+        order_id: orderId,
+
+        base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
+        quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
+        price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : refPrice || null,
 
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_IOC_FALLBACK",
         reason: "maker_failed_fallback_ioc",
-        decision: { makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice } },
+        decision: { makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice, maker_submit: makerJson } },
         recon_status: reconStatus,
         equity_gov: gov,
 
         ok: buy.ok,
         status: buy.status,
+        raw: mkRawWrapper({
+          kind: "coinbase_order",
+          action: "ENTRY_BUY_IOC_FALLBACK",
+          gates,
+          request: { path, method: "POST" },
+          payload: reqPayload,
+          response_status: buy.status,
+          response: {
+            maker_submit: makerJson,
+            maker_ok: makerOk,
+            submit: buy.json ?? buy.text,
+            order_id: orderId,
+            final: fill?.raw ?? null,
+            final_status: fill?.status ?? null,
+          },
+        }),
       });
 
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, buy };
@@ -1258,34 +1378,58 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       const st = await fetchOrderStatus(ctx, makerOrderId);
       lastStatus = st;
       if (st.ok) {
-        if ((st.filled ?? 0) > 0 || st.done) break;
+        if ((st.filledBase ?? 0) > 0 || st.done) break;
       } else break;
       await sleep(1200);
     }
 
-    const filled = lastStatus?.ok ? Number(lastStatus.filled || 0) : 0;
+    const filledBase = lastStatus?.ok ? Number(lastStatus.filledBase || 0) : 0;
+    const filledQuote = lastStatus?.ok ? Number(lastStatus.filledQuote || 0) : 0;
+    const avgPrice = lastStatus?.ok ? Number(lastStatus.avgPrice || 0) : 0;
     const done = lastStatus?.ok ? !!lastStatus.done : false;
 
-    if (filled > 0 || done) {
+    if (filledBase > 0 || done) {
       await writeTradeLog({
         created_at: nowIso(),
         bot: BOT_NAME,
         symbol: PRODUCT_ID,
         side: "BUY",
-        quote_size: Number(entryQuoteUsd),
-        base_size: attempt.baseSize ? Number(attempt.baseSize) : null,
-        price: attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null,
+        order_id: makerOrderId,
+
+        base_size: filledBase > 0 ? filledBase : null,
+        quote_size: filledQuote > 0 ? filledQuote : Number(entryQuoteUsd),
+        price: avgPrice > 0 ? avgPrice : (attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null),
 
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_MAKER",
         reason: "maker_filled_or_done",
-        decision: { maker_order_id: makerOrderId, status: lastStatus },
+        decision: { maker_order_id: makerOrderId, status: lastStatus, makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice } },
         recon_status: reconStatus,
         equity_gov: gov,
 
         ok: true,
         status: 200,
+        raw: mkRawWrapper({
+          kind: "coinbase_order",
+          action: "ENTRY_BUY_MAKER",
+          gates,
+          request: { path: "/api/v3/brokerage/orders", method: "POST" },
+          payload: {
+            product_id: PRODUCT_ID,
+            side: "BUY",
+            order_configuration: {
+              limit_limit_gtc: { base_size: attempt.baseSize, limit_price: attempt.limitPrice, post_only: true },
+            },
+          },
+          response_status: attempt.maker.status,
+          response: {
+            maker_submit: attempt.maker.json ?? attempt.maker.text,
+            order_id: makerOrderId,
+            final: lastStatus?.raw ?? null,
+            final_status: lastStatus?.status ?? null,
+          },
+        }),
       });
 
       return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
@@ -1295,15 +1439,38 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
     }
 
-    const buy = await placeMarketIoc(ctx, "BUY", entryQuoteUsd);
+    const path = "/api/v3/brokerage/orders";
+    const reqPayload = {
+      client_order_id: `yc_mgr_${ctx.user_id}_buy_ioc_${Date.now()}`,
+      product_id: PRODUCT_ID,
+      side: "BUY",
+      order_configuration: { market_market_ioc: { quote_size: entryQuoteUsd } },
+    };
+    const buy = await cbPost(ctx, path, reqPayload);
+    const orderId = extractOrderId(buy.json);
+
+    let fill: any = null;
+    if (orderId) {
+      for (let i = 0; i < 3; i++) {
+        const st = await fetchOrderStatus(ctx, orderId);
+        if (st.ok) {
+          fill = st;
+          if (st.done || (st.filledBase ?? 0) > 0) break;
+        }
+        await sleep(600);
+      }
+    }
 
     await writeTradeLog({
       created_at: nowIso(),
       bot: BOT_NAME,
       symbol: PRODUCT_ID,
       side: "BUY",
-      quote_size: Number(entryQuoteUsd),
-      price: refPrice || null,
+      order_id: orderId,
+
+      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
+      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
+      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : refPrice || null,
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1315,6 +1482,22 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       ok: buy.ok,
       status: buy.status,
+      raw: mkRawWrapper({
+        kind: "coinbase_order",
+        action: "ENTRY_BUY_IOC_AFTER_TIMEOUT",
+        gates,
+        request: { path, method: "POST" },
+        payload: reqPayload,
+        response_status: buy.status,
+        response: {
+          maker_order_id: makerOrderId,
+          maker_final: lastStatus?.raw ?? null,
+          submit: buy.json ?? buy.text,
+          order_id: orderId,
+          final: fill?.raw ?? null,
+          final_status: fill?.status ?? null,
+        },
+      }),
     });
 
     return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, buy };
@@ -1426,15 +1609,39 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   // Exits default IOC for reliability
   if (!makerExits) {
-    const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+    const path = "/api/v3/brokerage/orders";
+    const reqPayload = {
+      client_order_id: `yc_mgr_${ctx.user_id}_sell_ioc_${Date.now()}`,
+      product_id: PRODUCT_ID,
+      side: "SELL",
+      order_configuration: { market_market_ioc: { base_size: baseSize } },
+    };
+
+    const sell = await cbPost(ctx, path, reqPayload);
+    const orderId = extractOrderId(sell.json);
+
+    let fill: any = null;
+    if (orderId) {
+      for (let i = 0; i < 3; i++) {
+        const st = await fetchOrderStatus(ctx, orderId);
+        if (st.ok) {
+          fill = st;
+          if (st.done || (st.filledBase ?? 0) > 0) break;
+        }
+        await sleep(600);
+      }
+    }
 
     await writeTradeLog({
       created_at: nowIso(),
       bot: BOT_NAME,
       symbol: PRODUCT_ID,
       side: "SELL",
-      base_size: Number(baseSize),
-      price: current || null,
+      order_id: orderId,
+
+      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
+      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
+      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : current || null,
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1446,6 +1653,20 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       ok: sell.ok,
       status: sell.status,
+      raw: mkRawWrapper({
+        kind: "coinbase_order",
+        action: "EXIT_SELL_IOC",
+        gates,
+        request: { path, method: "POST" },
+        payload: reqPayload,
+        response_status: sell.status,
+        response: {
+          submit: sell.json ?? sell.text,
+          order_id: orderId,
+          final: fill?.raw ?? null,
+          final_status: fill?.status ?? null,
+        },
+      }),
     });
 
     return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
@@ -1458,15 +1679,39 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, decision, error: "no_ref_price_for_exit" };
     }
 
-    const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+    const path = "/api/v3/brokerage/orders";
+    const reqPayload = {
+      client_order_id: `yc_mgr_${ctx.user_id}_sell_ioc_${Date.now()}`,
+      product_id: PRODUCT_ID,
+      side: "SELL",
+      order_configuration: { market_market_ioc: { base_size: baseSize } },
+    };
+
+    const sell = await cbPost(ctx, path, reqPayload);
+    const orderId = extractOrderId(sell.json);
+
+    let fill: any = null;
+    if (orderId) {
+      for (let i = 0; i < 3; i++) {
+        const st = await fetchOrderStatus(ctx, orderId);
+        if (st.ok) {
+          fill = st;
+          if (st.done || (st.filledBase ?? 0) > 0) break;
+        }
+        await sleep(600);
+      }
+    }
 
     await writeTradeLog({
       created_at: nowIso(),
       bot: BOT_NAME,
       symbol: PRODUCT_ID,
       side: "SELL",
-      base_size: Number(baseSize),
-      price: null,
+      order_id: orderId,
+
+      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
+      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
+      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : null,
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1478,6 +1723,20 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       ok: sell.ok,
       status: sell.status,
+      raw: mkRawWrapper({
+        kind: "coinbase_order",
+        action: "EXIT_SELL_IOC_FALLBACK_NO_REF",
+        gates,
+        request: { path, method: "POST" },
+        payload: reqPayload,
+        response_status: sell.status,
+        response: {
+          submit: sell.json ?? sell.text,
+          order_id: orderId,
+          final: fill?.raw ?? null,
+          final_status: fill?.status ?? null,
+        },
+      }),
     });
 
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
@@ -1493,26 +1752,66 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, error: "maker_exit_failed" };
     }
 
-    const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+    const path = "/api/v3/brokerage/orders";
+    const reqPayload = {
+      client_order_id: `yc_mgr_${ctx.user_id}_sell_ioc_${Date.now()}`,
+      product_id: PRODUCT_ID,
+      side: "SELL",
+      order_configuration: { market_market_ioc: { base_size: baseSize } },
+    };
+
+    const sell = await cbPost(ctx, path, reqPayload);
+    const orderId = extractOrderId(sell.json);
+
+    let fill: any = null;
+    if (orderId) {
+      for (let i = 0; i < 3; i++) {
+        const st = await fetchOrderStatus(ctx, orderId);
+        if (st.ok) {
+          fill = st;
+          if (st.done || (st.filledBase ?? 0) > 0) break;
+        }
+        await sleep(600);
+      }
+    }
 
     await writeTradeLog({
       created_at: nowIso(),
       bot: BOT_NAME,
       symbol: PRODUCT_ID,
       side: "SELL",
-      base_size: Number(baseSize),
-      price: exitRef || null,
+      order_id: orderId,
+
+      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
+      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
+      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : exitRef || null,
 
       user_id: ctx.user_id,
       run_id: runId,
       mode: "EXIT_SELL_IOC_FALLBACK",
       reason,
-      decision: { ...decision, makerAttempt: { limitPrice: attempt.limitPrice, maker_order_id: makerOrderId } },
+      decision: { ...decision, makerAttempt: { limitPrice: attempt.limitPrice, maker_order_id: makerOrderId, maker_submit: makerJson } },
       recon_status: reconStatus,
       equity_gov: gov,
 
       ok: sell.ok,
       status: sell.status,
+      raw: mkRawWrapper({
+        kind: "coinbase_order",
+        action: "EXIT_SELL_IOC_FALLBACK",
+        gates,
+        request: { path, method: "POST" },
+        payload: reqPayload,
+        response_status: sell.status,
+        response: {
+          maker_submit: makerJson,
+          maker_ok: makerOk,
+          submit: sell.json ?? sell.text,
+          order_id: orderId,
+          final: fill?.raw ?? null,
+          final_status: fill?.status ?? null,
+        },
+      }),
     });
 
     return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
@@ -1525,22 +1824,27 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const st = await fetchOrderStatus(ctx, makerOrderId);
     lastStatus = st;
     if (st.ok) {
-      if ((st.filled ?? 0) > 0 || st.done) break;
+      if ((st.filledBase ?? 0) > 0 || st.done) break;
     } else break;
     await sleep(1200);
   }
 
-  const filled = lastStatus?.ok ? Number(lastStatus.filled || 0) : 0;
+  const filledBase = lastStatus?.ok ? Number(lastStatus.filledBase || 0) : 0;
+  const filledQuote = lastStatus?.ok ? Number(lastStatus.filledQuote || 0) : 0;
+  const avgPrice = lastStatus?.ok ? Number(lastStatus.avgPrice || 0) : 0;
   const done = lastStatus?.ok ? !!lastStatus.done : false;
 
-  if (filled > 0 || done) {
+  if (filledBase > 0 || done) {
     await writeTradeLog({
       created_at: nowIso(),
       bot: BOT_NAME,
       symbol: PRODUCT_ID,
       side: "SELL",
-      base_size: Number(baseSize),
-      price: attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null,
+      order_id: makerOrderId,
+
+      base_size: filledBase > 0 ? filledBase : Number(baseSize),
+      quote_size: filledQuote > 0 ? filledQuote : null,
+      price: avgPrice > 0 ? avgPrice : (attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null),
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1552,6 +1856,26 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       ok: true,
       status: 200,
+      raw: mkRawWrapper({
+        kind: "coinbase_order",
+        action: "EXIT_SELL_MAKER",
+        gates,
+        request: { path: "/api/v3/brokerage/orders", method: "POST" },
+        payload: {
+          product_id: PRODUCT_ID,
+          side: "SELL",
+          order_configuration: {
+            limit_limit_gtc: { base_size: baseSize, limit_price: attempt.limitPrice, post_only: true },
+          },
+        },
+        response_status: attempt.maker.status,
+        response: {
+          maker_submit: attempt.maker.json ?? attempt.maker.text,
+          order_id: makerOrderId,
+          final: lastStatus?.raw ?? null,
+          final_status: lastStatus?.status ?? null,
+        },
+      }),
     });
 
     return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
@@ -1559,15 +1883,39 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   if (!mAllowIoc) return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
 
-  const sell = await placeMarketIoc(ctx, "SELL", undefined, baseSize);
+  const path = "/api/v3/brokerage/orders";
+  const reqPayload = {
+    client_order_id: `yc_mgr_${ctx.user_id}_sell_ioc_${Date.now()}`,
+    product_id: PRODUCT_ID,
+    side: "SELL",
+    order_configuration: { market_market_ioc: { base_size: baseSize } },
+  };
+
+  const sell = await cbPost(ctx, path, reqPayload);
+  const orderId = extractOrderId(sell.json);
+
+  let fill: any = null;
+  if (orderId) {
+    for (let i = 0; i < 3; i++) {
+      const st = await fetchOrderStatus(ctx, orderId);
+      if (st.ok) {
+        fill = st;
+        if (st.done || (st.filledBase ?? 0) > 0) break;
+      }
+      await sleep(600);
+    }
+  }
 
   await writeTradeLog({
     created_at: nowIso(),
     bot: BOT_NAME,
     symbol: PRODUCT_ID,
     side: "SELL",
-    base_size: Number(baseSize),
-    price: exitRef || null,
+    order_id: orderId,
+
+    base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
+    quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
+    price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : exitRef || null,
 
     user_id: ctx.user_id,
     run_id: runId,
@@ -1579,6 +1927,22 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     ok: sell.ok,
     status: sell.status,
+    raw: mkRawWrapper({
+      kind: "coinbase_order",
+      action: "EXIT_SELL_IOC_AFTER_TIMEOUT",
+      gates,
+      request: { path, method: "POST" },
+      payload: reqPayload,
+      response_status: sell.status,
+      response: {
+        maker_order_id: makerOrderId,
+        maker_final: lastStatus?.raw ?? null,
+        submit: sell.json ?? sell.text,
+        order_id: orderId,
+        final: fill?.raw ?? null,
+        final_status: fill?.status ?? null,
+      },
+    }),
   });
 
   return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
