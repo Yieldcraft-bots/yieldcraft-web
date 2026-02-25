@@ -96,7 +96,6 @@ function fmtPriceUsd(x: number) {
   return v.toFixed(2);
 }
 function uuid() {
-  // Node 18+ typically supports crypto.randomUUID; guard anyway
   const anyCrypto = crypto as any;
   return typeof anyCrypto.randomUUID === "function"
     ? anyCrypto.randomUUID()
@@ -120,25 +119,25 @@ function sb() {
  * Inserts into trade_logs with best-effort schema compatibility:
  * - Always uses created_at (not "t")
  * - If Supabase says "column X does not exist", we delete X and retry.
+ *
+ * NOTE: This is an INSERT-only logger (safe). If your table has a UNIQUE(order_id)
+ * and you want updates later, do that in pnl_enrich_v1.
  */
 async function writeTradeLog(row: Record<string, any>) {
   const client = sb();
 
-  // Force table-friendly timestamp column name
   const payload: Record<string, any> = {
     created_at: row.created_at || nowIso(),
     ...row,
   };
-  delete payload.t; // never send "t" (common cause of failures)
+  delete payload.t;
 
-  // retry loop: strip unknown columns (up to 8 times)
   let attempt = 0;
   let lastErr: any = null;
 
   while (attempt < 8) {
     attempt++;
     const { error } = await client.from("trade_logs").insert([payload]);
-
     if (!error) {
       console.log(
         "[pulse-manager]",
@@ -160,29 +159,22 @@ async function writeTradeLog(row: Record<string, any>) {
       })
     );
 
-    // Example: column "equity_gov" of relation "trade_logs" does not exist
     const m = msg.match(
       /column\s+"([^"]+)"\s+of\s+relation\s+"trade_logs"\s+does\s+not\s+exist/i
     );
     if (m && m[1]) {
-      const badCol = m[1];
-      delete payload[badCol];
-      continue; // retry after stripping column
+      delete payload[m[1]];
+      continue;
     }
-
-    // Some Supabase errors come formatted slightly differently:
     const m2 = msg.match(/column\s+"([^"]+)"\s+does\s+not\s+exist/i);
     if (m2 && m2[1]) {
-      const badCol = m2[1];
-      delete payload[badCol];
+      delete payload[m2[1]];
       continue;
     }
 
-    // Not a column-mismatch error -> stop retrying
     break;
   }
 
-  // final exception trace (non-fatal)
   console.log(
     "[pulse-manager]",
     JSON.stringify({
@@ -457,7 +449,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       regime: null,
       side: null,
       confidence: null,
-      entryAllowed: true, // FAIL OPEN
+      entryAllowed: true,
       reason: "missing_RECON_SIGNAL_URL",
     };
   }
@@ -488,7 +480,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
         regime: null,
         side: null,
         confidence: null,
-        entryAllowed: true, // FAIL OPEN
+        entryAllowed: true,
         reason: `recon_bad_response_status_${res.status}`,
       };
     }
@@ -544,7 +536,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       regime: null,
       side: null,
       confidence: null,
-      entryAllowed: true, // FAIL OPEN
+      entryAllowed: true,
       reason: `recon_fetch_error_${String(e?.name || "unknown")}`,
     };
   } finally {
@@ -638,7 +630,7 @@ function computeMultiplierFromDdPct(ddPct: number) {
   if (ddPct < 3) return 0.8;
   if (ddPct < 4) return 0.65;
   if (ddPct < 5) return 0.4;
-  return 1.0; // defense mode gating handles the rest
+  return 1.0;
 }
 
 async function getOrInitEquityState(user_id: string) {
@@ -711,7 +703,7 @@ async function computeEquityGovernor(
         equityUsd: null,
         peakEquityUsd: null,
         ddPct: null,
-        multiplier: 1.0, // FAIL OPEN
+        multiplier: 1.0,
         defense: false,
         reason: "equity_balance_fetch_failed",
       };
@@ -728,7 +720,7 @@ async function computeEquityGovernor(
         equityUsd: Number(equityUsd.toFixed(2)),
         peakEquityUsd: null,
         ddPct: null,
-        multiplier: 1.0, // FAIL OPEN
+        multiplier: 1.0,
         defense: false,
         reason: "equity_state_read_failed_or_table_missing",
       };
@@ -768,11 +760,249 @@ async function computeEquityGovernor(
       equityUsd: null,
       peakEquityUsd: null,
       ddPct: null,
-      multiplier: 1.0, // FAIL OPEN
+      multiplier: 1.0,
       defense: false,
       reason: `equity_gov_exception_${String(e?.message || e)}`,
     };
   }
+}
+
+// ---------- fills + execution enrichment (THE FIX) ----------
+type ExecFill = {
+  side: "BUY" | "SELL";
+  price: number;
+  size: number; // base
+  quote: number; // quote
+  time?: string;
+  raw?: any;
+};
+
+type ExecSummary = {
+  ok: boolean;
+  orderId: string;
+  side: "BUY" | "SELL" | null;
+  filledBase: number | null;
+  filledQuote: number | null;
+  avgPrice: number | null;
+  status: string | null;
+  done: boolean;
+  fills: ExecFill[];
+  raw: {
+    orderStatus?: any;
+    fillsResp?: any;
+    fillsText?: string;
+  };
+  note?: string;
+};
+
+async function fetchOrderStatus(ctx: Ctx, orderId: string) {
+  const r = await cbGet(
+    ctx,
+    `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
+  );
+  if (!r.ok)
+    return { ok: false as const, status: r.status, raw: r.json ?? r.text };
+
+  const o = (r.json as any)?.order ?? (r.json as any);
+  const status = String(o?.status || o?.order?.status || "").toUpperCase();
+
+  const filledBase =
+    Number(
+      o?.filled_size ??
+        o?.filled_quantity ??
+        o?.filled_base_size ??
+        o?.filled?.size ??
+        0
+    ) || 0;
+
+  const filledQuote =
+    Number(
+      o?.filled_value ??
+        o?.executed_value ??
+        o?.filled_quote_value ??
+        o?.filled?.value ??
+        0
+    ) || 0;
+
+  const avgPrice =
+    Number(
+      o?.average_filled_price ??
+        o?.avg_price ??
+        o?.filled_average_price ??
+        o?.average_fill_price ??
+        0
+    ) || 0;
+
+  const done = [
+    "FILLED",
+    "DONE",
+    "CANCELLED",
+    "CANCELED",
+    "REJECTED",
+    "EXPIRED",
+  ].includes(status);
+
+  return {
+    ok: true as const,
+    status,
+    done,
+    filledBase,
+    filledQuote,
+    avgPrice,
+    raw: r.json,
+  };
+}
+
+async function fetchFillsForOrder(
+  ctx: Ctx,
+  orderId: string
+): Promise<
+  | { ok: true; fills: ExecFill[]; raw: any; text: string }
+  | { ok: false; error: any; raw: any; text: string }
+> {
+  // Coinbase fills endpoint is the authoritative source of executions.
+  // Some accounts return `fills`, others nest differently; we parse best-effort.
+  const path = `/api/v3/brokerage/orders/historical/fills?order_ids=${encodeURIComponent(
+    orderId
+  )}&product_ids=${encodeURIComponent(PRODUCT_ID)}&limit=100`;
+
+  const r = await cbGet(ctx, path);
+  const text = typeof r.text === "string" ? r.text : "";
+  const raw = r.json ?? r.text;
+
+  if (!r.ok) return { ok: false, error: raw, raw, text };
+
+  const j: any = r.json || {};
+  const arr: any[] = Array.isArray(j?.fills)
+    ? j.fills
+    : Array.isArray(j?.data?.fills)
+    ? j.data.fills
+    : Array.isArray(j?.fill)
+    ? j.fill
+    : [];
+
+  const fills: ExecFill[] = [];
+  for (const f of arr) {
+    const sideRaw = String(f?.side || f?.order_side || "").toUpperCase();
+    const side: "BUY" | "SELL" = sideRaw === "SELL" ? "SELL" : "BUY";
+
+    const price = Number(f?.price || f?.fill_price || 0);
+    const size = Number(f?.size || f?.filled_size || f?.base_size || 0);
+
+    // quote might be provided as `commissionable_value` / `trade_value` etc.
+    // If not present, compute: price * size
+    const quoteRaw =
+      Number(f?.trade_value || f?.value || f?.quote_size || f?.filled_value || 0) ||
+      0;
+    const quote = quoteRaw > 0 ? quoteRaw : price > 0 && size > 0 ? price * size : 0;
+
+    const time = String(f?.trade_time || f?.created_time || f?.time || "");
+
+    if (Number.isFinite(price) && price > 0 && Number.isFinite(size) && size > 0) {
+      fills.push({ side, price, size, quote, time: time || undefined, raw: f });
+    }
+  }
+
+  return { ok: true, fills, raw: j, text };
+}
+
+function summarizeFills(orderId: string, fills: ExecFill[]) {
+  if (!fills.length) {
+    return {
+      orderId,
+      side: null as any,
+      filledBase: null as number | null,
+      filledQuote: null as number | null,
+      avgPrice: null as number | null,
+    };
+  }
+
+  const side = fills[0].side;
+  let base = 0;
+  let quote = 0;
+
+  for (const f of fills) {
+    base += Number(f.size || 0);
+    quote += Number(f.quote || 0);
+  }
+
+  const avg = base > 0 ? quote / base : 0;
+
+  return {
+    orderId,
+    side,
+    filledBase: base > 0 ? Number(base) : null,
+    filledQuote: quote > 0 ? Number(quote) : null,
+    avgPrice: avg > 0 ? Number(avg) : null,
+  };
+}
+
+async function fetchExecutionSummary(
+  ctx: Ctx,
+  orderId: string,
+  expectedSide?: "BUY" | "SELL"
+): Promise<ExecSummary> {
+  const raw: any = {};
+  let status: string | null = null;
+  let done = false;
+
+  // 1) Poll order status a few times (fast)
+  let st: any = null;
+  for (let i = 0; i < 6; i++) {
+    const s = await fetchOrderStatus(ctx, orderId);
+    st = s;
+    raw.orderStatus = s.ok ? s.raw : s.raw;
+    if (s.ok) {
+      status = s.status || null;
+      done = !!s.done;
+
+      // if we already have filledBase from status, still prefer fills for accuracy
+      if (done || (s.filledBase ?? 0) > 0) break;
+    }
+    await sleep(500);
+  }
+
+  // 2) Pull fills for this order (authoritative)
+  const fr = await fetchFillsForOrder(ctx, orderId);
+  raw.fillsResp = fr.raw;
+  raw.fillsText = fr.text;
+
+  const fills = fr.ok ? fr.fills : [];
+
+  // 3) Prefer fills-derived numbers; fallback to status-derived numbers
+  const fromFills = summarizeFills(orderId, fills);
+
+  const filledBase =
+    fromFills.filledBase ??
+    (st?.ok && st.filledBase > 0 ? Number(st.filledBase) : null);
+
+  const filledQuote =
+    fromFills.filledQuote ??
+    (st?.ok && st.filledQuote > 0 ? Number(st.filledQuote) : null);
+
+  const avgPrice =
+    fromFills.avgPrice ??
+    (st?.ok && st.avgPrice > 0 ? Number(st.avgPrice) : null);
+
+  const side =
+    fromFills.side ??
+    (expectedSide ? expectedSide : null);
+
+  return {
+    ok: true,
+    orderId,
+    side,
+    filledBase,
+    filledQuote,
+    avgPrice,
+    status: status || (st?.ok ? st.status : null),
+    done: !!done,
+    fills,
+    raw,
+    note: fills.length
+      ? "fills_used"
+      : "no_fills_returned_for_order_id (status_used_if_available)",
+  };
 }
 
 // ---------- last BUY fill ----------
@@ -922,54 +1152,6 @@ function makerAllowIocFallback(): boolean {
   return truthyDefault(process.env.MAKER_ALLOW_IOC_FALLBACK, true);
 }
 
-async function fetchOrderStatus(ctx: Ctx, orderId: string) {
-  const r = await cbGet(
-    ctx,
-    `/api/v3/brokerage/orders/historical/${encodeURIComponent(orderId)}`
-  );
-  if (!r.ok)
-    return { ok: false as const, status: r.status, raw: r.json ?? r.text };
-
-  const o = (r.json as any)?.order ?? (r.json as any);
-  const status = String(o?.status || o?.order?.status || "").toUpperCase();
-
-  const filledBase =
-    Number(o?.filled_size ?? o?.filled_quantity ?? o?.filled_base_size ?? 0) ||
-    0;
-
-  const filledQuote =
-    Number(
-      o?.filled_value ?? o?.executed_value ?? o?.filled_quote_value ?? 0
-    ) || 0;
-
-  const avgPrice =
-    Number(
-      o?.average_filled_price ??
-        o?.avg_price ??
-        o?.filled_average_price ??
-        0
-    ) || 0;
-
-  const done = [
-    "FILLED",
-    "DONE",
-    "CANCELLED",
-    "CANCELED",
-    "REJECTED",
-    "EXPIRED",
-  ].includes(status);
-
-  return {
-    ok: true as const,
-    status,
-    done,
-    filledBase,
-    filledQuote,
-    avgPrice,
-    raw: r.json,
-  };
-}
-
 async function placeLimitPostOnly(
   ctx: Ctx,
   side: "BUY" | "SELL",
@@ -992,42 +1174,6 @@ async function placeLimitPostOnly(
   return cbPost(ctx, path, payload);
 }
 
-async function placeMarketIoc(
-  ctx: Ctx,
-  side: "BUY" | "SELL",
-  quoteUsd?: string,
-  baseSize?: string
-) {
-  const path = "/api/v3/brokerage/orders";
-  const payload =
-    side === "BUY"
-      ? {
-          client_order_id: `yc_mgr_${ctx.user_id}_buy_ioc_${Date.now()}`,
-          product_id: PRODUCT_ID,
-          side: "BUY",
-          order_configuration: { market_market_ioc: { quote_size: quoteUsd } },
-        }
-      : {
-          client_order_id: `yc_mgr_${ctx.user_id}_sell_ioc_${Date.now()}`,
-          product_id: PRODUCT_ID,
-          side: "SELL",
-          order_configuration: { market_market_ioc: { base_size: baseSize } },
-        };
-  return cbPost(ctx, path, payload);
-}
-
-function extractOrderId(respJson: any): string | null {
-  const j = respJson || {};
-  return (
-    j?.order_id ||
-    j?.success_response?.order_id ||
-    j?.order?.order_id ||
-    j?.order?.id ||
-    j?.id ||
-    null
-  );
-}
-
 async function makerFirstBuy(ctx: Ctx, quoteUsd: string, refPrice: number) {
   const offset = makerOffsetBps();
   const limitPx = refPrice * (1 - offset / 10_000);
@@ -1044,6 +1190,18 @@ async function makerFirstSell(ctx: Ctx, baseSize: string, refPrice: number) {
   const limitPrice = fmtPriceUsd(limitPx);
   const maker = await placeLimitPostOnly(ctx, "SELL", baseSize, limitPrice);
   return { maker, limitPrice, refPrice };
+}
+
+function extractOrderId(respJson: any): string | null {
+  const j = respJson || {};
+  return (
+    j?.order_id ||
+    j?.success_response?.order_id ||
+    j?.order?.order_id ||
+    j?.order?.id ||
+    j?.id ||
+    null
+  );
 }
 
 // ---------- core runner per-user ----------
@@ -1256,22 +1414,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         order_configuration: { market_market_ioc: { quote_size: entryQuoteUsd } },
       };
 
-      // Use cbPost directly so we can persist request/response in raw
       const buy = await cbPost(ctx, path, reqPayload);
       const orderId = extractOrderId(buy.json);
 
-      let fill: any = null;
-      if (orderId) {
-        // short poll to let Coinbase finalize
-        for (let i = 0; i < 3; i++) {
-          const st = await fetchOrderStatus(ctx, orderId);
-          if (st.ok) {
-            fill = st;
-            if (st.done || (st.filledBase ?? 0) > 0) break;
-          }
-          await sleep(600);
-        }
-      }
+      const exec = orderId
+        ? await fetchExecutionSummary(ctx, orderId, "BUY")
+        : null;
 
       await writeTradeLog({
         created_at: nowIso(),
@@ -1280,10 +1428,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         side: "BUY",
         order_id: orderId,
 
-        // fill fields (prefer actual fill; fallback to intent)
-        base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
-        quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
-        price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : refPrice || null,
+        base_size: exec?.filledBase ?? null,
+        quote_size: exec?.filledQuote ?? Number(entryQuoteUsd),
+        price: exec?.avgPrice ?? (refPrice || null),
 
         user_id: ctx.user_id,
         run_id: runId,
@@ -1305,8 +1452,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           response: {
             submit: buy.json ?? buy.text,
             order_id: orderId,
-            final: fill?.raw ?? null,
-            final_status: fill?.status ?? null,
+            execution: exec,
           },
         }),
       });
@@ -1320,6 +1466,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const makerJson = attempt.maker.json ?? null;
     const makerOrderId = extractOrderId(makerJson);
 
+    // If maker submit fails: fallback IOC if allowed
     if (!makerOk || !makerOrderId) {
       if (!mAllowIoc) {
         return { ok: false, mode: "ENTRY_BUY_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, error: "maker_order_failed" };
@@ -1335,17 +1482,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       const buy = await cbPost(ctx, path, reqPayload);
       const orderId = extractOrderId(buy.json);
 
-      let fill: any = null;
-      if (orderId) {
-        for (let i = 0; i < 3; i++) {
-          const st = await fetchOrderStatus(ctx, orderId);
-          if (st.ok) {
-            fill = st;
-            if (st.done || (st.filledBase ?? 0) > 0) break;
-          }
-          await sleep(600);
-        }
-      }
+      const exec = orderId
+        ? await fetchExecutionSummary(ctx, orderId, "BUY")
+        : null;
 
       await writeTradeLog({
         created_at: nowIso(),
@@ -1354,9 +1493,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         side: "BUY",
         order_id: orderId,
 
-        base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
-        quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
-        price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : refPrice || null,
+        base_size: exec?.filledBase ?? null,
+        quote_size: exec?.filledQuote ?? Number(entryQuoteUsd),
+        price: exec?.avgPrice ?? (refPrice || null),
 
         user_id: ctx.user_id,
         run_id: runId,
@@ -1380,8 +1519,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             maker_ok: makerOk,
             submit: buy.json ?? buy.text,
             order_id: orderId,
-            final: fill?.raw ?? null,
-            final_status: fill?.status ?? null,
+            execution: exec,
           },
         }),
       });
@@ -1389,25 +1527,23 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, buy };
     }
 
-    // poll maker order
+    // poll maker order for up to makerTimeoutMs
     const deadline = Date.now() + mTimeout;
-    let lastStatus: any = null;
-
+    let lastSt: any = null;
     while (Date.now() < deadline) {
       const st = await fetchOrderStatus(ctx, makerOrderId);
-      lastStatus = st;
-      if (st.ok) {
-        if ((st.filledBase ?? 0) > 0 || st.done) break;
-      } else break;
+      lastSt = st;
+      if (st.ok && (st.done || (st.filledBase ?? 0) > 0)) break;
       await sleep(1200);
     }
 
-    const filledBase = lastStatus?.ok ? Number(lastStatus.filledBase || 0) : 0;
-    const filledQuote = lastStatus?.ok ? Number(lastStatus.filledQuote || 0) : 0;
-    const avgPrice = lastStatus?.ok ? Number(lastStatus.avgPrice || 0) : 0;
-    const done = lastStatus?.ok ? !!lastStatus.done : false;
+    // Regardless of status, always attempt fills fetch (authoritative)
+    const exec = await fetchExecutionSummary(ctx, makerOrderId, "BUY");
 
-    if (filledBase > 0 || done) {
+    // If maker actually filled (or even partially filled), log it
+    const makerFilled = (exec.filledBase ?? 0) > 0 || exec.done;
+
+    if (makerFilled) {
       await writeTradeLog({
         created_at: nowIso(),
         bot: BOT_NAME,
@@ -1415,15 +1551,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         side: "BUY",
         order_id: makerOrderId,
 
-        base_size: filledBase > 0 ? filledBase : null,
-        quote_size: filledQuote > 0 ? filledQuote : Number(entryQuoteUsd),
-        price: avgPrice > 0 ? avgPrice : (attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null),
+        base_size: exec.filledBase ?? null,
+        quote_size: exec.filledQuote ?? Number(entryQuoteUsd),
+        price: exec.avgPrice ?? (attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null),
 
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_MAKER",
         reason: "maker_filled_or_done",
-        decision: { maker_order_id: makerOrderId, status: lastStatus, makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice } },
+        decision: { maker_order_id: makerOrderId, status: lastSt, makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice } },
         recon_status: reconStatus,
         equity_gov: gov,
 
@@ -1445,8 +1581,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           response: {
             maker_submit: attempt.maker.json ?? attempt.maker.text,
             order_id: makerOrderId,
-            final: lastStatus?.raw ?? null,
-            final_status: lastStatus?.status ?? null,
+            order_status: lastSt?.raw ?? null,
+            execution: exec,
           },
         }),
       });
@@ -1454,6 +1590,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
     }
 
+    // maker timed out (no fill). fallback IOC if allowed
     if (!mAllowIoc) {
       return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
     }
@@ -1468,17 +1605,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const buy = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(buy.json);
 
-    let fill: any = null;
-    if (orderId) {
-      for (let i = 0; i < 3; i++) {
-        const st = await fetchOrderStatus(ctx, orderId);
-        if (st.ok) {
-          fill = st;
-          if (st.done || (st.filledBase ?? 0) > 0) break;
-        }
-        await sleep(600);
-      }
-    }
+    const exec2 = orderId
+      ? await fetchExecutionSummary(ctx, orderId, "BUY")
+      : null;
 
     await writeTradeLog({
       created_at: nowIso(),
@@ -1487,15 +1616,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       side: "BUY",
       order_id: orderId,
 
-      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : null,
-      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : Number(entryQuoteUsd),
-      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : refPrice || null,
+      base_size: exec2?.filledBase ?? null,
+      quote_size: exec2?.filledQuote ?? Number(entryQuoteUsd),
+      price: exec2?.avgPrice ?? (refPrice || null),
 
       user_id: ctx.user_id,
       run_id: runId,
       mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT",
       reason: "maker_timeout_fallback_ioc",
-      decision: { maker_order_id: makerOrderId, status: lastStatus },
+      decision: { maker_order_id: makerOrderId, status: lastSt },
       recon_status: reconStatus,
       equity_gov: gov,
 
@@ -1510,11 +1639,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         response_status: buy.status,
         response: {
           maker_order_id: makerOrderId,
-          maker_final: lastStatus?.raw ?? null,
+          maker_last_status: lastSt?.raw ?? null,
           submit: buy.json ?? buy.text,
           order_id: orderId,
-          final: fill?.raw ?? null,
-          final_status: fill?.status ?? null,
+          execution: exec2,
         },
       }),
     });
@@ -1639,17 +1767,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const sell = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(sell.json);
 
-    let fill: any = null;
-    if (orderId) {
-      for (let i = 0; i < 3; i++) {
-        const st = await fetchOrderStatus(ctx, orderId);
-        if (st.ok) {
-          fill = st;
-          if (st.done || (st.filledBase ?? 0) > 0) break;
-        }
-        await sleep(600);
-      }
-    }
+    const exec = orderId
+      ? await fetchExecutionSummary(ctx, orderId, "SELL")
+      : null;
 
     await writeTradeLog({
       created_at: nowIso(),
@@ -1658,9 +1778,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       side: "SELL",
       order_id: orderId,
 
-      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
-      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
-      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : current || null,
+      base_size: exec?.filledBase ?? Number(baseSize),
+      quote_size: exec?.filledQuote ?? null,
+      price: exec?.avgPrice ?? (current || null),
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1682,8 +1802,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         response: {
           submit: sell.json ?? sell.text,
           order_id: orderId,
-          final: fill?.raw ?? null,
-          final_status: fill?.status ?? null,
+          execution: exec,
         },
       }),
     });
@@ -1709,17 +1828,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const sell = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(sell.json);
 
-    let fill: any = null;
-    if (orderId) {
-      for (let i = 0; i < 3; i++) {
-        const st = await fetchOrderStatus(ctx, orderId);
-        if (st.ok) {
-          fill = st;
-          if (st.done || (st.filledBase ?? 0) > 0) break;
-        }
-        await sleep(600);
-      }
-    }
+    const exec = orderId
+      ? await fetchExecutionSummary(ctx, orderId, "SELL")
+      : null;
 
     await writeTradeLog({
       created_at: nowIso(),
@@ -1728,9 +1839,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       side: "SELL",
       order_id: orderId,
 
-      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
-      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
-      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : null,
+      base_size: exec?.filledBase ?? Number(baseSize),
+      quote_size: exec?.filledQuote ?? null,
+      price: exec?.avgPrice ?? null,
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1752,8 +1863,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         response: {
           submit: sell.json ?? sell.text,
           order_id: orderId,
-          final: fill?.raw ?? null,
-          final_status: fill?.status ?? null,
+          execution: exec,
         },
       }),
     });
@@ -1782,17 +1892,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     const sell = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(sell.json);
 
-    let fill: any = null;
-    if (orderId) {
-      for (let i = 0; i < 3; i++) {
-        const st = await fetchOrderStatus(ctx, orderId);
-        if (st.ok) {
-          fill = st;
-          if (st.done || (st.filledBase ?? 0) > 0) break;
-        }
-        await sleep(600);
-      }
-    }
+    const exec = orderId
+      ? await fetchExecutionSummary(ctx, orderId, "SELL")
+      : null;
 
     await writeTradeLog({
       created_at: nowIso(),
@@ -1801,9 +1903,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       side: "SELL",
       order_id: orderId,
 
-      base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
-      quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
-      price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : exitRef || null,
+      base_size: exec?.filledBase ?? Number(baseSize),
+      quote_size: exec?.filledQuote ?? null,
+      price: exec?.avgPrice ?? (exitRef || null),
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1827,8 +1929,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           maker_ok: makerOk,
           submit: sell.json ?? sell.text,
           order_id: orderId,
-          final: fill?.raw ?? null,
-          final_status: fill?.status ?? null,
+          execution: exec,
         },
       }),
     });
@@ -1837,23 +1938,19 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   }
 
   const deadline = Date.now() + makerTimeoutMs();
-  let lastStatus: any = null;
+  let lastSt: any = null;
 
   while (Date.now() < deadline) {
     const st = await fetchOrderStatus(ctx, makerOrderId);
-    lastStatus = st;
-    if (st.ok) {
-      if ((st.filledBase ?? 0) > 0 || st.done) break;
-    } else break;
+    lastSt = st;
+    if (st.ok && (st.done || (st.filledBase ?? 0) > 0)) break;
     await sleep(1200);
   }
 
-  const filledBase = lastStatus?.ok ? Number(lastStatus.filledBase || 0) : 0;
-  const filledQuote = lastStatus?.ok ? Number(lastStatus.filledQuote || 0) : 0;
-  const avgPrice = lastStatus?.ok ? Number(lastStatus.avgPrice || 0) : 0;
-  const done = lastStatus?.ok ? !!lastStatus.done : false;
+  const exec = await fetchExecutionSummary(ctx, makerOrderId, "SELL");
+  const makerFilled = (exec.filledBase ?? 0) > 0 || exec.done;
 
-  if (filledBase > 0 || done) {
+  if (makerFilled) {
     await writeTradeLog({
       created_at: nowIso(),
       bot: BOT_NAME,
@@ -1861,15 +1958,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       side: "SELL",
       order_id: makerOrderId,
 
-      base_size: filledBase > 0 ? filledBase : Number(baseSize),
-      quote_size: filledQuote > 0 ? filledQuote : null,
-      price: avgPrice > 0 ? avgPrice : (attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null),
+      base_size: exec.filledBase ?? Number(baseSize),
+      quote_size: exec.filledQuote ?? null,
+      price: exec.avgPrice ?? (attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null),
 
       user_id: ctx.user_id,
       run_id: runId,
       mode: "EXIT_SELL_MAKER",
       reason,
-      decision: { ...decision, maker_order_id: makerOrderId, status: lastStatus },
+      decision: { ...decision, maker_order_id: makerOrderId, status: lastSt },
       recon_status: reconStatus,
       equity_gov: gov,
 
@@ -1891,8 +1988,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         response: {
           maker_submit: attempt.maker.json ?? attempt.maker.text,
           order_id: makerOrderId,
-          final: lastStatus?.raw ?? null,
-          final_status: lastStatus?.status ?? null,
+          order_status: lastSt?.raw ?? null,
+          execution: exec,
         },
       }),
     });
@@ -1914,17 +2011,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const sell = await cbPost(ctx, path, reqPayload);
   const orderId = extractOrderId(sell.json);
 
-  let fill: any = null;
-  if (orderId) {
-    for (let i = 0; i < 3; i++) {
-      const st = await fetchOrderStatus(ctx, orderId);
-      if (st.ok) {
-        fill = st;
-        if (st.done || (st.filledBase ?? 0) > 0) break;
-      }
-      await sleep(600);
-    }
-  }
+  const exec2 = orderId
+    ? await fetchExecutionSummary(ctx, orderId, "SELL")
+    : null;
 
   await writeTradeLog({
     created_at: nowIso(),
@@ -1933,15 +2022,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     side: "SELL",
     order_id: orderId,
 
-    base_size: fill?.ok && fill.filledBase > 0 ? Number(fill.filledBase) : Number(baseSize),
-    quote_size: fill?.ok && fill.filledQuote > 0 ? Number(fill.filledQuote) : null,
-    price: fill?.ok && fill.avgPrice > 0 ? Number(fill.avgPrice) : exitRef || null,
+    base_size: exec2?.filledBase ?? Number(baseSize),
+    quote_size: exec2?.filledQuote ?? null,
+    price: exec2?.avgPrice ?? (exitRef || null),
 
     user_id: ctx.user_id,
     run_id: runId,
     mode: "EXIT_SELL_IOC_AFTER_TIMEOUT",
     reason,
-    decision: { ...decision, maker_order_id: makerOrderId, status: lastStatus },
+    decision: { ...decision, maker_order_id: makerOrderId, status: lastSt },
     recon_status: reconStatus,
     equity_gov: gov,
 
@@ -1956,11 +2045,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       response_status: sell.status,
       response: {
         maker_order_id: makerOrderId,
-        maker_final: lastStatus?.raw ?? null,
+        maker_last_status: lastSt?.raw ?? null,
         submit: sell.json ?? sell.text,
         order_id: orderId,
-        final: fill?.raw ?? null,
-        final_status: fill?.status ?? null,
+        execution: exec2,
       },
     }),
   });
