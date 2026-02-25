@@ -1,15 +1,35 @@
-// src/app/api/pnl_enrich_v1/route.ts
+// src/app/api/pnl_snapshot_v1/route.ts
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
+/**
+ * PnL Snapshot (server)
+ * - Reads trade_logs
+ * - Computes realized PnL via FIFO matching (BUY lots matched to SELL)
+ * - Computes open position + open PnL from last seen price (best-effort)
+ *
+ * Query:
+ *  - secret=... (or header x-cron-secret / authorization)
+ *  - since=ISO (default: 2025-12-01T00:00:00.000Z)
+ *  - limit=number (default 10000)
+ *  - user_id=... (optional)
+ *  - symbol=BTC-USD (optional, default BTC-USD)
+ */
+
 function json(status: number, body: any) {
   return NextResponse.json(body, {
     status,
-    headers: { "Cache-Control": "no-store" },
+    headers: {
+      "Cache-Control": "no-store",
+    },
   });
+}
+
+function truthy(v?: string) {
+  return ["1", "true", "yes", "on"].includes((v || "").toLowerCase());
 }
 
 function requireEnv(name: string) {
@@ -18,323 +38,292 @@ function requireEnv(name: string) {
   return v.trim();
 }
 
+function num(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function cleanString(v: any) {
   return (typeof v === "string" ? v : "").trim();
 }
 
-function num(v: any, fallback: number) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+function nowIso() {
+  return new Date().toISOString();
 }
 
 function shortId() {
   return crypto.randomBytes(6).toString("hex");
 }
 
-// ---------- auth (admin-only) ----------
-function okAdminAuth(req: Request) {
-  const secret = (
-    process.env.ADMIN_SECRET ||
-    process.env.CRON_SECRET ||
-    process.env.PULSE_MANAGER_SECRET ||
-    ""
-  ).trim();
-
+function okAuth(req: Request) {
+  const secret = (process.env.CRON_SECRET || process.env.YC_CRON_SECRET || "").trim();
   if (!secret) return false;
 
   const h =
-    req.headers.get("x-admin-secret") ||
     req.headers.get("x-cron-secret") ||
     req.headers.get("authorization") ||
-    "";
+    req.headers.get("x-yc-secret");
 
-  if (h === secret || h === `Bearer ${secret}`) return true;
+  if (h && (h === secret || h === `Bearer ${secret}`)) return true;
 
   const url = new URL(req.url);
   const q = url.searchParams.get("secret");
   return q === secret;
 }
 
-// ---------- supabase ----------
 function sb() {
   const url = requireEnv("SUPABASE_URL");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-// ---------- Coinbase auth (CDP JWT) ----------
-// Requires these envs to already exist in Vercel (same ones your trading routes use):
-// COINBASE_API_KEY_NAME, COINBASE_PRIVATE_KEY, COINBASE_KEY_ALG (ES256 or EdDSA)
-function normalizePem(pem: string) {
-  return pem
-    .trim()
-    .replace(/^"+|"+$/g, "")
-    .replace(/\\n/g, "\n")
-    .replace(/\r\n/g, "\n");
+// ---- Types we expect in trade_logs (best effort) ----
+type TradeRow = {
+  created_at: string;
+  user_id: string | null;
+  symbol: string | null;
+  side: "BUY" | "SELL" | string;
+  order_id: string | null;
+  base_size: number | null;   // BTC amount
+  quote_size: number | null;  // USD notional
+  price: number | null;       // avg price (USD)
+  ok?: boolean | null;
+};
+
+type Lot = { qty: number; price: number; time: string; order_id?: string | null };
+
+function safeSide(s: any): "BUY" | "SELL" | "OTHER" {
+  const v = String(s || "").toUpperCase();
+  if (v === "BUY") return "BUY";
+  if (v === "SELL") return "SELL";
+  return "OTHER";
 }
 
-function b64url(input: Buffer | string) {
-  const b = Buffer.isBuffer(input) ? input : Buffer.from(input);
-  return b
-    .toString("base64")
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
+function round2(x: number) {
+  return Number(x.toFixed(2));
+}
+function round4(x: number) {
+  return Number(x.toFixed(4));
 }
 
-function signJwtES256(privateKeyPem: string, header: any, payload: any) {
-  const encHeader = b64url(JSON.stringify(header));
-  const encPayload = b64url(JSON.stringify(payload));
-  const data = `${encHeader}.${encPayload}`;
-
-  const sig = crypto.createSign("RSA-SHA256"); // NOTE: crypto uses ECDSA via key type even though name says RSA-SHA256
-  sig.update(data);
-  sig.end();
-
-  const der = sig.sign({ key: privateKeyPem, dsaEncoding: "ieee-p1363" });
-  const encSig = b64url(der);
-
-  return `${data}.${encSig}`;
-}
-
-function signJwtEdDSA(privateKeyPem: string, header: any, payload: any) {
-  const encHeader = b64url(JSON.stringify(header));
-  const encPayload = b64url(JSON.stringify(payload));
-  const data = `${encHeader}.${encPayload}`;
-
-  const signature = crypto.sign(null, Buffer.from(data), privateKeyPem);
-  const encSig = b64url(signature);
-
-  return `${data}.${encSig}`;
-}
-
-function buildCdpJwt(method: string, path: string) {
-  const keyName = requireEnv("COINBASE_API_KEY_NAME");
-  const keyAlgRaw = cleanString(process.env.COINBASE_KEY_ALG || "ES256").toUpperCase();
-  const alg = keyAlgRaw === "ED25519" || keyAlgRaw === "EDDSA" ? "EdDSA" : "ES256";
-
-  const pem = normalizePem(requireEnv("COINBASE_PRIVATE_KEY"));
-
-  // Coinbase CDP expects: uri = "<METHOD> api.coinbase.com<PATH>"
-  const uri = `${method.toUpperCase()} api.coinbase.com${path}`;
-
-  const now = Math.floor(Date.now() / 1000);
-  const header = {
-    alg,
-    kid: keyName,
-    nonce: crypto.randomBytes(12).toString("hex"),
-    typ: "JWT",
-  };
-  const payload = {
-    iss: "cdp",
-    nbf: now,
-    exp: now + 60,
-    sub: keyName,
-    uri,
-  };
-
-  return alg === "EdDSA"
-    ? signJwtEdDSA(pem, header, payload)
-    : signJwtES256(pem, header, payload);
-}
-
-async function coinbaseFetch(method: "GET" | "POST", path: string) {
-  const jwt = buildCdpJwt(method, path);
-
-  const res = await fetch(`https://api.coinbase.com${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${jwt}`,
-      "Content-Type": "application/json",
-    },
-    cache: "no-store",
-  });
-
-  const text = await res.text();
-  let j: any = null;
-  try {
-    j = JSON.parse(text);
-  } catch {
-    j = { _raw: text };
-  }
-
-  return { ok: res.ok, status: res.status, json: j, text };
-}
-
-// Try to extract fill facts from Coinbase historical order response
-function extractOrderFacts(j: any) {
-  // Coinbase shapes vary; try a bunch of common paths
-  const order =
-    j?.order ||
-    j?.data?.order ||
-    j?.success_response?.order ||
-    j?.response?.order ||
-    j?.order_details ||
-    j?.result?.order ||
-    j;
-
-  const filledSize =
-    Number(order?.filled_size) ||
-    Number(order?.filled_value) || // sometimes used differently, but keep as fallback
-    Number(order?.filled_amount) ||
-    Number(order?.filled_quantity) ||
-    0;
-
-  const avgPx =
-    Number(order?.average_filled_price) ||
-    Number(order?.avg_filled_price) ||
-    Number(order?.average_price) ||
-    0;
-
-  // Try fills arrays (if present)
-  const fills =
-    order?.fills ||
-    order?.fill ||
-    order?.order_fills ||
-    j?.fills ||
-    j?.data?.fills ||
-    null;
-
-  let derivedBase = 0;
-  let derivedQuote = 0;
-  let derivedAvg = 0;
-
-  if (Array.isArray(fills) && fills.length > 0) {
-    let totalBase = 0;
-    let totalQuote = 0;
-
-    for (const f of fills) {
-      const base = Number(f?.size || f?.filled_size || f?.base_size || 0);
-      const price = Number(f?.price || f?.fill_price || 0);
-      if (Number.isFinite(base) && base > 0) {
-        totalBase += base;
-        if (Number.isFinite(price) && price > 0) totalQuote += base * price;
-      }
-    }
-
-    derivedBase = totalBase;
-    derivedQuote = totalQuote;
-    derivedAvg = totalBase > 0 ? totalQuote / totalBase : 0;
-  }
-
-  const base_size = (filledSize > 0 ? filledSize : derivedBase) || 0;
-  const price = (avgPx > 0 ? avgPx : derivedAvg) || 0;
-
-  // If we can derive quote notional, nice to store (optional)
-  const quote_size = derivedQuote > 0 ? derivedQuote : (base_size > 0 && price > 0 ? base_size * price : 0);
-
-  return {
-    base_size: Number.isFinite(base_size) && base_size > 0 ? base_size : null,
-    price: Number.isFinite(price) && price > 0 ? price : null,
-    quote_size: Number.isFinite(quote_size) && quote_size > 0 ? quote_size : null,
-    fills: Array.isArray(fills) ? fills : null,
-    order_raw: order || null,
-  };
+function bps(a: number, b: number) {
+  // (a-b)/b * 10_000
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return 0;
+  return ((a - b) / b) * 10_000;
 }
 
 export async function GET(req: Request) {
-  if (!okAdminAuth(req)) return json(401, { ok: false, error: "unauthorized" });
-
-  const url = new URL(req.url);
-  const runId = `enrich_${shortId()}`;
-
-  const order_id = cleanString(url.searchParams.get("order_id"));
-  const limit = Math.min(200, Math.max(1, num(url.searchParams.get("limit"), 25)));
-
   try {
+    if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
+
+    const url = new URL(req.url);
+
+    const runId = `pnl_${shortId()}`;
+
+    const since = cleanString(url.searchParams.get("since")) || "2025-12-01T00:00:00.000Z";
+    const limit = Math.max(1, Math.min(100000, num(url.searchParams.get("limit"), 10000)));
+
+    // Optional filters
+    const symbol = (cleanString(url.searchParams.get("symbol")) || "BTC-USD").toUpperCase();
+    const user_id_q = cleanString(url.searchParams.get("user_id")) || null;
+
+    // Safety: allow forcing one user via env
+    const ONLY_USER_ID = (process.env.PULSE_ONLY_USER_ID || "").trim() || null;
+    const user_id = ONLY_USER_ID || user_id_q;
+
     const client = sb();
 
-    // If a single order_id is supplied, enrich just that one.
-    // Otherwise enrich latest rows missing price/base_size.
-    let rows: any[] = [];
+    // Pull trades
+    // We keep selection tight to avoid giant payloads.
+    let q = client
+      .from("trade_logs")
+      .select("created_at,user_id,symbol,side,order_id,base_size,quote_size,price,ok")
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .limit(limit);
 
-    if (order_id) {
-      const { data, error } = await client
-        .from("trade_logs")
-        .select("created_at, side, order_id, price, base_size, quote_size, raw")
-        .eq("order_id", order_id)
-        .limit(1);
+    if (user_id) q = q.eq("user_id", user_id);
+    if (symbol) q = q.eq("symbol", symbol);
 
-      if (error) return json(500, { ok: false, runId, error: error.message || error });
-      rows = Array.isArray(data) ? data : [];
-    } else {
-      const { data, error } = await client
-        .from("trade_logs")
-        .select("created_at, side, order_id, price, base_size, quote_size, raw")
-        .not("order_id", "is", null)
-        .or("price.is.null,base_size.is.null")
-        .order("created_at", { ascending: false })
-        .limit(limit);
-
-      if (error) return json(500, { ok: false, runId, error: error.message || error });
-      rows = Array.isArray(data) ? data : [];
+    const { data, error } = await q;
+    if (error) {
+      return json(500, { ok: false, runId, error: error.message || error });
     }
 
-    let updated = 0;
-    const details: any[] = [];
+    const rows = (Array.isArray(data) ? (data as any as TradeRow[]) : []).filter(Boolean);
 
-    for (const r of rows) {
-      const oid = cleanString(r?.order_id);
-      if (!oid) continue;
+    // Filter to usable rows (need side + some sizing; we prefer base_size+price, but allow quote_size).
+    const usable: TradeRow[] = rows.filter((r) => {
+      const side = safeSide(r.side);
+      if (side === "OTHER") return false;
+      const b = Number(r.base_size ?? 0);
+      const qv = Number(r.quote_size ?? 0);
+      const p = Number(r.price ?? 0);
+      return (Number.isFinite(b) && b > 0) || (Number.isFinite(qv) && qv > 0) || (Number.isFinite(p) && p > 0);
+    });
 
-      const path = `/api/v3/brokerage/orders/historical/${encodeURIComponent(oid)}`;
-      const cb = await coinbaseFetch("GET", path);
+    // FIFO matching
+    const buys: Lot[] = [];
+    const realizedTrades: {
+      time: string;
+      entry_price: number;
+      exit_price: number;
+      qty: number;
+      pnl_usd: number;
+      pnl_bps: number;
+      entry_order_id?: string | null;
+      exit_order_id?: string | null;
+    }[] = [];
 
-      if (!cb.ok) {
-        details.push({ order_id: oid, ok: false, status: cb.status, error: cb.json || cb.text });
+    let lastPrice = 0;
+
+    for (const r of usable) {
+      const side = safeSide(r.side);
+      const px = Number(r.price ?? 0);
+      const base = Number(r.base_size ?? 0);
+      const quote = Number(r.quote_size ?? 0);
+      const t = cleanString(r.created_at) || nowIso();
+
+      // last seen price for open pnl (best effort)
+      if (Number.isFinite(px) && px > 0) lastPrice = px;
+
+      // derive missing base/price if possible
+      let effBase = Number.isFinite(base) && base > 0 ? base : 0;
+      let effPrice = Number.isFinite(px) && px > 0 ? px : 0;
+
+      if (!effBase && quote > 0 && effPrice > 0) effBase = quote / effPrice;
+      if (!effPrice && quote > 0 && effBase > 0) effPrice = quote / effBase;
+
+      if (!Number.isFinite(effBase) || effBase <= 0) continue;
+      if (!Number.isFinite(effPrice) || effPrice <= 0) continue;
+
+      if (side === "BUY") {
+        buys.push({ qty: effBase, price: effPrice, time: t, order_id: r.order_id });
         continue;
       }
 
-      const facts = extractOrderFacts(cb.json);
+      // SELL: match against buys FIFO
+      let sellQty = effBase;
 
-      // Only update if we actually got something useful
-      const patch: any = {};
-      if (facts.price != null) patch.price = Number(facts.price);
-      if (facts.base_size != null) patch.base_size = Number(facts.base_size);
-      if (facts.quote_size != null) patch.quote_size = Number(facts.quote_size);
+      while (sellQty > 0 && buys.length > 0) {
+        const lot = buys[0];
+        const matched = Math.min(sellQty, lot.qty);
 
-      // Store fills/order into raw for later debugging
-      const rawPrev = typeof r?.raw === "object" && r?.raw ? r.raw : {};
-      patch.raw = {
-        ...rawPrev,
-        enrich_v1: {
-          at: new Date().toISOString(),
-          order_id: oid,
-          coinbase_path: path,
-          fills: facts.fills,
-          order: facts.order_raw,
-        },
-      };
+        const entryPrice = lot.price;
+        const exitPrice = effPrice;
 
-      const { error: upErr } = await client
-        .from("trade_logs")
-        .update(patch)
-        .eq("order_id", oid);
+        const pnlUsd = (exitPrice - entryPrice) * matched;
+        const pnlBps = bps(exitPrice, entryPrice);
 
-      if (upErr) {
-        details.push({ order_id: oid, ok: false, status: 500, error: upErr.message || upErr });
-        continue;
+        realizedTrades.push({
+          time: t,
+          entry_price: entryPrice,
+          exit_price: exitPrice,
+          qty: matched,
+          pnl_usd: pnlUsd,
+          pnl_bps: pnlBps,
+          entry_order_id: lot.order_id ?? null,
+          exit_order_id: r.order_id ?? null,
+        });
+
+        lot.qty -= matched;
+        sellQty -= matched;
+
+        if (lot.qty <= 1e-12) buys.shift();
       }
 
-      updated += 1;
-      details.push({
-        order_id: oid,
-        ok: true,
-        price: patch.price ?? null,
-        base_size: patch.base_size ?? null,
-        quote_size: patch.quote_size ?? null,
-      });
+      // If we sold more than we have (shouldn’t happen), we ignore remainder.
+    }
+
+    // Realized summary
+    const realizedPnL = realizedTrades.reduce((s, x) => s + (Number(x.pnl_usd) || 0), 0);
+
+    const wins = realizedTrades.filter((x) => x.pnl_usd > 0);
+    const losses = realizedTrades.filter((x) => x.pnl_usd < 0);
+
+    const avgWinBps = wins.length
+      ? wins.reduce((s, x) => s + (Number(x.pnl_bps) || 0), 0) / wins.length
+      : 0;
+
+    const avgLossBps = losses.length
+      ? losses.reduce((s, x) => s + (Number(x.pnl_bps) || 0), 0) / losses.length
+      : 0;
+
+    const winRate = realizedTrades.length ? (wins.length / realizedTrades.length) * 100 : 0;
+
+    // Open position from remaining BUY lots
+    const openBase = buys.reduce((s, l) => s + (Number(l.qty) || 0), 0);
+    const openCostUsd = buys.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+    const openAvgPrice = openBase > 0 ? openCostUsd / openBase : 0;
+
+    // Open PnL best effort (needs lastPrice)
+    const openPnlUsd =
+      openBase > 0 && lastPrice > 0 ? (lastPrice - openAvgPrice) * openBase : 0;
+
+    // Simple “equity” curve from start equity env + realized pnl (best effort)
+    const startEquity = num(process.env.YC_START_EQUITY_USD, 0);
+    const equityNow = startEquity + realizedPnL + openPnlUsd;
+
+    // Max drawdown from equity series (we only have realized points; still useful)
+    let peakEquity = startEquity;
+    let maxDdPct = 0;
+    let running = startEquity;
+
+    // Walk realized events in time order
+    const realizedByTime = [...realizedTrades].sort((a, b) => (a.time < b.time ? -1 : 1));
+    for (const x of realizedByTime) {
+      running += Number(x.pnl_usd) || 0;
+      if (running > peakEquity) peakEquity = running;
+      const dd = peakEquity > 0 ? ((peakEquity - running) / peakEquity) * 100 : 0;
+      if (dd > maxDdPct) maxDdPct = dd;
     }
 
     return json(200, {
       ok: true,
       runId,
-      requested_order_id: order_id || null,
-      scanned: rows.length,
-      updated,
-      details,
+      since,
+      symbol,
+      user_id: user_id || null,
+
+      // ingestion
+      rows_scanned: rows.length,
+      rows_usable: usable.length,
+      limit,
+
+      // realized
+      total_trades: realizedTrades.length,
+      wins: wins.length,
+      losses: losses.length,
+      win_rate: round2(winRate),
+      avg_win_bps: round2(avgWinBps),
+      avg_loss_bps: round2(avgLossBps),
+      net_realized_pnl_usd: round2(realizedPnL),
+
+      // open
+      open_position_base: round4(openBase),
+      open_cost_usd: round2(openCostUsd),
+      spot_price: lastPrice ? round2(lastPrice) : null,
+      open_avg_price: openAvgPrice ? round2(openAvgPrice) : null,
+      current_open_pnl_usd: round2(openPnlUsd),
+
+      // equity-ish (best effort)
+      starting_equity_usd: round2(startEquity),
+      running_equity_usd: round2(equityNow),
+      max_drawdown_pct: round2(maxDdPct),
+
+      // debug helpers
+      debug: {
+        only_user_id_env: (process.env.PULSE_ONLY_USER_ID || "").trim() || null,
+        note:
+          "PnL uses FIFO matching on trade_logs. Needs base_size + price for best accuracy. Open PnL uses last seen trade price from logs (best-effort).",
+      },
     });
   } catch (e: any) {
-    return json(500, { ok: false, runId, error: String(e?.message || e) });
+    return json(500, { ok: false, error: String(e?.message || e) });
   }
+}
+
+export async function POST(req: Request) {
+  // POST just proxies to GET behavior (same auth, same params)
+  return GET(req);
 }
