@@ -5,7 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
-// ---------- helpers ----------
+// ---------------- helpers ----------------
 function json(status: number, body: any) {
   return NextResponse.json(body, {
     status,
@@ -17,12 +17,12 @@ function requireEnv(name: string) {
   if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
   return v.trim();
 }
-function num(v: any, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
-}
 function cleanString(v: any) {
   return (typeof v === "string" ? v : "").trim();
+}
+function num(v: any, fallback: number) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
 function safeJsonParse(text: string) {
   try {
@@ -44,30 +44,8 @@ function toIsoMaybe(x: any): string | null {
 function shortId() {
   return crypto.randomBytes(6).toString("hex");
 }
-function asNumber(x: any): number | null {
-  if (x == null) return null;
-  if (typeof x === "number" && Number.isFinite(x)) return x;
-  if (typeof x === "string") {
-    const n = Number(x);
-    return Number.isFinite(n) ? n : null;
-  }
-  if (typeof x === "object") {
-    // Coinbase often uses { value: "0.12", currency: "USD" }
-    const v = (x as any)?.value;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-function firstNum(...vals: any[]): number | null {
-  for (const v of vals) {
-    const n = asNumber(v);
-    if (n != null && Number.isFinite(n)) return n;
-  }
-  return null;
-}
 
-// ---------- auth (admin-only) ----------
+// ---------------- auth (admin-only) ----------------
 // Accepts: ?secret= , x-admin-secret , x-cron-secret , authorization: Bearer <secret>
 function okAdminAuth(req: Request) {
   const secret = (
@@ -92,14 +70,118 @@ function okAdminAuth(req: Request) {
   return q === secret;
 }
 
-// ---------- supabase ----------
+// ---------------- supabase ----------------
 function sb() {
   const url = requireEnv("SUPABASE_URL");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-// ---------- types ----------
+// ---------------- Coinbase CDP JWT (Advanced Trade) ----------------
+function base64url(input: Buffer | string) {
+  const b = Buffer.isBuffer(input) ? input : Buffer.from(input);
+  return b
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+}
+
+function normalizePem(pem: string) {
+  let s = (pem || "").trim();
+  if (!s) return s;
+  // strip wrapping quotes
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    s = s.slice(1, -1);
+  }
+  // turn literal \n into real newlines
+  s = s.replace(/\\n/g, "\n");
+  // normalize CRLF
+  s = s.replace(/\r\n/g, "\n");
+  return s.trim();
+}
+
+function signJwtCdp(params: {
+  method: "GET" | "POST";
+  pathWithQuery: string; // includes leading /api/...
+  keyName: string; // organizations/.../apiKeys/...
+  privateKeyPem: string;
+  alg: "ES256" | "EdDSA";
+}) {
+  const { method, pathWithQuery, keyName } = params;
+  const alg = params.alg;
+  const privateKeyPem = normalizePem(params.privateKeyPem);
+
+  const header: any = {
+    alg: alg === "EdDSA" ? "EdDSA" : "ES256",
+    typ: "JWT",
+    kid: keyName,
+    nonce: crypto.randomBytes(16).toString("hex"),
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  // Coinbase examples commonly use: "<METHOD> api.coinbase.com<PATH>"
+  const uri = `${method} api.coinbase.com${pathWithQuery}`;
+
+  const payload: any = {
+    iss: "cdp",
+    sub: keyName,
+    nbf: now,
+    exp: now + 60, // short-lived
+    uri,
+  };
+
+  const unsigned = `${base64url(JSON.stringify(header))}.${base64url(JSON.stringify(payload))}`;
+
+  let sig: Buffer;
+  if (alg === "EdDSA") {
+    // Ed25519
+    sig = crypto.sign(null, Buffer.from(unsigned), privateKeyPem);
+  } else {
+    // ES256
+    sig = crypto.sign("sha256", Buffer.from(unsigned), {
+      key: privateKeyPem,
+      dsaEncoding: "ieee-p1363",
+    });
+  }
+
+  return `${unsigned}.${base64url(sig)}`;
+}
+
+async function coinbaseAuthedGet(path: string, qs: Record<string, string | number | undefined>) {
+  const keyName = requireEnv("COINBASE_API_KEY_NAME");
+  const privateKey = requireEnv("COINBASE_PRIVATE_KEY");
+  const algRaw = (process.env.COINBASE_KEY_ALG || "ES256").toLowerCase();
+  const alg: "ES256" | "EdDSA" = algRaw.includes("edd") ? "EdDSA" : "ES256";
+
+  const url = new URL(`https://api.coinbase.com${path}`);
+  Object.entries(qs).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
+    url.searchParams.append(k, String(v));
+  });
+
+  // IMPORTANT: uri must include query string if present
+  const pathWithQuery = `${path}${url.search ? url.search : ""}`;
+  const token = signJwtCdp({
+    method: "GET",
+    pathWithQuery,
+    keyName,
+    privateKeyPem: privateKey,
+    alg,
+  });
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+
+  const text = await res.text();
+  const j = safeJsonParse(text);
+  return { ok: res.ok, status: res.status, text, json: j };
+}
+
+// ---------------- types ----------------
 type TradeRow = {
   created_at?: string;
   t?: string;
@@ -108,283 +190,171 @@ type TradeRow = {
   symbol?: string;
   product_id?: string;
   side?: string;
-
-  // sometimes present, often not
   order_id?: string;
   price?: number | string | null;
   base_size?: number | string | null;
   quote_size?: number | string | null;
-
-  maker_taker?: string | null;
-  mode?: string | null;
-  ok?: boolean | null;
-
   raw?: any; // jsonb
-  decision?: any;
-  reason?: string | null;
 };
-
-// ---------- parsing ----------
-function pickTs(r: TradeRow): string {
-  return toIsoMaybe(r.created_at) || toIsoMaybe((r as any).t) || nowIso();
-}
-
-function pickSymbol(r: TradeRow): string {
-  const raw = (r as any).raw || {};
-  return (
-    cleanString(r.symbol) ||
-    cleanString(r.product_id) ||
-    cleanString(raw?.success_response?.product_id) ||
-    cleanString(raw?.order?.product_id) ||
-    cleanString(raw?.response?.product_id) ||
-    "UNKNOWN"
-  );
-}
-
-function pickSide(r: TradeRow): "BUY" | "SELL" | null {
-  const raw = (r as any).raw || {};
-  const s = (
-    cleanString(r.side) ||
-    cleanString(raw?.success_response?.side) ||
-    cleanString(raw?.order?.side) ||
-    cleanString(raw?.response?.side)
-  ).toUpperCase();
-  if (s === "BUY" || s === "SELL") return s;
-  return null;
-}
-
-function extractOrderId(r: TradeRow): string | null {
-  const raw = (r as any).raw || {};
-  return (
-    cleanString(r.order_id) ||
-    cleanString(raw?.success_response?.order_id) ||
-    cleanString(raw?.order?.order_id) ||
-    cleanString(raw?.order?.id) ||
-    cleanString(raw?.response?.order_id) ||
-    null
-  );
-}
-
-/**
- * Extract fill-ish info from whatever we have.
- * Goal: return (price, base, quote, feeUsd) if possible.
- */
-function extractFromRaw(r: TradeRow): {
-  price: number | null;
-  base: number | null;
-  quote: number | null;
-  feeUsd: number;
-} {
-  const raw = (r as any).raw || {};
-  const resp = raw?.response ?? raw?.resp ?? raw;
-  const ord = raw?.order ?? resp?.order ?? raw?.success_response ?? null;
-
-  // Fills arrays show up in a few shapes
-  const fills =
-    raw?.fills ||
-    resp?.fills ||
-    resp?.order?.fills ||
-    raw?.order?.fills ||
-    raw?.fill ||
-    null;
-
-  // Normalize fills to array if possible
-  const fillArr: any[] = Array.isArray(fills)
-    ? fills
-    : fills && Array.isArray(fills?.fills)
-      ? fills.fills
-      : [];
-
-  // Sum base + quote from fills if present
-  let baseFromFills = 0;
-  let quoteFromFills = 0;
-  let feeFromFills = 0;
-  let pxFromFills: number | null = null;
-
-  for (const f of fillArr) {
-    const size = firstNum(
-      f?.size,
-      f?.filled_size,
-      f?.base_size,
-      f?.quantity,
-      f?.amount
-    );
-    const price = firstNum(f?.price, f?.fill_price, f?.trade_price);
-    const fee = firstNum(
-      f?.commission,
-      f?.fee,
-      f?.fees,
-      f?.total_fee,
-      f?.total_fees,
-      f?.commission_usd,
-      f?.fee_usd
-    );
-
-    if (size != null && size > 0) baseFromFills += size;
-    if (price != null && price > 0 && size != null && size > 0) {
-      quoteFromFills += price * size;
-      pxFromFills = pxFromFills ?? price;
-    }
-
-    if (fee != null && fee > 0) feeFromFills += fee;
-  }
-
-  // Order-level filled fields (common on historical order objects)
-  const filledSize = firstNum(
-    ord?.filled_size,
-    ord?.total_filled_size,
-    ord?.filled_base_size,
-    ord?.filled_quantity,
-    resp?.order?.filled_size,
-    resp?.order?.total_filled_size
-  );
-
-  const filledValue = firstNum(
-    ord?.filled_value,
-    ord?.filled_quote_size,
-    ord?.filled_usd_value,
-    ord?.total_filled_value,
-    resp?.order?.filled_value,
-    resp?.order?.total_filled_value
-  );
-
-  const avgFilledPrice = firstNum(
-    ord?.average_filled_price,
-    ord?.avg_filled_price,
-    ord?.average_filled_price?.value,
-    resp?.order?.average_filled_price,
-    resp?.order?.average_filled_price?.value
-  );
-
-  // Fees at order/response level
-  const feeUsd = num(
-    firstNum(
-      raw?.fee,
-      raw?.fees,
-      raw?.total_fees,
-      resp?.fee,
-      resp?.fees,
-      resp?.total_fees,
-      resp?.order?.total_fees,
-      resp?.order?.fees,
-      ord?.total_fees,
-      ord?.fees,
-      feeFromFills
-    ),
-    0
-  );
-
-  // If no fills, BUY quote_size often lives in order_configuration (your example)
-  const oc = raw?.order_configuration || {};
-  const buyQuoteCfg = firstNum(
-    oc?.market_market_ioc?.quote_size,
-    oc?.market_market_ioc?.quote_value,
-    oc?.market_ioc?.quote_size,
-    oc?.market_ioc?.quote_value
-  );
-
-  // Final pick (priority: fills -> order fields -> row columns -> config)
-  const base = firstNum(baseFromFills || null, filledSize, (r as any).base_size);
-  const quote = firstNum(quoteFromFills || null, filledValue, (r as any).quote_size, buyQuoteCfg);
-  const price = firstNum(pxFromFills, avgFilledPrice, (r as any).price);
-
-  return {
-    price,
-    base,
-    quote,
-    feeUsd,
-  };
-}
 
 type NormalizedFill = {
   ts: string;
   side: "BUY" | "SELL";
-  symbol: string;
-  orderId: string | null;
-
-  price: number;       // 0 allowed if unknown
-  baseQty: number;     // BTC size
-  usdNotional: number; // USD amount (cost or proceeds)
-  feeUsd: number;
-  row: any;
+  symbol: string;     // product_id
+  price: number;      // USD
+  baseQty: number;    // BTC amount
+  usdNotional: number;// USD
+  feeUsd: number;     // USD
+  orderId?: string;
 };
 
-function normalizeRow(r: TradeRow): NormalizedFill | null {
+// ---------------- parsing from DB row ----------------
+function pickTs(r: TradeRow): string {
+  return toIsoMaybe(r.created_at) || toIsoMaybe((r as any).t) || nowIso();
+}
+function pickSymbol(r: TradeRow): string {
+  return cleanString(r.symbol) || cleanString(r.product_id) || "BTC-USD";
+}
+function pickSide(r: TradeRow): "BUY" | "SELL" | null {
+  const s = cleanString(r.side).toUpperCase();
+  return s === "BUY" || s === "SELL" ? (s as any) : null;
+}
+function pickOrderId(r: TradeRow): string | null {
+  const a = cleanString((r as any).order_id);
+  const b = cleanString((r as any).raw?.success_response?.order_id);
+  const c = cleanString((r as any).raw?.order_id);
+  return a || b || c || null;
+}
+
+// Best-effort fee from stored raw (not reliable, fills will override)
+function extractFeeUsdFromRaw(raw: any): number {
+  try {
+    const j = raw ?? {};
+    const candidates = [
+      j?.fee,
+      j?.fees,
+      j?.total_fees,
+      j?.order?.total_fees,
+      j?.order?.fees,
+      j?.success_response?.order?.total_fees,
+      j?.success_response?.order?.fees,
+      j?.resp?.order?.total_fees,
+      j?.resp?.order?.fees,
+    ];
+    for (const c of candidates) {
+      if (c == null) continue;
+      if (typeof c === "number" && Number.isFinite(c)) return c;
+      if (typeof c === "string") {
+        const n = Number(c);
+        if (Number.isFinite(n)) return n;
+      }
+      if (typeof c === "object") {
+        const v = Number((c as any)?.value);
+        if (Number.isFinite(v)) return v;
+      }
+    }
+  } catch {}
+  return 0;
+}
+
+// Convert DB row into a “fill” only if it truly has enough info
+function normalizeFromRow(r: TradeRow): NormalizedFill | null {
   const side = pickSide(r);
   if (!side) return null;
 
-  const ts = pickTs(r);
   const symbol = pickSymbol(r);
-  const orderId = extractOrderId(r);
+  const ts = pickTs(r);
 
-  const ex = extractFromRaw(r);
+  const px = Number((r as any).price);
+  const base = Number((r as any).base_size);
+  const quote = Number((r as any).quote_size);
 
-  // Base/quote can still be missing on ACK-only rows.
-  // We only accept rows with enough info to represent a real executed fill:
-  // - BUY: needs quote OR (base+price)
-  // - SELL: needs base OR (quote+price)
-  let baseQty = ex.base ?? 0;
+  const hasPx = Number.isFinite(px) && px > 0;
+  const hasBase = Number.isFinite(base) && base > 0;
+  const hasQuote = Number.isFinite(quote) && quote > 0;
+
+  // If we can’t compute BOTH baseQty and usdNotional, we should NOT use this row for PnL.
+  // (This is the bug that was giving open_cost_usd with open_position_base = 0)
+  let baseQty = 0;
   let usdNotional = 0;
 
-  if (side === "BUY") {
-    if (ex.quote != null && ex.quote > 0) {
-      usdNotional = ex.quote;
-      if ((!baseQty || baseQty <= 0) && ex.price != null && ex.price > 0) {
-        baseQty = ex.quote / ex.price;
-      }
-    } else if (baseQty > 0 && ex.price != null && ex.price > 0) {
-      usdNotional = baseQty * ex.price;
-    } else {
-      // ACK-only market order with no fills yet -> skip for PnL
-      return null;
-    }
+  if (hasBase && hasPx) {
+    baseQty = base;
+    usdNotional = base * px;
+  } else if (hasQuote && hasPx) {
+    usdNotional = quote;
+    baseQty = quote / px;
+  } else if (hasBase && hasQuote) {
+    baseQty = base;
+    usdNotional = quote;
   } else {
-    // SELL
-    if (baseQty > 0) {
-      if (ex.price != null && ex.price > 0) usdNotional = baseQty * ex.price;
-      else if (ex.quote != null && ex.quote > 0) usdNotional = ex.quote;
-      else usdNotional = 0; // still allow; bps may degrade
-    } else if (ex.quote != null && ex.price != null && ex.quote > 0 && ex.price > 0) {
-      usdNotional = ex.quote;
-      baseQty = ex.quote / ex.price;
-    } else {
-      return null;
-    }
+    return null;
   }
 
-  // price: if unknown but we have base+usd, back into it
-  let px = ex.price ?? 0;
-  if ((!px || !Number.isFinite(px)) && baseQty > 0 && usdNotional > 0) {
-    px = usdNotional / baseQty;
-  }
-  if (!Number.isFinite(px) || px <= 0) px = 0;
+  const feeUsd = extractFeeUsdFromRaw((r as any).raw);
 
   return {
     ts,
     side,
     symbol,
-    orderId,
-    price: px,
+    price: hasPx ? px : usdNotional / baseQty,
     baseQty,
     usdNotional,
-    feeUsd: num(ex.feeUsd, 0),
-    row: r,
+    feeUsd,
+    orderId: pickOrderId(r) || undefined,
   };
 }
 
-// ---------- FIFO match + metrics ----------
+// ---------------- Coinbase fills -> normalized ----------------
+function normalizeFromCoinbaseFill(
+  f: any,
+  sideHint: "BUY" | "SELL" | null,
+  symbolHint: string | null
+): NormalizedFill | null {
+  // Coinbase List Fills returns: price, size, commission, trade_time, product_id, order_id ...
+  const price = Number(f?.price);
+  const size = Number(f?.size);
+  const commission = Number(f?.commission);
+
+  if (!Number.isFinite(price) || price <= 0) return null;
+  if (!Number.isFinite(size) || size <= 0) return null;
+
+  const symbol = cleanString(f?.product_id) || symbolHint || "BTC-USD";
+  const ts = toIsoMaybe(f?.trade_time) || toIsoMaybe(f?.sequence_timestamp) || nowIso();
+
+  const sideRaw = cleanString(f?.side).toUpperCase();
+  const side: "BUY" | "SELL" | null =
+    sideRaw === "BUY" || sideRaw === "SELL" ? (sideRaw as any) : sideHint;
+
+  if (!side) return null;
+
+  const usdNotional = price * size;
+  const feeUsd = Number.isFinite(commission) && commission > 0 ? commission : 0;
+
+  return {
+    ts,
+    side,
+    symbol,
+    price,
+    baseQty: size,
+    usdNotional,
+    feeUsd,
+    orderId: cleanString(f?.order_id) || undefined,
+  };
+}
+
+// ---------------- FIFO match + metrics ----------------
 type ClosedTrade = {
   openTs: string;
   closeTs: string;
   symbol: string;
+  qty: number;
   buyPx: number;
   sellPx: number;
-  qty: number;
   pnlUsd: number;
   pnlBps: number | null;
   feesUsd: number;
 };
-
 type OpenLot = {
   ts: string;
   symbol: string;
@@ -399,7 +369,6 @@ function computeFromFills(fills: NormalizedFill[]) {
 
   const openLots: OpenLot[] = [];
   const closed: ClosedTrade[] = [];
-
   let feesPaid = 0;
 
   for (const f of sorted) {
@@ -411,7 +380,7 @@ function computeFromFills(fills: NormalizedFill[]) {
         symbol: f.symbol,
         qty: f.baseQty,
         costUsd: f.usdNotional,
-        px: f.price || 0,
+        px: f.price,
         feesUsd: f.feeUsd || 0,
       });
       continue;
@@ -420,7 +389,7 @@ function computeFromFills(fills: NormalizedFill[]) {
     // SELL -> match FIFO
     let sellQty = f.baseQty;
 
-    while (sellQty > 0 && openLots.length > 0) {
+    while (sellQty > 1e-12 && openLots.length > 0) {
       const lot = openLots[0];
       if (lot.symbol !== f.symbol) {
         openLots.shift();
@@ -428,57 +397,53 @@ function computeFromFills(fills: NormalizedFill[]) {
       }
 
       const takeQty = Math.min(lot.qty, sellQty);
+
       const lotCostPortion = lot.costUsd * (takeQty / lot.qty);
       const lotFeesPortion = lot.feesUsd * (takeQty / lot.qty);
 
-      const proceedsPortion =
-        f.usdNotional > 0 ? f.usdNotional * (takeQty / f.baseQty) :
-        (f.price > 0 ? takeQty * f.price : 0);
-
+      const proceedsPortion = f.usdNotional * (takeQty / f.baseQty);
       const pnlUsd = proceedsPortion - lotCostPortion;
 
-      const buyPx =
-        lot.px || (lotCostPortion > 0 && takeQty > 0 ? lotCostPortion / takeQty : 0);
-      const sellPx =
-        f.price || (proceedsPortion > 0 && takeQty > 0 ? proceedsPortion / takeQty : 0);
-
-      let pnlBps: number | null = null;
-      if (buyPx > 0 && sellPx > 0) pnlBps = ((sellPx - buyPx) / buyPx) * 10_000;
+      const buyPx = lotCostPortion / takeQty;
+      const sellPx = proceedsPortion / takeQty;
+      const pnlBps =
+        buyPx > 0 && sellPx > 0 ? ((sellPx - buyPx) / buyPx) * 10_000 : null;
 
       closed.push({
         openTs: lot.ts,
         closeTs: f.ts,
         symbol: f.symbol,
+        qty: takeQty,
         buyPx,
         sellPx,
-        qty: takeQty,
-        pnlUsd: Number(pnlUsd.toFixed(6)),
-        pnlBps: pnlBps != null ? Number(pnlBps.toFixed(2)) : null,
-        feesUsd: Number(((f.feeUsd || 0) + lotFeesPortion).toFixed(6)),
+        pnlUsd: Number(pnlUsd.toFixed(2)),
+        pnlBps: pnlBps === null ? null : Number(pnlBps.toFixed(2)),
+        feesUsd: Number(((f.feeUsd || 0) + lotFeesPortion).toFixed(4)),
       });
 
+      // reduce lot
       lot.qty -= takeQty;
       lot.costUsd -= lotCostPortion;
       lot.feesUsd -= lotFeesPortion;
+
       sellQty -= takeQty;
 
       if (lot.qty <= 1e-12) openLots.shift();
-      if (sellQty <= 1e-12) break;
     }
   }
 
   const realizedPnlUsd = closed.reduce((s, t) => s + t.pnlUsd, 0);
-
   const wins = closed.filter((t) => t.pnlUsd > 0);
   const losses = closed.filter((t) => t.pnlUsd < 0);
+  const winRate = closed.length ? wins.length / closed.length : 0;
 
-  const winRate = closed.length > 0 ? wins.length / closed.length : 0;
+  const avgWinBps =
+    wins.length ? wins.map((t) => t.pnlBps).filter((x): x is number => typeof x === "number")
+      .reduce((a, b) => a + b, 0) / wins.length : 0;
 
-  const winBps = wins.map((t) => t.pnlBps).filter((x): x is number => typeof x === "number");
-  const lossBps = losses.map((t) => t.pnlBps).filter((x): x is number => typeof x === "number");
-
-  const avgWinBps = winBps.length ? winBps.reduce((a, b) => a + b, 0) / winBps.length : 0;
-  const avgLossBps = lossBps.length ? lossBps.reduce((a, b) => a + b, 0) / lossBps.length : 0;
+  const avgLossBps =
+    losses.length ? losses.map((t) => t.pnlBps).filter((x): x is number => typeof x === "number")
+      .reduce((a, b) => a + b, 0) / losses.length : 0;
 
   return {
     closed,
@@ -496,7 +461,6 @@ function computeFromFills(fills: NormalizedFill[]) {
 
 function computeEquityAndMdd(closed: ClosedTrade[], startEquity = 0) {
   const s = [...closed].sort((a, b) => Date.parse(a.closeTs) - Date.parse(b.closeTs));
-
   let equity = startEquity;
   let peak = startEquity;
   let maxDdPct = 0;
@@ -504,20 +468,18 @@ function computeEquityAndMdd(closed: ClosedTrade[], startEquity = 0) {
   for (const t of s) {
     equity += t.pnlUsd;
     if (equity > peak) peak = equity;
-
-    const dd = peak !== 0 ? ((peak - equity) / Math.abs(peak)) * 100 : 0;
+    const dd = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
     if (dd > maxDdPct) maxDdPct = dd;
   }
 
   return {
     running_equity: Number(equity.toFixed(2)),
-    peak_equity: Number(peak.toFixed(2)),
     max_drawdown_pct: Number(maxDdPct.toFixed(3)),
   };
 }
 
-// ---------- spot price (public endpoint) ----------
-async function fetchSpotPriceFromCoinbase(productId: string): Promise<number | null> {
+// Public product endpoint (no auth)
+async function fetchSpotPrice(productId: string): Promise<number | null> {
   try {
     const res = await fetch(
       `https://api.coinbase.com/api/v3/brokerage/products/${encodeURIComponent(productId)}`,
@@ -526,22 +488,21 @@ async function fetchSpotPriceFromCoinbase(productId: string): Promise<number | n
     const text = await res.text();
     const j = safeJsonParse(text) as any;
     const p = Number(j?.price) || Number(j?.product?.price) || Number(j?.data?.price) || 0;
-    if (!Number.isFinite(p) || p <= 0) return null;
-    return p;
+    return Number.isFinite(p) && p > 0 ? p : null;
   } catch {
     return null;
   }
 }
 
-function computeOpenPnlUsd(openLots: OpenLot[], spotPrice: number | null) {
-  const totalQty = openLots.reduce((s, l) => s + (l.qty || 0), 0);
-  const totalCost = openLots.reduce((s, l) => s + (l.costUsd || 0), 0);
+function computeOpenPnl(openLots: OpenLot[], spotPrice: number | null) {
+  const totalQty = openLots.reduce((s, l) => s + l.qty, 0);
+  const totalCost = openLots.reduce((s, l) => s + l.costUsd, 0);
 
   if (!spotPrice || !Number.isFinite(spotPrice) || spotPrice <= 0) {
     return {
-      current_open_pnl_usd: null as number | null,
       open_position_base: Number(totalQty.toFixed(8)),
       open_cost_usd: Number(totalCost.toFixed(2)),
+      current_open_pnl_usd: null as number | null,
       spot_price: null as number | null,
     };
   }
@@ -550,14 +511,14 @@ function computeOpenPnlUsd(openLots: OpenLot[], spotPrice: number | null) {
   const openPnl = mktValue - totalCost;
 
   return {
-    current_open_pnl_usd: Number(openPnl.toFixed(2)),
     open_position_base: Number(totalQty.toFixed(8)),
     open_cost_usd: Number(totalCost.toFixed(2)),
+    current_open_pnl_usd: Number(openPnl.toFixed(2)),
     spot_price: Number(spotPrice.toFixed(2)),
   };
 }
 
-// ---------- handler ----------
+// ---------------- handler ----------------
 export async function GET(req: Request) {
   if (!okAdminAuth(req)) return json(401, { ok: false, error: "unauthorized" });
 
@@ -585,11 +546,89 @@ export async function GET(req: Request) {
     if (user_id) q = q.eq("user_id", user_id);
 
     const { data, error } = await q;
-    if (error) return json(500, { ok: false, runId, error: error.message || error });
+    if (error) return json(500, { ok: false, runId, error: error.message || String(error) });
 
     const rows = Array.isArray(data) ? (data as any as TradeRow[]) : [];
 
-    const fillsAll = rows.map(normalizeRow).filter((x): x is NormalizedFill => !!x);
+    // Build order_id -> side/symbol hints
+    const orderHints = new Map<string, { side: "BUY" | "SELL"; symbol: string }>();
+    for (const r of rows) {
+      const oid = pickOrderId(r);
+      const side = pickSide(r);
+      if (!oid || !side) continue;
+      orderHints.set(oid, { side, symbol: pickSymbol(r) });
+    }
+
+    const orderIds = Array.from(orderHints.keys());
+
+    // 1) Try to compute from rows that truly contain fills (rare)
+    const rowFills = rows.map(normalizeFromRow).filter((x): x is NormalizedFill => !!x);
+
+    // 2) Pull Coinbase fills for all order_ids (the real source of truth)
+    let cbFills: NormalizedFill[] = [];
+    let cb_status: number | null = null;
+    let cb_error: string | null = null;
+
+    if (orderIds.length > 0) {
+      // Batch order_ids into chunks (avoid huge URLs)
+      const CHUNK = 40;
+      for (let i = 0; i < orderIds.length; i += CHUNK) {
+        const chunk = orderIds.slice(i, i + CHUNK);
+
+        // Coinbase expects repeated order_ids params: order_ids=a&order_ids=b...
+        const qs: Record<string, string | number> = { limit: 1000 };
+        // We'll append manually by building a query object with unique keys
+        // (coinbaseAuthedGet uses URLSearchParams; we simulate repeats by unique keys)
+        // We'll do it by calling coinbaseAuthedGet with no order_ids, then re-request with urlSearchParams inlined:
+        const path = "/api/v3/brokerage/orders/historical/fills";
+
+        // Build query string with repeats ourselves
+        const u = new URL(`https://api.coinbase.com${path}`);
+        u.searchParams.set("limit", "1000");
+        for (const id of chunk) u.searchParams.append("order_ids", id);
+
+        const pathWithQuery = `${path}${u.search}`;
+
+        const keyName = requireEnv("COINBASE_API_KEY_NAME");
+        const privateKey = requireEnv("COINBASE_PRIVATE_KEY");
+        const algRaw = (process.env.COINBASE_KEY_ALG || "ES256").toLowerCase();
+        const alg: "ES256" | "EdDSA" = algRaw.includes("edd") ? "EdDSA" : "ES256";
+
+        const token = signJwtCdp({
+          method: "GET",
+          pathWithQuery,
+          keyName,
+          privateKeyPem: privateKey,
+          alg,
+        });
+
+        const res = await fetch(u.toString(), {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+
+        cb_status = res.status;
+        const text = await res.text();
+        const j = safeJsonParse(text);
+
+        if (!res.ok) {
+          cb_error = `coinbase_fills_failed status=${res.status} body=${text.slice(0, 300)}`;
+          break;
+        }
+
+        const fillsArr = Array.isArray(j?.fills) ? j.fills : [];
+        for (const f of fillsArr) {
+          const oid = cleanString(f?.order_id);
+          const hint = oid ? orderHints.get(oid) : undefined;
+          const nf = normalizeFromCoinbaseFill(f, hint?.side || null, hint?.symbol || null);
+          if (nf) cbFills.push(nf);
+        }
+      }
+    }
+
+    // Prefer Coinbase fills when available; otherwise fall back to rowFills
+    const fillsAll = cbFills.length > 0 ? cbFills : rowFills;
 
     const full = computeFromFills(fillsAll);
     const equity = computeEquityAndMdd(full.closed, 0);
@@ -598,16 +637,27 @@ export async function GET(req: Request) {
     const fills24 = fillsAll.filter((f) => Date.parse(f.ts) >= Date.parse(last24Iso));
     const last24 = computeFromFills(fills24);
 
-    const symbol = fillsAll.find((f) => f.symbol && f.symbol !== "UNKNOWN")?.symbol || "BTC-USD";
-    const spot = await fetchSpotPriceFromCoinbase(symbol);
-    const open = computeOpenPnlUsd(full.openLots, spot);
+    const symbol =
+      fillsAll.find((f) => f.symbol && f.symbol !== "UNKNOWN")?.symbol || "BTC-USD";
 
-    const payload = {
+    const spot = await fetchSpotPrice(symbol);
+    const open = computeOpenPnl(full.openLots, spot);
+
+    return json(200, {
       ok: true,
       runId,
       user_id,
       since: sinceIso,
+
       rows_scanned: rows.length,
+      order_ids_found: orderIds.length,
+
+      // Diagnostics: prove where numbers came from
+      source: cbFills.length > 0 ? "coinbase_fills" : "db_rows",
+      coinbase_fills_used: cbFills.length,
+      coinbase_last_status: cb_status,
+      coinbase_error: cb_error,
+
       fills_used: fillsAll.length,
 
       total_trades: full.totalTrades,
@@ -621,6 +671,8 @@ export async function GET(req: Request) {
 
       current_open_pnl_usd: open.current_open_pnl_usd,
       open_position_base: open.open_position_base,
+      open_cost_usd: open.open_cost_usd,
+
       running_equity: equity.running_equity,
       max_drawdown_pct: equity.max_drawdown_pct,
 
@@ -637,13 +689,10 @@ export async function GET(req: Request) {
       debug: {
         symbol_used_for_spot: symbol,
         spot_price: open.spot_price,
-        open_cost_usd: open.open_cost_usd,
         limit,
-        example_first_order_id: fillsAll.find((f) => f.orderId)?.orderId ?? null,
+        example_first_order_id: orderIds[0] || null,
       },
-    };
-
-    return json(200, payload);
+    });
   } catch (e: any) {
     return json(500, { ok: false, runId, error: String(e?.message || e) });
   }
