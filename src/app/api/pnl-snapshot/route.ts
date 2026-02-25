@@ -5,28 +5,22 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 
 /**
- * Admin-only Performance Snapshot (FIFO realized PnL)
- * - Reads public.trade_logs via SUPABASE_SERVICE_ROLE_KEY
- * - Extracts fills from row.raw (best-effort paths) and computes:
- *    gross_pnl_usd, fees_usd, net_realized_pnl_usd
- *    wins/losses/win_rate
- *    equity curve peak + max drawdown ($ + %)
- *    open position (base size + cost basis including buy fees)
- * - Supports:
- *    ?secret=...   (required)
- *    ?since=ISO    (optional override; default = last 30 days)
- *    ?limit=NUM    (optional; default 2000; max 10000)
+ * Admin-only PnL Snapshot (best-effort FIFO realized + open position)
+ *
+ * Query:
+ *   ?secret=...            (required; matches CRON_SECRET or YC_CRON_SECRET or PNL_SNAPSHOT_SECRET)
+ *   ?since=ISO             (optional; default last 30d)
+ *   ?limit=NUM             (optional; default 2000; max 10000)
+ *   ?user_id=UUID|string   (optional; if omitted uses env PULSE_ONLY_USER_ID if set, else all users)
+ *
+ * Assumes trade_logs has (at minimum):
+ *   created_at, side, base_size, price, quote_size, raw (jsonb)
+ * And optionally:
+ *   user_id, ok (boolean), status (integer)
  */
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
 function json(status: number, body: any) {
-  return NextResponse.json(body, {
-    status,
-    headers: { "Cache-Control": "no-store" },
-  });
+  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 function requireEnv(name: string) {
@@ -41,7 +35,6 @@ function clampInt(n: number, min: number, max: number) {
 }
 
 function parseSinceOrDefault(sinceRaw: string | null) {
-  // default: last 30 days
   const dflt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   if (!sinceRaw) return dflt.toISOString();
   const d = new Date(sinceRaw);
@@ -53,19 +46,8 @@ function safeObj(v: any) {
   return v && typeof v === "object" ? v : {};
 }
 
-type Fill = {
-  ts: string; // ISO
-  side: "BUY" | "SELL";
-  price: number; // USD per BTC
-  size: number; // BTC
-  feeUsd: number; // USD
-  orderId?: string;
-  source?: string;
-};
-
 function asNum(v: any): number {
-  const n =
-    typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
+  const n = typeof v === "string" ? parseFloat(v) : typeof v === "number" ? v : NaN;
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -76,186 +58,156 @@ function normSide(v: any): "BUY" | "SELL" | null {
   return null;
 }
 
-function pickFirst(obj: any, keys: string[]) {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null) return v;
-  }
-  return undefined;
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
 }
 
-/**
- * Extract fills from a trade_logs row.
- * We try common shapes your logger may store:
- * - raw.fills
- * - raw.order.fills
- * - raw.response.fills
- * - raw.result.fills
- *
- * Each fill should provide price + size + fee.
- * If we can't find fills arrays, we try a "summary-style" row with top-level fields.
- */
-function extractFillsFromTradeLogRow(row: any): Fill[] {
-  const raw = safeObj(row?.raw);
-  const created = row?.created_at ?? raw?.created_at ?? raw?.time ?? raw?.timestamp;
-
-  const rootSide = normSide(raw?.side ?? row?.side ?? raw?.order?.side);
-  const orderId = String(
-    row?.order_id ??
-      raw?.order_id ??
-      raw?.orderId ??
-      raw?.id ??
-      row?.id ??
-      ""
-  );
-
-  const candidates: any[] = [
-    ...(Array.isArray(raw?.fills) ? raw.fills : []),
-    ...(Array.isArray(raw?.order?.fills) ? raw.order.fills : []),
-    ...(Array.isArray(raw?.response?.fills) ? raw.response.fills : []),
-    ...(Array.isArray(raw?.result?.fills) ? raw.result.fills : []),
-  ];
-
-  if (candidates.length) {
-    const fills = candidates
-      .map((f: any) => {
-        const side = normSide(f?.side) ?? rootSide;
-        if (!side) return null;
-
-        const price = asNum(
-          pickFirst(f, ["price", "fill_price", "execution_price", "avg_price", "rate"])
-        );
-        const size = asNum(
-          pickFirst(f, ["size", "base_size", "filled_size", "quantity", "baseQuantity"])
-        );
-
-        // fee may be stored as:
-        // fee, fee_usd, commission_usd, commission, fees.usd, etc.
-        const feeUsd = asNum(
-          pickFirst(f, ["fee", "fee_usd", "commission_usd", "commission"]) ??
-            pickFirst(f?.fees, ["usd"]) ??
-            0
-        );
-
-        const ts = String(
-          pickFirst(f, ["trade_time", "time", "timestamp"]) ??
-            created ??
-            new Date().toISOString()
-        );
-
-        if (!(price > 0) || !(size > 0)) return null;
-
-        return {
-          ts,
-          side,
-          price,
-          size,
-          feeUsd,
-          orderId,
-          source: "fills_array",
-        } as Fill;
-      })
-      .filter(Boolean) as Fill[];
-
-    return fills;
-  }
-
-  // Fallback: summary-style single fill at top level
-  const side = normSide(
-    raw?.side ??
-      row?.side ??
-      raw?.order?.side ??
-      raw?.result?.side ??
-      raw?.response?.side
-  );
-
-  const price = asNum(
-    pickFirst(raw, ["execution_price", "price", "fill_price"]) ??
-      pickFirst(row, ["execution_price", "price", "fill_price"])
-  );
-  const size = asNum(
-    pickFirst(raw, ["executed_size", "base_size", "size"]) ??
-      pickFirst(row, ["executed_size", "base_size", "size"])
-  );
-  const feeUsd = asNum(
-    pickFirst(raw, ["fee", "fee_usd", "fees_usd"]) ??
-      pickFirst(row, ["fee", "fee_usd", "fees_usd"])
-  );
-
-  if (side && price > 0 && size > 0) {
-    return [
-      {
-        ts: String(
-          pickFirst(raw, ["time_of_last_fill", "created_at", "time"]) ??
-            created ??
-            new Date().toISOString()
-        ),
-        side,
-        price,
-        size,
-        feeUsd,
-        orderId,
-        source: "summary_row",
-      },
-    ];
-  }
-
-  return [];
-}
-
-type PnlResult = {
-  rowsScanned: number;
-  fillsUsed: number;
-  tradesClosed: number;
-  wins: number;
-  losses: number;
-  winRate: number;
-
-  grossPnlUsd: number;
-  feesUsd: number;
-  netRealizedPnlUsd: number;
-
-  equityPeakUsd: number;
-  maxDrawdownUsd: number;
-  maxDrawdownPct: number;
-
-  openBaseSize: number;
-  openCostBasisUsd: number; // includes remaining buy fees
+type Row = {
+  created_at?: string;
+  side?: any;
+  base_size?: any;
+  price?: any;
+  quote_size?: any;
+  order_id?: any;
+  user_id?: any;
+  ok?: any;
+  status?: any;
+  raw?: any;
 };
 
-function computeFifoPnl(rows: any[]): PnlResult {
-  const fills: Fill[] = rows.flatMap((r) => extractFillsFromTradeLogRow(r));
+type Fill = {
+  ts: string;
+  side: "BUY" | "SELL";
+  price: number;
+  size: number;
+  feeUsd: number;
+  orderId?: string;
+  userId?: string | null;
+  ok?: boolean | null;
+  status?: number | null;
+};
 
-  // Sort by time ascending for FIFO
-  const ordered = fills
-    .slice()
-    .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+function extractFeeUsd(row: Row): number {
+  // best-effort fee from raw
+  const raw = safeObj(row.raw);
+  const fee =
+    raw?.fee_usd ??
+    raw?.feeUsd ??
+    raw?.fees_usd ??
+    raw?.feesUsd ??
+    raw?.commission_usd ??
+    raw?.commissionUsd ??
+    raw?.fees?.usd ??
+    raw?.fee ??
+    0;
+  return asNum(fee);
+}
 
-  // FIFO buy queue
-  let buys: { size: number; price: number; feeUsd: number; ts: string }[] = [];
+function extractFillFromRow(row: Row): Fill | null {
+  const raw = safeObj(row.raw);
 
-  let gross = 0;
-  let fees = 0;
-  let net = 0;
+  const side =
+    normSide(row.side) ||
+    normSide(raw?.side) ||
+    normSide(raw?.order?.side) ||
+    normSide(raw?.result?.side) ||
+    normSide(raw?.response?.side);
 
+  if (!side) return null;
+
+  // prefer real columns (your schema)
+  const price =
+    asNum(row.price) ||
+    asNum(raw?.execution_price) ||
+    asNum(raw?.price) ||
+    asNum(raw?.fill_price) ||
+    0;
+
+  const size =
+    asNum(row.base_size) ||
+    asNum(raw?.executed_size) ||
+    asNum(raw?.base_size) ||
+    asNum(raw?.size) ||
+    0;
+
+  if (!(price > 0) || !(size > 0)) return null;
+
+  const ts = String(row.created_at || raw?.created_at || raw?.time || raw?.timestamp || new Date().toISOString());
+
+  const feeUsd = extractFeeUsd(row);
+
+  const orderId = String(row.order_id ?? raw?.order_id ?? raw?.orderId ?? raw?.id ?? "") || undefined;
+
+  const userId = row.user_id != null ? String(row.user_id) : null;
+  const ok = row.ok != null ? Boolean(row.ok) : null;
+  const status = row.status != null ? Number(row.status) : null;
+
+  return { ts, side, price, size, feeUsd, orderId, userId, ok, status };
+}
+
+type Snapshot = {
+  rows_scanned: number;
+  rows_usable: number;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  avg_win_bps: number;
+  avg_loss_bps: number;
+  net_realized_pnl_usd: number;
+
+  open_position_base: number;
+  open_cost_usd: number;
+  open_avg_price: number | null;
+  spot_price: number | null;
+  current_open_pnl_usd: number;
+
+  starting_equity_usd: number;
+  running_equity_usd: number;
+  max_drawdown_pct: number;
+
+  fees_usd: number;
+};
+
+function computeSnapshot(rows: Row[]): Snapshot {
+  const fills = rows
+    .map(extractFillFromRow)
+    .filter(Boolean) as Fill[];
+
+  // time asc FIFO
+  fills.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+
+  const rowsUsable = fills.length;
+
+  // consider “trades” as usable fills (same as your endpoint “total_trades” style)
+  const totalTrades = rowsUsable;
+
+  // FIFO queue for open position
+  let buys: { size: number; price: number; feeUsd: number }[] = [];
+
+  let feesUsd = 0;
+
+  // realized stats
+  let realizedNet = 0;
   let wins = 0;
   let losses = 0;
-  let tradesClosed = 0;
+  const winBps: number[] = [];
+  const lossBps: number[] = [];
 
-  // Equity curve from realized net only
+  // equity curve on realized only
   let equity = 0;
   let peak = 0;
   let maxDd = 0;
 
-  for (const f of ordered) {
-    fees += f.feeUsd;
+  for (const f of fills) {
+    feesUsd += f.feeUsd;
 
     if (f.side === "BUY") {
-      buys.push({ size: f.size, price: f.price, feeUsd: f.feeUsd, ts: f.ts });
+      buys.push({ size: f.size, price: f.price, feeUsd: f.feeUsd });
       continue;
     }
 
-    // SELL: match against queued buys FIFO
+    // SELL: match FIFO
     let sellRemaining = f.size;
 
     while (sellRemaining > 0 && buys.length) {
@@ -264,69 +216,79 @@ function computeFifoPnl(rows: any[]): PnlResult {
 
       const legGross = (f.price - b.price) * matchSize;
 
-      // Allocate fees prorata
+      // prorata fees
       const buyFeeAlloc = b.feeUsd * (matchSize / b.size);
       const sellFeeAlloc = f.feeUsd * (matchSize / f.size);
 
       const legNet = legGross - buyFeeAlloc - sellFeeAlloc;
+      realizedNet += legNet;
 
-      gross += legGross;
-      net += legNet;
+      const entryNotional = b.price * matchSize;
+      const legBps = entryNotional > 0 ? (legNet / entryNotional) * 10000 : 0;
 
-      // Each matched pair becomes one closed "trade leg"
-      tradesClosed += 1;
-      if (legNet >= 0) wins += 1;
-      else losses += 1;
+      if (legNet >= 0) {
+        wins += 1;
+        winBps.push(legBps);
+      } else {
+        losses += 1;
+        lossBps.push(legBps);
+      }
 
       equity += legNet;
       if (equity > peak) peak = equity;
       const dd = peak - equity;
       if (dd > maxDd) maxDd = dd;
 
-      // Reduce quantities
+      // reduce
       b.size -= matchSize;
       sellRemaining -= matchSize;
 
-      // If that buy is fully consumed, pop it
       if (b.size <= 1e-12) {
         buys.shift();
       } else {
-        // reduce its remaining fee in-line with allocation
         b.feeUsd -= buyFeeAlloc;
       }
     }
   }
 
-  // Open position = remaining buys
-  const openBaseSize = buys.reduce((s, b) => s + b.size, 0);
+  const openBase = buys.reduce((s, b) => s + b.size, 0);
+  const openCost = buys.reduce((s, b) => s + b.price * b.size + b.feeUsd, 0);
+  const openAvg = openBase > 0 ? openCost / openBase : null;
 
-  // Cost basis includes buy price*size + remaining buy fees
-  const openCostBasisUsd = buys.reduce(
-    (s, b) => s + b.price * b.size + b.feeUsd,
-    0
-  );
+  // best-effort spot: last seen fill price
+  const spot = fills.length ? fills[fills.length - 1].price : null;
 
-  const winRate = tradesClosed ? wins / tradesClosed : 0;
+  const openPnl = openBase > 0 && spot != null ? (spot - (openAvg ?? spot)) * openBase : 0;
+
+  const winRate = totalTrades ? wins / totalTrades : 0;
+
+  const avgWinBps = winBps.length ? winBps.reduce((a, b) => a + b, 0) / winBps.length : 0;
+  const avgLossBps = lossBps.length ? lossBps.reduce((a, b) => a + b, 0) / lossBps.length : 0;
+
   const maxDdPct = peak > 0 ? maxDd / peak : 0;
 
   return {
-    rowsScanned: rows.length,
-    fillsUsed: ordered.length,
-    tradesClosed,
+    rows_scanned: rows.length,
+    rows_usable: rowsUsable,
+    total_trades: totalTrades,
     wins,
     losses,
-    winRate,
+    win_rate: Number((winRate * 100).toFixed(2)),
+    avg_win_bps: Number(avgWinBps.toFixed(2)),
+    avg_loss_bps: Number(avgLossBps.toFixed(2)),
+    net_realized_pnl_usd: Number(realizedNet.toFixed(6)),
 
-    grossPnlUsd: gross,
-    feesUsd: fees,
-    netRealizedPnlUsd: net,
+    open_position_base: Number(openBase.toFixed(8)),
+    open_cost_usd: Number(openCost.toFixed(6)),
+    open_avg_price: openAvg != null ? Number(openAvg.toFixed(2)) : null,
+    spot_price: spot != null ? Number(spot.toFixed(2)) : null,
+    current_open_pnl_usd: Number(openPnl.toFixed(6)),
 
-    equityPeakUsd: peak,
-    maxDrawdownUsd: maxDd,
-    maxDrawdownPct: maxDdPct,
+    starting_equity_usd: 0,
+    running_equity_usd: Number(equity.toFixed(6)),
+    max_drawdown_pct: Number((maxDdPct * 100).toFixed(3)),
 
-    openBaseSize,
-    openCostBasisUsd,
+    fees_usd: Number(feesUsd.toFixed(6)),
   };
 }
 
@@ -334,118 +296,74 @@ export async function GET(req: Request) {
   const runId = `pnl_${Math.random().toString(16).slice(2, 10)}`;
 
   try {
-    // --- Admin secret gate ---
     const url = new URL(req.url);
-    const secret = (url.searchParams.get("secret") || "").trim();
 
+    // --- secret gate ---
+    const secret = (url.searchParams.get("secret") || "").trim();
     const expected =
       (process.env.CRON_SECRET || "").trim() ||
       (process.env.YC_CRON_SECRET || "").trim() ||
       (process.env.PNL_SNAPSHOT_SECRET || "").trim();
 
-    if (!expected) {
-      return json(500, { ok: false, runId, error: "missing_server_secret_env" });
-    }
-    if (!secret || secret !== expected) {
-      return json(401, { ok: false, runId, error: "unauthorized" });
-    }
+    if (!expected) return json(500, { ok: false, runId, error: "missing_server_secret_env" });
+    if (!secret || secret !== expected) return json(401, { ok: false, runId, error: "unauthorized" });
 
-    // --- Params ---
+    // --- params ---
     const since = parseSinceOrDefault(url.searchParams.get("since"));
     const limitRaw = Number(url.searchParams.get("limit") || "2000");
     const limit = clampInt(limitRaw, 1, 10000);
 
-    // --- Supabase admin client ---
+    const userIdParam = (url.searchParams.get("user_id") || "").trim();
+    const envOnlyUser = (process.env.PULSE_ONLY_USER_ID || "").trim();
+    const effectiveUserId = userIdParam || envOnlyUser || null;
+
+    // --- supabase admin client ---
     const supabaseUrl = requireEnv("SUPABASE_URL");
     const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-    const sb = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false },
-    });
+    const sb = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
-    // Pull rows since timestamp (ASC so FIFO/equity makes sense)
-    const { data, error } = await sb
+    // Select only what we need (faster/safer than *)
+    let q = sb
       .from("trade_logs")
-      .select("*")
+      .select("created_at, side, base_size, quote_size, price, order_id, user_id, ok, status, raw")
       .gte("created_at", since)
       .order("created_at", { ascending: true })
       .limit(limit);
 
+    if (effectiveUserId) q = q.eq("user_id", effectiveUserId);
+
+    const { data, error } = await q;
+
     if (error) {
-      return json(500, {
-        ok: false,
-        runId,
-        error: "db_read_failed",
-        details: String((error as any)?.message || error),
-      });
+      return json(500, { ok: false, runId, error: "db_read_failed", details: String((error as any)?.message || error) });
     }
 
-    const rows = Array.isArray(data) ? data : [];
+    const rows: Row[] = Array.isArray(data) ? (data as any) : [];
 
-    // All-time (within since)
-    const statsAll = computeFifoPnl(rows);
+    const snap = computeSnapshot(rows);
 
-    // last 24h window
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const rows24h = rows.filter((r: any) => {
-      const t = new Date(r?.created_at || 0).getTime();
-      return Number.isFinite(t) && t >= new Date(since24h).getTime();
-    });
-    const stats24h = computeFifoPnl(rows24h);
-
-    const payload = {
+    return json(200, {
       ok: true,
       runId,
-      user_id: null,
       since,
+      limit,
+      user_id: effectiveUserId,
+      symbol: "BTC-USD",
 
-      rows_scanned: statsAll.rowsScanned,
-      fills_used: statsAll.fillsUsed,
-
-      trades_closed: statsAll.tradesClosed,
-      wins: statsAll.wins,
-      losses: statsAll.losses,
-      win_rate: Number((statsAll.winRate * 100).toFixed(2)),
-
-      gross_pnl_usd: Number(statsAll.grossPnlUsd.toFixed(6)),
-      fees_usd: Number(statsAll.feesUsd.toFixed(6)),
-      net_realized_pnl_usd: Number(statsAll.netRealizedPnlUsd.toFixed(6)),
-
-      equity_peak_usd: Number(statsAll.equityPeakUsd.toFixed(6)),
-      max_drawdown_usd: Number(statsAll.maxDrawdownUsd.toFixed(6)),
-      max_drawdown_pct: Number((statsAll.maxDrawdownPct * 100).toFixed(3)),
-
-      open_position_base: Number(statsAll.openBaseSize.toFixed(8)),
-      open_cost_basis_usd: Number(statsAll.openCostBasisUsd.toFixed(6)),
-
-      last_24h: {
-        since: since24h,
-        rows_scanned: stats24h.rowsScanned,
-        fills_used: stats24h.fillsUsed,
-        trades_closed: stats24h.tradesClosed,
-        wins: stats24h.wins,
-        losses: stats24h.losses,
-        win_rate: Number((stats24h.winRate * 100).toFixed(2)),
-        gross_pnl_usd: Number(stats24h.grossPnlUsd.toFixed(6)),
-        fees_usd: Number(stats24h.feesUsd.toFixed(6)),
-        net_realized_pnl_usd: Number(stats24h.netRealizedPnlUsd.toFixed(6)),
-        max_drawdown_usd: Number(stats24h.maxDrawdownUsd.toFixed(6)),
-        max_drawdown_pct: Number((stats24h.maxDrawdownPct * 100).toFixed(3)),
-      },
+      ...snap,
 
       debug: {
-        limit,
-        generated_at: nowIso(),
+        only_user_id_env: envOnlyUser || null,
         note:
-          "FIFO realized PnL computed from extracted fills. If fills_used is 0, trade_logs.raw likely doesn't include fills; adjust extractor paths.",
+          "PnL is best-effort FIFO on trade_logs. Uses columns (side/base_size/price) first, falls back to raw if needed.",
       },
-    };
-
-    return json(200, payload);
-  } catch (e: any) {
-    return json(500, {
-      ok: false,
-      runId,
-      error: String(e?.message || e),
     });
+  } catch (e: any) {
+    return json(500, { ok: false, runId, error: String(e?.message || e) });
   }
+}
+
+// Optional: allow POST (same auth/behavior)
+export async function POST(req: Request) {
+  return GET(req);
 }
