@@ -54,6 +54,52 @@ type BalancesResp = BalancesOk | BalancesErr;
 
 type Traffic = "green" | "yellow" | "red" | "unknown";
 
+/**
+ * PnL Snapshot response (from /api/pnl-snapshot proxy).
+ * Keep it loose so backend can evolve without breaking UI.
+ */
+type PnlSnapshotOk = {
+  ok: true;
+  runId?: string;
+  since?: string;
+  symbol?: string;
+  user_id?: string;
+
+  rows_scanned?: number;
+  rows_usable?: number;
+  limit?: number;
+
+  total_trades?: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number;
+
+  avg_win_bps?: number;
+  avg_loss_bps?: number;
+
+  net_realized_pnl_usd?: number;
+  current_open_pnl_usd?: number;
+
+  open_position_base?: number;
+  open_cost_usd?: number;
+  spot_price?: number | null;
+  open_avg_price?: number | null;
+
+  starting_equity_usd?: number;
+  running_equity_usd?: number;
+  max_drawdown_pct?: number;
+
+  debug?: any;
+};
+
+type PnlSnapshotErr = {
+  ok: false;
+  runId?: string;
+  error: string;
+};
+
+type PnlSnapshotResp = PnlSnapshotOk | PnlSnapshotErr;
+
 function truthy(v: any) {
   return v === true || v === "true" || v === 1 || v === "1";
 }
@@ -67,9 +113,25 @@ function fmtMoney(n: number | null | undefined) {
   return n.toLocaleString(undefined, { style: "currency", currency: "USD" });
 }
 
+function fmtSignedMoney(n: number | null | undefined) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  const sign = n > 0 ? "+" : "";
+  return sign + n.toLocaleString(undefined, { style: "currency", currency: "USD" });
+}
+
 function fmtNum(n: number | null | undefined, digits = 8) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
   return n.toFixed(digits);
+}
+
+function fmtPct(n: number | null | undefined, digits = 2) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(digits)}%`;
+}
+
+function fmtBps(n: number | null | undefined, digits = 2) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "—";
+  return `${n.toFixed(digits)} bps`;
 }
 
 export default function DashboardPage() {
@@ -134,6 +196,10 @@ export default function DashboardPage() {
 
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
+  // ✅ PnL Snapshot (read-only, user-scoped)
+  const [pnlConn, setPnlConn] = useState<Conn>("checking");
+  const [pnlSnapshot, setPnlSnapshot] = useState<PnlSnapshotResp | null>(null);
+
   // ✅ UI-only: pill details modal (no trading impact)
   const [pillModal, setPillModal] = useState<{
     open: boolean;
@@ -165,6 +231,7 @@ export default function DashboardPage() {
     setUserCoinbaseConn("checking");
     setBalancesConn("checking");
     setTradeConn("checking");
+    setPnlConn("checking");
     setLastCheck(new Date());
 
     let accessToken: string | null = null;
@@ -199,6 +266,7 @@ export default function DashboardPage() {
           setUserCoinbaseConn("no");
           setBalancesConn("no");
           setTradeConn("no");
+          setPnlConn("no");
           setChecking(false);
           router.replace("/login");
           return;
@@ -218,6 +286,7 @@ export default function DashboardPage() {
         setUserCoinbaseConn("no");
         setBalancesConn("no");
         setTradeConn("no");
+        setPnlConn("no");
         setChecking(false);
         router.replace("/login");
         return;
@@ -398,7 +467,7 @@ export default function DashboardPage() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`, // ✅ FIX: prevents HTTP 401
+            Authorization: `Bearer ${accessToken}`,
           },
           cache: "no-store",
           body: JSON.stringify({ action: "status", user_id: sessionUserId }),
@@ -424,7 +493,6 @@ export default function DashboardPage() {
 
         const ok = !!(r.ok && j && j.ok === true);
 
-        // Build explain payload
         const blocking: string[] = [];
         const next_steps: string[] = [];
 
@@ -432,14 +500,11 @@ export default function DashboardPage() {
         let connState: Conn = "checking";
 
         if (!ok) {
-          // Broken status endpoint = RED
           blocking.push(`Status check failed (HTTP ${r.status}).`);
           next_steps.push("Refresh and try again. If it persists, reconnect Coinbase keys.");
           traffic = "red";
           connState = "no";
         } else {
-          // Status endpoint OK — now interpret gates safely
-          // IMPORTANT: use the *fresh* result (userKeysOk), not stale React state
           if (!userKeysOk) {
             blocking.push("No Coinbase keys found for your account.");
             next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
@@ -453,7 +518,6 @@ export default function DashboardPage() {
             traffic = "red";
             connState = "no";
           } else if (!parsed.PULSE_TRADE_ARMED || !parsed.LIVE_ALLOWED) {
-            // This is SAFE LOCKED state = YELLOW (not an error)
             if (!parsed.PULSE_TRADE_ARMED) {
               blocking.push("Pulse is not armed (safe mode).");
               next_steps.push(
@@ -467,7 +531,6 @@ export default function DashboardPage() {
             traffic = "yellow";
             connState = "warn";
           } else {
-            // Truly live-allowed & armed = GREEN
             traffic = "green";
             connState = "ok";
           }
@@ -488,6 +551,45 @@ export default function DashboardPage() {
           blocking: ["Unable to fetch trading status."],
           next_steps: ["Refresh and try again. If it persists, contact support."],
         });
+      }
+
+      // ✅ 7) PnL Snapshot (read-only, user-scoped)
+      // IMPORTANT: This must hit a server endpoint that DOES NOT expose secrets to the browser.
+      try {
+        if (!accessToken) throw new Error("missing_access_token");
+
+        // default: last 30 days
+        const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+        const r = await fetch(`/api/pnl-snapshot?since=${encodeURIComponent(since)}`, {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        let j: any = null;
+        try {
+          j = await r.json();
+        } catch {
+          j = null;
+        }
+
+        if (!mountedRef.current) return;
+
+        if (r.ok && j && j.ok === true) {
+          setPnlConn("ok");
+          setPnlSnapshot(j as PnlSnapshotOk);
+        } else {
+          const errMsg =
+            j?.error ||
+            (r.status === 404 ? "pnl_endpoint_missing" : `pnl_failed_http_${r.status}`);
+
+          setPnlConn("no");
+          setPnlSnapshot({ ok: false, error: String(errMsg), runId: j?.runId } as PnlSnapshotErr);
+        }
+      } catch (e: any) {
+        if (!mountedRef.current) return;
+        setPnlConn("no");
+        setPnlSnapshot({ ok: false, error: e?.message || "pnl_failed" } as PnlSnapshotErr);
       }
 
       if (!mountedRef.current) return;
@@ -602,6 +704,7 @@ export default function DashboardPage() {
   const userKeysP = pill(userCoinbaseConn);
   const balP = pill(balancesConn);
   const tradeP = pill(tradeConn);
+  const pnlP = pill(pnlConn);
 
   // Sidebar label: locked should be YELLOW, not GREEN
   const armedLabel = tradeGates.LIVE_ALLOWED
@@ -704,7 +807,148 @@ export default function DashboardPage() {
           </div>
 
           <p className="mt-2 text-[11px] text-slate-500">
-            Last check: <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
+            Last check:{" "}
+            <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
+            <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
+          </p>
+        </div>
+      </div>
+    );
+  })();
+
+  const pnlBox = (() => {
+    // Only show PnL if user has Pulse access OR is admin (admin can still see)
+    const allowed = entitlements.pulse || isAdmin;
+
+    if (!allowed) {
+      return (
+        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
+          <div className="flex items-center justify-between">
+            <p className="font-semibold text-slate-100">PnL Snapshot</p>
+            <span
+              className={[
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+                "bg-slate-800/60 text-slate-200 ring-1 ring-slate-700",
+              ].join(" ")}
+            >
+              <span className="h-2 w-2 rounded-full bg-slate-300" />
+              LOCKED
+            </span>
+          </div>
+          <p className="mt-1 text-slate-400">Upgrade to Pulse to see your PnL and trade stats.</p>
+        </div>
+      );
+    }
+
+    if (pnlConn !== "ok" || !pnlSnapshot || (pnlSnapshot as any).ok !== true) {
+      const err =
+        (pnlSnapshot as any)?.error ||
+        "Unable to load PnL Snapshot. If this is new, confirm /api/pnl-snapshot exists.";
+
+      return (
+        <div className="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 p-4 text-xs text-rose-100">
+          <div className="flex items-center justify-between">
+            <p className="font-semibold">PnL Snapshot</p>
+            <button
+              type="button"
+              onClick={() => {
+                openPillModal({
+                  title: "PNL SNAPSHOT",
+                  tone: "red",
+                  body: [
+                    String(err),
+                    "This page calls /api/pnl-snapshot (server). It must be authenticated and must not expose secrets.",
+                  ],
+                  footer: ["Fix backend route if missing; then refresh."],
+                });
+              }}
+              className={[
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+                pnlP.wrap,
+              ].join(" ")}
+              title="Click for details"
+            >
+              <span className={["h-2 w-2 rounded-full", pnlP.dot].join(" ")} />
+              PNL: {pnlP.label}
+            </button>
+          </div>
+
+          <p className="mt-1 opacity-90">{String(err)}</p>
+        </div>
+      );
+    }
+
+    const ok = pnlSnapshot as PnlSnapshotOk;
+
+    const realized = ok.net_realized_pnl_usd ?? 0;
+    const open = ok.current_open_pnl_usd ?? 0;
+    const runningEq = ok.running_equity_usd ?? 0;
+
+    const tone =
+      realized > 0 ? "green" : realized < 0 ? "red" : "neutral";
+
+    return (
+      <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
+        <div className="flex items-center justify-between">
+          <p className="font-semibold text-slate-100">PnL Snapshot</p>
+
+          <button
+            type="button"
+            onClick={() => {
+              openPillModal({
+                title: "PNL SNAPSHOT",
+                tone: tone === "green" ? "green" : tone === "red" ? "red" : "neutral",
+                body: [
+                  `Realized PnL: ${fmtSignedMoney(ok.net_realized_pnl_usd)}`,
+                  `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
+                  `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
+                  `Trades: ${ok.total_trades ?? 0} (W ${ok.wins ?? 0} / L ${ok.losses ?? 0})`,
+                  `Win rate: ${typeof ok.win_rate === "number" ? `${ok.win_rate}%` : "—"}`,
+                  `Avg win: ${fmtBps(ok.avg_win_bps)} · Avg loss: ${fmtBps(ok.avg_loss_bps)}`,
+                  `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
+                  `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
+                  `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(ok.open_avg_price ?? null)}`,
+                  `Since: ${ok.since ?? "—"}`,
+                ],
+                footer: ["PnL Snapshot is read-only and computed from your trade logs."],
+              });
+            }}
+            className={[
+              "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+              pnlP.wrap,
+            ].join(" ")}
+            title="Click for details"
+          >
+            <span className={["h-2 w-2 rounded-full", pnlP.dot].join(" ")} />
+            PNL: {pnlP.label}
+          </button>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          <div className="flex justify-between">
+            <span className="text-slate-400">Realized PnL</span>
+            <span className="font-mono text-slate-100">{fmtSignedMoney(ok.net_realized_pnl_usd)}</span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-slate-400">Open PnL</span>
+            <span className="font-mono text-slate-100">{fmtSignedMoney(ok.current_open_pnl_usd)}</span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-slate-400">Trades (W/L)</span>
+            <span className="font-mono text-slate-100">
+              {ok.total_trades ?? 0} ({ok.wins ?? 0}/{ok.losses ?? 0})
+            </span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-slate-400">Running Equity</span>
+            <span className="font-mono text-slate-100">{fmtMoney(runningEq)}</span>
+          </div>
+
+          <p className="mt-2 text-[11px] text-slate-500">
+            Since: <span className="text-slate-300">{ok.since ?? "—"}</span>
             <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
           </p>
         </div>
@@ -753,7 +997,9 @@ export default function DashboardPage() {
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status details</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Status details
+                </p>
                 <h2 className="mt-1 text-xl font-bold text-slate-100">{pillModal.title}</h2>
 
                 <div className="mt-2">
@@ -828,17 +1074,32 @@ export default function DashboardPage() {
                 Dashboard · Control Panel (Read-Only)
               </span>
 
-              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", accP.wrap].join(" ")}>
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  accP.wrap,
+                ].join(" ")}
+              >
                 <span className={["h-2 w-2 rounded-full", accP.dot].join(" ")} />
                 SIGNED IN: {accP.label}
               </span>
 
-              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", healthP.wrap].join(" ")}>
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  healthP.wrap,
+                ].join(" ")}
+              >
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
               </span>
 
-              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", planP.wrap].join(" ")}>
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  planP.wrap,
+                ].join(" ")}
+              >
                 <span className={["h-2 w-2 rounded-full", planP.dot].join(" ")} />
                 PLAN ACCESS: {planP.label}
               </span>
@@ -857,7 +1118,10 @@ export default function DashboardPage() {
                     footer: ["This is your personal connection status (server-verified)."],
                   });
                 }}
-                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", userKeysP.wrap].join(" ")}
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  userKeysP.wrap,
+                ].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
@@ -901,7 +1165,10 @@ export default function DashboardPage() {
                     footer: ["Balances are read-only and server-verified."],
                   });
                 }}
-                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", balP.wrap].join(" ")}
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  balP.wrap,
+                ].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
@@ -926,7 +1193,10 @@ export default function DashboardPage() {
                     footer: ["This is the platform’s server connectivity (not your personal keys)."],
                   });
                 }}
-                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", platP.wrap].join(" ")}
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  platP.wrap,
+                ].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", platP.dot].join(" ")} />
@@ -952,7 +1222,10 @@ export default function DashboardPage() {
                     footer: ["This is per-user Pulse status (server-verified)."],
                   });
                 }}
-                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", tradeP.wrap].join(" ")}
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  tradeP.wrap,
+                ].join(" ")}
                 title={
                   tradeExplain.traffic === "green"
                     ? "Trading status verified (per-user)."
@@ -967,6 +1240,56 @@ export default function DashboardPage() {
               >
                 <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
                 TRADING STATUS: {tradeP.label}
+              </button>
+
+              {/* ✅ PnL pill (clickable) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!pnlSnapshot || (pnlSnapshot as any).ok !== true) {
+                    openPillModal({
+                      title: "PNL SNAPSHOT",
+                      tone: "red",
+                      body: [
+                        (pnlSnapshot as any)?.error || "PnL snapshot not available yet.",
+                        "This dashboard calls /api/pnl-snapshot (server). No secrets are exposed to the browser.",
+                      ],
+                      footer: ["If missing, add the server proxy route and refresh."],
+                    });
+                    return;
+                  }
+
+                  const ok = pnlSnapshot as PnlSnapshotOk;
+
+                  openPillModal({
+                    title: "PNL SNAPSHOT",
+                    tone:
+                      (ok.net_realized_pnl_usd ?? 0) > 0
+                        ? "green"
+                        : (ok.net_realized_pnl_usd ?? 0) < 0
+                        ? "red"
+                        : "neutral",
+                    body: [
+                      `Realized PnL: ${fmtSignedMoney(ok.net_realized_pnl_usd)}`,
+                      `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
+                      `Trades: ${ok.total_trades ?? 0} (W ${ok.wins ?? 0} / L ${ok.losses ?? 0})`,
+                      `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
+                      `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
+                      `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
+                      `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(ok.open_avg_price ?? null)}`,
+                      `Since: ${ok.since ?? "—"}`,
+                    ],
+                    footer: ["Read-only · computed from trade logs."],
+                  });
+                }}
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                  pnlP.wrap,
+                ].join(" ")}
+                title="Click for details"
+              >
+                <span className={["h-2 w-2 rounded-full", pnlP.dot].join(" ")} />
+                PNL: {pnlP.label}
               </button>
 
               <span className="text-xs text-slate-400">
@@ -1037,13 +1360,17 @@ export default function DashboardPage() {
 
                 {balancesBox}
 
+                {/* ✅ PnL Snapshot card (this is where clients will see it) */}
+                {pnlBox}
+
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
                   <p className="font-semibold text-slate-100">Important</p>
                   <p className="mt-1 text-slate-400">
                     “PLATFORM ENGINE” = server connectivity (us).<br />
                     “YOUR COINBASE” = your personal setup completion (server-verified).<br />
                     “BALANCES” = read-only account snapshot (server-verified).<br />
-                    “TRADING STATUS” = per-user pulse-trade status (server-verified).
+                    “TRADING STATUS” = per-user pulse-trade status (server-verified).<br />
+                    “PNL” = user-scoped snapshot (read-only; server computed).
                   </p>
                 </div>
 
