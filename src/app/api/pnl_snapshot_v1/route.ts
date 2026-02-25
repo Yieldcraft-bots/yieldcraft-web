@@ -12,18 +12,22 @@ function json(status: number, body: any) {
     headers: { "Cache-Control": "no-store" },
   });
 }
+
 function requireEnv(name: string) {
   const v = process.env[name];
   if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
   return v.trim();
 }
+
 function num(v: any, fallback: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+
 function cleanString(v: any) {
   return (typeof v === "string" ? v : "").trim();
 }
+
 function safeJsonParse(text: string) {
   try {
     return JSON.parse(text);
@@ -31,9 +35,11 @@ function safeJsonParse(text: string) {
     return null;
   }
 }
+
 function nowIso() {
   return new Date().toISOString();
 }
+
 function toIsoMaybe(x: any): string | null {
   const s = cleanString(x);
   if (!s) return null;
@@ -41,8 +47,14 @@ function toIsoMaybe(x: any): string | null {
   if (!Number.isFinite(t)) return null;
   return new Date(t).toISOString();
 }
+
 function shortId() {
   return crypto.randomBytes(6).toString("hex");
+}
+
+function safeNumber(x: any, fallback = 0) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 // ---------- auth (admin-only) ----------
@@ -98,11 +110,7 @@ type TradeRow = {
 
 // ---------- parsing ----------
 function pickTs(r: TradeRow): string {
-  return (
-    toIsoMaybe(r.created_at) ||
-    toIsoMaybe((r as any).t) ||
-    nowIso()
-  );
+  return toIsoMaybe(r.created_at) || toIsoMaybe((r as any).t) || nowIso();
 }
 
 function pickSymbol(r: TradeRow): string {
@@ -148,15 +156,20 @@ function extractFeeUsd(raw: any): number {
       j?.success_response?.order?.fees,
       j?.resp?.order?.total_fees,
       j?.resp?.order?.fees,
+      j?.response?.order?.total_fees,
+      j?.response?.order?.fees,
     ];
 
     for (const c of candidates) {
       if (c == null) continue;
+
       if (typeof c === "number" && Number.isFinite(c)) return c;
+
       if (typeof c === "string") {
         const n = Number(c);
         if (Number.isFinite(n)) return n;
       }
+
       // some Coinbase fields are like { value: "0.12", currency: "USD" }
       if (typeof c === "object") {
         const v = Number((c as any)?.value);
@@ -173,10 +186,10 @@ type NormalizedFill = {
   ts: string;
   side: "BUY" | "SELL";
   symbol: string;
-  price: number;      // if missing, we approximate
-  baseQty: number;    // BTC size
-  usdNotional: number;// USD amount (cost or proceeds)
-  feeUsd: number;     // best-effort
+  price: number; // 0 if unknown
+  baseQty: number;
+  usdNotional: number;
+  feeUsd: number;
   row: any;
 };
 
@@ -187,17 +200,14 @@ function normalizeRow(r: TradeRow): NormalizedFill | null {
   const ts = pickTs(r);
   const symbol = pickSymbol(r);
 
-  // Prefer explicit sizes if present
   const price = pickPrice(r);
   const base = pickBaseSize(r);
   const quote = pickQuoteSize(r);
 
-  // Derive a consistent base qty + usd notional
   let baseQty = base ?? 0;
   let usdNotional = 0;
 
   if (side === "BUY") {
-    // BUY normally has quote_size; if missing, approximate
     if (quote && quote > 0) {
       usdNotional = quote;
       if (!baseQty && price) baseQty = quote / price;
@@ -207,10 +217,8 @@ function normalizeRow(r: TradeRow): NormalizedFill | null {
       return null;
     }
   } else {
-    // SELL normally has base_size; if missing, approximate from quote/price
     if (baseQty && baseQty > 0) {
-      if (price) usdNotional = baseQty * price;
-      else usdNotional = 0; // still allow; pnl calc will degrade
+      usdNotional = price ? baseQty * price : 0;
     } else if (quote && price) {
       usdNotional = quote;
       baseQty = quote / price;
@@ -219,15 +227,12 @@ function normalizeRow(r: TradeRow): NormalizedFill | null {
     }
   }
 
-  // If price missing but we have base+usd, back into price
+  // back into price if missing
   let px = price ?? 0;
   if ((!px || !Number.isFinite(px)) && baseQty > 0 && usdNotional > 0) {
     px = usdNotional / baseQty;
   }
-  if (!Number.isFinite(px) || px <= 0) {
-    // we can still compute $ pnl from notionals, but bps will be impaired
-    px = 0;
-  }
+  if (!Number.isFinite(px) || px <= 0) px = 0;
 
   const feeUsd = extractFeeUsd((r as any).raw);
 
@@ -238,7 +243,7 @@ function normalizeRow(r: TradeRow): NormalizedFill | null {
     price: px,
     baseQty,
     usdNotional,
-    feeUsd,
+    feeUsd: Number.isFinite(feeUsd) ? feeUsd : 0,
     row: r,
   };
 }
@@ -248,8 +253,8 @@ type ClosedTrade = {
   openTs: string;
   closeTs: string;
   symbol: string;
-  buyPx: number;   // if unknown, 0
-  sellPx: number;  // if unknown, 0
+  buyPx: number;
+  sellPx: number;
   qty: number;
   pnlUsd: number;
   pnlBps: number | null;
@@ -261,12 +266,11 @@ type OpenLot = {
   symbol: string;
   qty: number;
   costUsd: number;
-  px: number; // if unknown, 0
+  px: number;
   feesUsd: number;
 };
 
 function computeFromFills(fills: NormalizedFill[]) {
-  // Sort ascending time
   const sorted = [...fills].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
 
   const openLots: OpenLot[] = [];
@@ -275,56 +279,65 @@ function computeFromFills(fills: NormalizedFill[]) {
   let feesPaid = 0;
 
   for (const f of sorted) {
-    feesPaid += f.feeUsd || 0;
+    feesPaid += safeNumber(f.feeUsd, 0);
 
     if (f.side === "BUY") {
       openLots.push({
         ts: f.ts,
         symbol: f.symbol,
-        qty: f.baseQty,
-        costUsd: f.usdNotional,
-        px: f.price || 0,
-        feesUsd: f.feeUsd || 0,
+        qty: safeNumber(f.baseQty, 0),
+        costUsd: safeNumber(f.usdNotional, 0),
+        px: safeNumber(f.price, 0),
+        feesUsd: safeNumber(f.feeUsd, 0),
       });
       continue;
     }
 
-    // SELL -> match FIFO against open lots
-    let sellQty = f.baseQty;
-    let sellProceedsRemaining = f.usdNotional; // for proportional proceeds allocation
+    let sellQty = safeNumber(f.baseQty, 0);
 
     while (sellQty > 0 && openLots.length > 0) {
       const lot = openLots[0];
+
       if (lot.symbol !== f.symbol) {
-        // if symbols differ, skip matching across; pop to avoid infinite loops
-        // (you can also choose to break; but this keeps it resilient)
+        openLots.shift();
+        continue;
+      }
+
+      const lotQtyBefore = lot.qty;
+      if (lotQtyBefore <= 0) {
         openLots.shift();
         continue;
       }
 
       const takeQty = Math.min(lot.qty, sellQty);
 
-      // Allocate costs/proceeds proportionally
-      const lotCostPortion = lot.costUsd * (takeQty / lot.qty);
-      const lotFeesPortion = lot.feesUsd * (takeQty / lot.qty);
+      const lotCostPortion = lot.costUsd * (takeQty / lotQtyBefore);
+      const lotFeesPortion = lot.feesUsd * (takeQty / lotQtyBefore);
 
-      // proceeds portion
+      // proceeds portion (use notional if present; otherwise fallback to px*qty)
       let proceedsPortion = 0;
-      if (sellProceedsRemaining > 0) {
-        // proportion of remaining sell qty to remaining proceeds
+      if (safeNumber(f.usdNotional, 0) > 0 && safeNumber(f.baseQty, 0) > 0) {
         proceedsPortion = f.usdNotional * (takeQty / f.baseQty);
-      } else if (f.price > 0) {
+      } else if (safeNumber(f.price, 0) > 0) {
         proceedsPortion = takeQty * f.price;
+      } else {
+        proceedsPortion = 0;
       }
 
-      const pnlUsd = proceedsPortion - lotCostPortion;
+      const pnlUsd = safeNumber(proceedsPortion, 0) - safeNumber(lotCostPortion, 0);
 
-      // bps uses entry price if known
+      const buyPx =
+        safeNumber(lot.px, 0) ||
+        (lotCostPortion > 0 && takeQty > 0 ? lotCostPortion / takeQty : 0);
+
+      const sellPx =
+        safeNumber(f.price, 0) ||
+        (proceedsPortion > 0 && takeQty > 0 ? proceedsPortion / takeQty : 0);
+
       let pnlBps: number | null = null;
-      const buyPx = lot.px || (lotCostPortion > 0 && takeQty > 0 ? lotCostPortion / takeQty : 0);
-      const sellPx = f.price || (proceedsPortion > 0 && takeQty > 0 ? proceedsPortion / takeQty : 0);
       if (buyPx > 0 && sellPx > 0) {
-        pnlBps = ((sellPx - buyPx) / buyPx) * 10_000;
+        const bps = ((sellPx - buyPx) / buyPx) * 10_000;
+        pnlBps = Number.isFinite(bps) ? Number(bps.toFixed(2)) : null;
       }
 
       closed.push({
@@ -334,12 +347,12 @@ function computeFromFills(fills: NormalizedFill[]) {
         buyPx,
         sellPx,
         qty: takeQty,
-        pnlUsd,
-        pnlBps: pnlBps !== null ? Number(pnlBps.toFixed(2)) : null,
-        feesUsd: (f.feeUsd || 0) + lotFeesPortion, // best-effort
+        pnlUsd: Number.isFinite(pnlUsd) ? Number(pnlUsd.toFixed(6)) : 0,
+        pnlBps,
+        feesUsd: safeNumber(f.feeUsd, 0) + safeNumber(lotFeesPortion, 0),
       });
 
-      // Reduce lot
+      // reduce lot
       lot.qty -= takeQty;
       lot.costUsd -= lotCostPortion;
       lot.feesUsd -= lotFeesPortion;
@@ -351,94 +364,81 @@ function computeFromFills(fills: NormalizedFill[]) {
     }
   }
 
-  // Basic summary
-  const realizedPnlUsd = closed.reduce((s, t) => s + t.pnlUsd, 0);
+  const realizedPnlUsdRaw = closed.reduce((s, t) => s + safeNumber(t.pnlUsd, 0), 0);
 
-  const wins = closed.filter((t) => t.pnlUsd > 0);
-  const losses = closed.filter((t) => t.pnlUsd < 0);
+  const wins = closed.filter((t) => safeNumber(t.pnlUsd, 0) > 0);
+  const losses = closed.filter((t) => safeNumber(t.pnlUsd, 0) < 0);
 
-  const win_rate = closed.length > 0 ? wins.length / closed.length : 0;
+  const winRatePct = closed.length > 0 ? (wins.length / closed.length) * 100 : 0;
 
-  const avg_win_bps =
+  const avgWinBps =
     wins.length > 0
       ? wins
           .map((t) => t.pnlBps)
-          .filter((x): x is number => typeof x === "number")
+          .filter((x): x is number => typeof x === "number" && Number.isFinite(x))
           .reduce((a, b) => a + b, 0) / wins.length
       : 0;
 
-  const avg_loss_bps =
+  const avgLossBps =
     losses.length > 0
       ? losses
           .map((t) => t.pnlBps)
-          .filter((x): x is number => typeof x === "number")
+          .filter((x): x is number => typeof x === "number" && Number.isFinite(x))
           .reduce((a, b) => a + b, 0) / losses.length
       : 0;
 
   return {
     closed,
     openLots,
-    realizedPnlUsd: Number(realizedPnlUsd.toFixed(2)),
-    feesPaidUsd: Number(feesPaid.toFixed(2)),
+    realizedPnlUsd: Number.isFinite(realizedPnlUsdRaw) ? Number(realizedPnlUsdRaw.toFixed(2)) : 0,
+    feesPaidUsd: Number.isFinite(feesPaid) ? Number(feesPaid.toFixed(2)) : 0,
     totalTrades: closed.length,
     wins: wins.length,
     losses: losses.length,
-    win_rate: Number((win_rate * 100).toFixed(2)),
-    avg_win_bps: Number(avg_win_bps.toFixed(2)),
-    avg_loss_bps: Number(avg_loss_bps.toFixed(2)),
+    win_rate: Number.isFinite(winRatePct) ? Number(winRatePct.toFixed(2)) : 0,
+    avg_win_bps: Number.isFinite(avgWinBps) ? Number(avgWinBps.toFixed(2)) : 0,
+    avg_loss_bps: Number.isFinite(avgLossBps) ? Number(avgLossBps.toFixed(2)) : 0,
   };
 }
 
-// Max drawdown computed from closed-trade equity curve (realized only)
+// Max drawdown computed from realized-only equity curve
 function computeEquityAndMdd(closed: ClosedTrade[], startEquity = 0) {
-  // sort by closeTs
   const s = [...closed].sort((a, b) => Date.parse(a.closeTs) - Date.parse(b.closeTs));
 
   let equity = startEquity;
   let peak = startEquity;
   let maxDdPct = 0;
 
-  const curve: { ts: string; equity: number }[] = [];
-
   for (const t of s) {
-    equity += t.pnlUsd;
+    equity += safeNumber(t.pnlUsd, 0);
     if (equity > peak) peak = equity;
 
-    const dd = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
+    const dd = peak !== 0 ? ((peak - equity) / Math.max(Math.abs(peak), 1e-9)) * 100 : 0;
     if (dd > maxDdPct) maxDdPct = dd;
-
-    curve.push({ ts: t.closeTs, equity: Number(equity.toFixed(2)) });
   }
 
   return {
-    running_equity: Number(equity.toFixed(2)),
-    peak_equity: Number(peak.toFixed(2)),
-    max_drawdown_pct: Number(maxDdPct.toFixed(3)),
-    equity_curve: curve,
+    running_equity: Number.isFinite(equity) ? Number(equity.toFixed(2)) : 0,
+    peak_equity: Number.isFinite(peak) ? Number(peak.toFixed(2)) : 0,
+    max_drawdown_pct: Number.isFinite(maxDdPct) ? Number(maxDdPct.toFixed(3)) : 0,
   };
 }
 
-// ---------- optional spot for open pnl ----------
+// ---------- spot (open pnl) ----------
+// Public Coinbase v2 spot endpoint (no auth)
 async function fetchSpotPriceFromCoinbase(
-  apiKeyName: string,
-  privateKeyPem: string,
-  keyAlg: "ES256" | "EdDSA",
+  _apiKeyName: string,
+  _privateKeyPem: string,
+  _keyAlg: "ES256" | "EdDSA",
   productId: string
 ): Promise<number | null> {
-  // This endpoint is PUBLIC; no auth required.
-  // We keep it auth-free so snapshot doesn’t depend on keys.
   try {
     const res = await fetch(
-      `https://api.coinbase.com/api/v3/brokerage/products/${encodeURIComponent(productId)}`,
+      `https://api.coinbase.com/v2/prices/${encodeURIComponent(productId)}/spot`,
       { method: "GET", cache: "no-store" }
     );
-    const text = await res.text();
-    const j = safeJsonParse(text) as any;
-    const p =
-      Number(j?.price) ||
-      Number(j?.product?.price) ||
-      Number(j?.data?.price) ||
-      0;
+    const j = (await res.json()) as any;
+    const p = Number(j?.data?.amount);
     if (!Number.isFinite(p) || p <= 0) return null;
     return p;
   } catch {
@@ -447,19 +447,23 @@ async function fetchSpotPriceFromCoinbase(
 }
 
 function computeOpenPnlUsd(openLots: OpenLot[], spotPrice: number | null) {
-  if (!spotPrice || !Number.isFinite(spotPrice) || spotPrice <= 0) {
-    return { current_open_pnl_usd: null as number | null, open_position_base: openLots.reduce((s, l) => s + l.qty, 0) };
-  }
+  const totalQty = openLots.reduce((s, l) => s + safeNumber(l.qty, 0), 0);
+  const totalCost = openLots.reduce((s, l) => s + safeNumber(l.costUsd, 0), 0);
 
-  // Mark-to-market vs remaining cost basis
-  const totalQty = openLots.reduce((s, l) => s + l.qty, 0);
-  const totalCost = openLots.reduce((s, l) => s + l.costUsd, 0);
+  if (!spotPrice || !Number.isFinite(spotPrice) || spotPrice <= 0) {
+    return {
+      current_open_pnl_usd: null as number | null,
+      open_position_base: Number(totalQty.toFixed(8)),
+      open_cost_usd: Number(totalCost.toFixed(2)),
+      spot_price: null as number | null,
+    };
+  }
 
   const mktValue = totalQty * spotPrice;
   const openPnl = mktValue - totalCost;
 
   return {
-    current_open_pnl_usd: Number(openPnl.toFixed(2)),
+    current_open_pnl_usd: Number.isFinite(openPnl) ? Number(openPnl.toFixed(2)) : 0,
     open_position_base: Number(totalQty.toFixed(8)),
     open_cost_usd: Number(totalCost.toFixed(2)),
     spot_price: Number(spotPrice.toFixed(2)),
@@ -473,9 +477,6 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const user_id = cleanString(url.searchParams.get("user_id")) || null;
 
-  // Defaults:
-  // - since: 30 days
-  // - limit: 5000 rows (enough for MVP)
   const sinceParam = cleanString(url.searchParams.get("since"));
   const sinceIso =
     toIsoMaybe(sinceParam) ||
@@ -500,23 +501,20 @@ export async function GET(req: Request) {
     const { data, error } = await q;
     if (error) return json(500, { ok: false, runId, error: error.message || error });
 
-    const rows = Array.isArray(data) ? (data as any as TradeRow[]) : [];
+    const rows = Array.isArray(data) ? (data as TradeRow[]) : [];
 
-    // Normalize rows (only BUY/SELL that have enough info)
     const fillsAll = rows.map(normalizeRow).filter((x): x is NormalizedFill => !!x);
 
-    // Compute full-window metrics
     const full = computeFromFills(fillsAll);
     const equity = computeEquityAndMdd(full.closed, 0);
 
-    // last 24h slice
     const last24Iso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
     const fills24 = fillsAll.filter((f) => Date.parse(f.ts) >= Date.parse(last24Iso));
     const last24 = computeFromFills(fills24);
 
-    // Optional open PnL (only if spot can be fetched)
-    // Use BTC-USD as default symbol if any row is BTC; else use first symbol
-    const symbol = fillsAll.find((f) => f.symbol && f.symbol !== "UNKNOWN")?.symbol || "BTC-USD";
+    const symbol =
+      fillsAll.find((f) => f.symbol && f.symbol !== "UNKNOWN")?.symbol || "BTC-USD";
+
     const spot = await fetchSpotPriceFromCoinbase("", "", "ES256", symbol);
     const open = computeOpenPnlUsd(full.openLots, spot);
 
@@ -528,7 +526,6 @@ export async function GET(req: Request) {
       rows_scanned: rows.length,
       fills_used: fillsAll.length,
 
-      // Required scoreboard fields
       total_trades: full.totalTrades,
       wins: full.wins,
       losses: full.losses,
@@ -538,13 +535,11 @@ export async function GET(req: Request) {
       net_realized_pnl_usd: full.realizedPnlUsd,
       fees_paid_usd: full.feesPaidUsd,
 
-      // Open + equity + DD
       current_open_pnl_usd: open.current_open_pnl_usd,
-      open_position_base: (open as any).open_position_base ?? null,
+      open_position_base: open.open_position_base,
       running_equity: equity.running_equity,
       max_drawdown_pct: equity.max_drawdown_pct,
 
-      // Windows
       last_24h: {
         since: last24Iso,
         total_trades: last24.totalTrades,
@@ -555,11 +550,10 @@ export async function GET(req: Request) {
         fees_paid_usd: last24.feesPaidUsd,
       },
 
-      // Debug (keep for now; you can remove later)
       debug: {
         symbol_used_for_spot: symbol,
-        spot_price: (open as any).spot_price ?? null,
-        open_cost_usd: (open as any).open_cost_usd ?? null,
+        spot_price: open.spot_price,
+        open_cost_usd: open.open_cost_usd,
         limit,
       },
     };
