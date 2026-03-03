@@ -44,7 +44,7 @@ type CoreFundOk = {
   debug?: any;
 };
 
-type CoreFundErr = { ok: false; error: string; runId?: string };
+type CoreFundErr = { ok: false; error: string; runId?: string; hint?: string };
 
 function fmtMoney(n: any) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "—";
@@ -93,7 +93,10 @@ export default function CoreFundPage() {
     // last 90 days
     const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
 
-    const r = await fetch(`/api/corefund/pnl?since=${encodeURIComponent(since)}&symbol=BTC-USD`, {
+    // ✅ CALL THE RIGHT ROUTE
+    const url = `/api/corefund/pnl_snapshot_v1?since=${encodeURIComponent(since)}&symbol=BTC-USD&exchange=coinbase`;
+
+    const r = await fetch(url, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -109,6 +112,7 @@ export default function CoreFundPage() {
         ok: false,
         error: j?.error || `http_${r.status}`,
         runId: j?.runId,
+        hint: j?.hint,
       } as CoreFundErr);
     }
   };
@@ -174,9 +178,7 @@ export default function CoreFundPage() {
             <div className="mt-4 text-sm text-rose-200">
               <p>Error: {err.error}</p>
               {err.runId ? <p className="mt-1 text-xs text-rose-300/80">runId: {err.runId}</p> : null}
-              <p className="mt-3 text-xs text-slate-400">
-                If this is 403, auth is working — we just need to enforce admin gating in the API route.
-              </p>
+              {err.hint ? <p className="mt-2 text-xs text-slate-400">{err.hint}</p> : null}
             </div>
           ) : null}
 
