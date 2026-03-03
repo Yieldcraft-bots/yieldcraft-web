@@ -16,8 +16,8 @@ export const runtime = "nodejs";
  *
  * Auth (either/or):
  *  A) Admin allowlist by email:
- *     - Set COREFUND_ADMIN_EMAILS="a@b.com, c@d.com"
- *     - Client/proxy must send an email header (see getRequestEmail)
+ *     - Set COREFUND_ADMIN_EMAILS="a@b.com,c@d.com"
+ *     - Client must send an email header (x-user-email). Your /corefund page should do this server-side.
  *
  *  B) Secret:
  *     - secret query param OR header x-cron-secret OR Authorization: Bearer <secret>
@@ -61,31 +61,44 @@ function shortId() {
   return crypto.randomBytes(6).toString("hex");
 }
 
-function parseEmailList(raw: string) {
-  return raw
-    .split(/[,\n]/g)
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+// -------------------- Auth helpers --------------------
+
+function parseEmailList(v: string): Set<string> {
+  return new Set(
+    v
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
 }
 
-/**
- * Where we look for the requester email.
- * You (or your middleware/proxy) can standardize on one header, e.g. "x-yc-user-email".
- */
-function getRequestEmail(req: Request) {
+function getRequestEmail(req: Request): string {
+  // Your server-side /corefund page should send x-user-email = logged-in email
   const candidates = [
-    "x-yc-user-email",
-    "x-yc-email",
-    "x-user-email",
-    "x-forwarded-email",
-    "x-email",
+    req.headers.get("x-user-email"),
+    req.headers.get("x-yc-email"),
+    req.headers.get("x-email"),
   ];
 
-  for (const h of candidates) {
-    const v = req.headers.get(h);
-    if (v && v.includes("@")) return v.trim().toLowerCase();
+  for (const c of candidates) {
+    const e = (c || "").trim().toLowerCase();
+    if (e && e.includes("@")) return e;
   }
   return "";
+}
+
+function isSameOrigin(req: Request): boolean {
+  // best-effort: blocks obvious cross-site calls
+  const origin = (req.headers.get("origin") || "").toLowerCase();
+  const host = (req.headers.get("host") || "").toLowerCase();
+  if (!host) return true; // if host missing, don't hard-fail
+  if (!origin) return true; // some server-to-server calls won't have origin
+  try {
+    const u = new URL(origin);
+    return u.host === host;
+  } catch {
+    return true;
+  }
 }
 
 function okSecret(req: Request) {
@@ -107,12 +120,23 @@ function okSecret(req: Request) {
   return q === secret;
 }
 
-function okAdminEmail(req: Request) {
-  const allow = parseEmailList((process.env.COREFUND_ADMIN_EMAILS || "").trim());
-  if (allow.length === 0) return false; // allowlist not configured
+function okAdminAllowlist(req: Request) {
+  const raw = (process.env.COREFUND_ADMIN_EMAILS || "").trim();
+  if (!raw) return false;
+
+  // basic same-origin guard (not perfect, but helps)
+  if (!isSameOrigin(req)) return false;
+
+  const allow = parseEmailList(raw);
   const email = getRequestEmail(req);
   if (!email) return false;
-  return allow.includes(email);
+
+  return allow.has(email);
+}
+
+function okAuth(req: Request) {
+  // Either secret OR allowlist is sufficient
+  return okSecret(req) || okAdminAllowlist(req);
 }
 
 function sb() {
@@ -160,18 +184,13 @@ export async function GET(req: Request) {
   const runId = `corefund_pnl_${shortId()}`;
 
   try {
-    const hasSecret = okSecret(req);
-    const hasAdmin = okAdminEmail(req);
-
-    // If allowlist is configured but caller provides an email NOT in allowlist, return 403.
-    const allowConfigured = parseEmailList((process.env.COREFUND_ADMIN_EMAILS || "").trim()).length > 0;
-    const reqEmail = getRequestEmail(req);
-
-    if (!hasSecret && !hasAdmin) {
-      if (allowConfigured && reqEmail) {
-        return json(403, { ok: false, runId, error: "forbidden", email: reqEmail });
-      }
-      return json(401, { ok: false, runId, error: "unauthorized" });
+    if (!okAuth(req)) {
+      return json(401, {
+        ok: false,
+        runId,
+        error: "unauthorized",
+        hint: "Provide CRON_SECRET/YC_CRON_SECRET OR set COREFUND_ADMIN_EMAILS and send x-user-email header.",
+      });
     }
 
     const url = new URL(req.url);
@@ -234,9 +253,7 @@ export async function GET(req: Request) {
       const t = cleanString(r.created_at) || nowIso();
 
       if (Number.isFinite(px) && px > 0) lastPrice = px;
-      if (Number.isFinite(fee) && fee > 0) {
-        feeTotal += fee;
-      }
+      if (Number.isFinite(fee) && fee > 0) feeTotal += fee;
 
       let effBase = Number.isFinite(base) && base > 0 ? base : 0;
       let effPrice = Number.isFinite(px) && px > 0 ? px : 0;
@@ -359,19 +376,15 @@ export async function GET(req: Request) {
       running_equity_usd: round2(equityNow),
       max_drawdown_pct: round2(maxDdPct),
 
-      auth: {
-        allowlist_configured: allowConfigured,
-        request_email: reqEmail || null,
-        allowed_via: hasSecret ? "secret" : "admin_email",
-      },
-
       debug: {
+        auth_mode: okSecret(req) ? "secret" : "admin_email_allowlist",
+        request_email: getRequestEmail(req) || null,
         note:
           "Core Fund PnL uses FIFO matching on corefund_trade_logs. Open PnL uses last seen trade price from logs (best-effort).",
       },
     });
   } catch (e: any) {
-    return json(500, { ok: false, runId, error: String(e?.message || e) });
+    return json(500, { ok: false, runId: `corefund_pnl_${shortId()}`, error: String(e?.message || e) });
   }
 }
 
