@@ -22,6 +22,11 @@ export const runtime = "nodejs";
  *  - limit=number (default 10000, max 100000)
  *  - symbol=BTC-USD (optional, default BTC-USD)
  *  - exchange=coinbase (optional, default coinbase)
+ *
+ * IMPORTANT FIX:
+ * - Many imported corefund_trade_logs rows may have exchange NULL.
+ * - We treat NULL exchange as the requested exchange (default coinbase),
+ *   so we do: (exchange = <exchange> OR exchange IS NULL)
  */
 
 function json(status: number, body: any) {
@@ -67,33 +72,43 @@ function okSecretAuth(req: Request) {
 
   if (!secret) return false;
 
-  const h =
-    req.headers.get("x-cron-secret") ||
-    req.headers.get("authorization") ||
-    req.headers.get("x-yc-secret");
+  // Allow either raw secret via x-cron-secret / x-yc-secret,
+  // OR Authorization: Bearer <secret>
+  const hCron = (req.headers.get("x-cron-secret") || "").trim();
+  const hYc = (req.headers.get("x-yc-secret") || "").trim();
+  const bearer = getBearer(req);
 
-  if (h && (h === secret || h === `Bearer ${secret}`)) return true;
+  if (hCron && hCron === secret) return true;
+  if (hYc && hYc === secret) return true;
+  if (bearer && bearer === secret) return true;
 
   const url = new URL(req.url);
-  const q = url.searchParams.get("secret");
+  const q = (url.searchParams.get("secret") || "").trim();
   return q === secret;
 }
 
 function parseAllowlist() {
   const raw = (process.env.COREFUND_ADMIN_EMAILS || "").trim();
-  const set = new Set(
+  return new Set(
     raw
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean)
   );
-  return set;
 }
 
-function sbService() {
+// DB client (service role) for reading corefund_trade_logs
+function sbDb() {
   const url = requireEnv("SUPABASE_URL");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   return createClient(url, key, { auth: { persistSession: false } });
+}
+
+// Auth client (anon key) for verifying JWT -> user email
+function sbAuth() {
+  const url = requireEnv("SUPABASE_URL");
+  const anon = requireEnv("SUPABASE_ANON_KEY");
+  return createClient(url, anon, { auth: { persistSession: false } });
 }
 
 async function okUserAuth(req: Request) {
@@ -107,7 +122,7 @@ async function okUserAuth(req: Request) {
     return { ok: false as const, error: "missing_bearer_token" };
   }
 
-  const client = sbService();
+  const client = sbAuth();
   const { data, error } = await client.auth.getUser(token);
 
   if (error || !data?.user) {
@@ -184,14 +199,26 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
 
-    const since = cleanString(url.searchParams.get("since")) || "2025-12-01T00:00:00.000Z";
-    const limit = Math.max(1, Math.min(100000, num(url.searchParams.get("limit"), 10000)));
+    const since =
+      cleanString(url.searchParams.get("since")) || "2025-12-01T00:00:00.000Z";
 
-    const symbol = (cleanString(url.searchParams.get("symbol")) || "BTC-USD").toUpperCase();
-    const exchange = (cleanString(url.searchParams.get("exchange")) || "coinbase").toLowerCase();
+    const limit = Math.max(
+      1,
+      Math.min(100000, num(url.searchParams.get("limit"), 10000))
+    );
 
-    const client = sbService();
+    const symbol = (
+      cleanString(url.searchParams.get("symbol")) || "BTC-USD"
+    ).toUpperCase();
 
+    const exchange = (
+      cleanString(url.searchParams.get("exchange")) || "coinbase"
+    ).toLowerCase();
+
+    const client = sbDb();
+
+    // NOTE: treat NULL exchange as the requested exchange
+    // so we don't accidentally filter out imported rows.
     let q = client
       .from("corefund_trade_logs")
       .select("created_at,exchange,symbol,side,order_id,base_size,quote_size,price,fee_usd,ok")
@@ -199,8 +226,12 @@ export async function GET(req: Request) {
       .order("created_at", { ascending: true })
       .limit(limit);
 
-    if (exchange) q = q.eq("exchange", exchange);
     if (symbol) q = q.eq("symbol", symbol);
+
+    if (exchange) {
+      // exchange.eq.<exchange> OR exchange.is.null
+      q = q.or(`exchange.eq.${exchange},exchange.is.null`);
+    }
 
     const { data, error } = await q;
     if (error) return json(500, { ok: false, runId, error: error.message || String(error) });
@@ -214,7 +245,11 @@ export async function GET(req: Request) {
       const b = Number(r.base_size ?? 0);
       const qv = Number(r.quote_size ?? 0);
       const p = Number(r.price ?? 0);
-      return (Number.isFinite(b) && b > 0) || (Number.isFinite(qv) && qv > 0) || (Number.isFinite(p) && p > 0);
+      return (
+        (Number.isFinite(b) && b > 0) ||
+        (Number.isFinite(qv) && qv > 0) ||
+        (Number.isFinite(p) && p > 0)
+      );
     });
 
     const buys: Lot[] = [];
@@ -258,6 +293,7 @@ export async function GET(req: Request) {
         continue;
       }
 
+      // SELL -> match FIFO against buys
       let sellQty = effBase;
 
       while (sellQty > 0 && buys.length > 0) {
@@ -306,12 +342,19 @@ export async function GET(req: Request) {
     const winRate = realizedTrades.length ? (wins.length / realizedTrades.length) * 100 : 0;
 
     const openBase = buys.reduce((s, l) => s + (Number(l.qty) || 0), 0);
-    const openCostUsd = buys.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0), 0);
+    const openCostUsd = buys.reduce(
+      (s, l) => s + (Number(l.qty) || 0) * (Number(l.price) || 0),
+      0
+    );
     const openAvgPrice = openBase > 0 ? openCostUsd / openBase : 0;
 
-    const openPnlUsd = openBase > 0 && lastPrice > 0 ? (lastPrice - openAvgPrice) * openBase : 0;
+    const openPnlUsd =
+      openBase > 0 && lastPrice > 0 ? (lastPrice - openAvgPrice) * openBase : 0;
 
-    const startEquity = num(process.env.CORE_FUND_START_EQUITY_USD, num(process.env.YC_START_EQUITY_USD, 0));
+    const startEquity = num(
+      process.env.CORE_FUND_START_EQUITY_USD,
+      num(process.env.YC_START_EQUITY_USD, 0)
+    );
     const equityNow = startEquity + realizedPnLNet + openPnlUsd;
 
     // Best-effort max drawdown from realized points (net of fees)
@@ -327,6 +370,7 @@ export async function GET(req: Request) {
       if (dd > maxDdPct) maxDdPct = dd;
     }
 
+    // Apply fees at end (best-effort)
     running -= feeTotal;
     if (running > peakEquity) peakEquity = running;
     const ddAfterFees = peakEquity > 0 ? ((peakEquity - running) / peakEquity) * 100 : 0;
@@ -366,7 +410,7 @@ export async function GET(req: Request) {
 
       debug: {
         note:
-          "Core Fund PnL uses FIFO matching on corefund_trade_logs. Open PnL uses last seen trade price from logs (best-effort).",
+          "Core Fund PnL uses FIFO matching on corefund_trade_logs. Open PnL uses last seen trade price from logs (best-effort). NULL exchange rows are treated as the requested exchange.",
       },
     });
   } catch (e: any) {
