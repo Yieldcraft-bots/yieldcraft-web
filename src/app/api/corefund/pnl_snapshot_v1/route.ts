@@ -14,9 +14,14 @@ export const runtime = "nodejs";
  *  - open position + open PnL from last seen trade price (best-effort)
  *  - basic max drawdown from realized equity points (best-effort)
  *
- * Auth:
- *  - secret query param OR header x-cron-secret OR Authorization: Bearer <secret>
- *  - Uses CRON_SECRET or YC_CRON_SECRET
+ * Auth (either/or):
+ *  A) Admin allowlist by email:
+ *     - Set COREFUND_ADMIN_EMAILS="a@b.com, c@d.com"
+ *     - Client/proxy must send an email header (see getRequestEmail)
+ *
+ *  B) Secret:
+ *     - secret query param OR header x-cron-secret OR Authorization: Bearer <secret>
+ *     - Uses CRON_SECRET or YC_CRON_SECRET
  *
  * Query:
  *  - secret=...
@@ -56,7 +61,34 @@ function shortId() {
   return crypto.randomBytes(6).toString("hex");
 }
 
-function okAuth(req: Request) {
+function parseEmailList(raw: string) {
+  return raw
+    .split(/[,\n]/g)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Where we look for the requester email.
+ * You (or your middleware/proxy) can standardize on one header, e.g. "x-yc-user-email".
+ */
+function getRequestEmail(req: Request) {
+  const candidates = [
+    "x-yc-user-email",
+    "x-yc-email",
+    "x-user-email",
+    "x-forwarded-email",
+    "x-email",
+  ];
+
+  for (const h of candidates) {
+    const v = req.headers.get(h);
+    if (v && v.includes("@")) return v.trim().toLowerCase();
+  }
+  return "";
+}
+
+function okSecret(req: Request) {
   const secret =
     (process.env.CRON_SECRET || "").trim() ||
     (process.env.YC_CRON_SECRET || "").trim();
@@ -73,6 +105,14 @@ function okAuth(req: Request) {
   const url = new URL(req.url);
   const q = url.searchParams.get("secret");
   return q === secret;
+}
+
+function okAdminEmail(req: Request) {
+  const allow = parseEmailList((process.env.COREFUND_ADMIN_EMAILS || "").trim());
+  if (allow.length === 0) return false; // allowlist not configured
+  const email = getRequestEmail(req);
+  if (!email) return false;
+  return allow.includes(email);
 }
 
 function sb() {
@@ -120,7 +160,19 @@ export async function GET(req: Request) {
   const runId = `corefund_pnl_${shortId()}`;
 
   try {
-    if (!okAuth(req)) return json(401, { ok: false, runId, error: "unauthorized" });
+    const hasSecret = okSecret(req);
+    const hasAdmin = okAdminEmail(req);
+
+    // If allowlist is configured but caller provides an email NOT in allowlist, return 403.
+    const allowConfigured = parseEmailList((process.env.COREFUND_ADMIN_EMAILS || "").trim()).length > 0;
+    const reqEmail = getRequestEmail(req);
+
+    if (!hasSecret && !hasAdmin) {
+      if (allowConfigured && reqEmail) {
+        return json(403, { ok: false, runId, error: "forbidden", email: reqEmail });
+      }
+      return json(401, { ok: false, runId, error: "unauthorized" });
+    }
 
     const url = new URL(req.url);
 
@@ -306,6 +358,12 @@ export async function GET(req: Request) {
       starting_equity_usd: round2(startEquity),
       running_equity_usd: round2(equityNow),
       max_drawdown_pct: round2(maxDdPct),
+
+      auth: {
+        allowlist_configured: allowConfigured,
+        request_email: reqEmail || null,
+        allowed_via: hasSecret ? "secret" : "admin_email",
+      },
 
       debug: {
         note:
