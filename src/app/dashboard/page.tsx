@@ -89,6 +89,15 @@ type PnlSnapshotOk = {
   running_equity_usd?: number;
   max_drawdown_pct?: number;
 
+  // ✅ optional “institutional” fields (safe if backend doesn’t return yet)
+  gross_profit_usd?: number;
+  gross_loss_usd?: number;
+  avg_win_usd?: number;
+  avg_loss_usd?: number;
+  largest_win_usd?: number;
+  largest_loss_usd?: number;
+  profit_factor?: number | string;
+
   debug?: any;
 };
 
@@ -520,9 +529,7 @@ export default function DashboardPage() {
           } else if (!parsed.PULSE_TRADE_ARMED || !parsed.LIVE_ALLOWED) {
             if (!parsed.PULSE_TRADE_ARMED) {
               blocking.push("Pulse is not armed (safe mode).");
-              next_steps.push(
-                "Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy."
-              );
+              next_steps.push("Admin must set PULSE_TRADE_ARMED=true in Production env and redeploy.");
             }
             if (!parsed.LIVE_ALLOWED) {
               blocking.push("Live trading is not allowed by current safety gates.");
@@ -580,8 +587,7 @@ export default function DashboardPage() {
           setPnlSnapshot(j as PnlSnapshotOk);
         } else {
           const errMsg =
-            j?.error ||
-            (r.status === 404 ? "pnl_endpoint_missing" : `pnl_failed_http_${r.status}`);
+            j?.error || (r.status === 404 ? "pnl_endpoint_missing" : `pnl_failed_http_${r.status}`);
 
           setPnlConn("no");
           setPnlSnapshot({ ok: false, error: String(errMsg), runId: j?.runId } as PnlSnapshotErr);
@@ -881,11 +887,9 @@ export default function DashboardPage() {
     const ok = pnlSnapshot as PnlSnapshotOk;
 
     const realized = ok.net_realized_pnl_usd ?? 0;
-    const open = ok.current_open_pnl_usd ?? 0;
     const runningEq = ok.running_equity_usd ?? 0;
 
-    const tone =
-      realized > 0 ? "green" : realized < 0 ? "red" : "neutral";
+    const tone = realized > 0 ? "green" : realized < 0 ? "red" : "neutral";
 
     return (
       <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
@@ -905,9 +909,21 @@ export default function DashboardPage() {
                   `Trades: ${ok.total_trades ?? 0} (W ${ok.wins ?? 0} / L ${ok.losses ?? 0})`,
                   `Win rate: ${typeof ok.win_rate === "number" ? `${ok.win_rate}%` : "—"}`,
                   `Avg win: ${fmtBps(ok.avg_win_bps)} · Avg loss: ${fmtBps(ok.avg_loss_bps)}`,
+                  `Profit Factor: ${String(ok.profit_factor ?? "—")}`,
+                  `Gross Profit: ${fmtMoney(ok.gross_profit_usd ?? null)} · Gross Loss: ${fmtMoney(
+                    ok.gross_loss_usd ?? null
+                  )}`,
+                  `Avg Win (USD): ${fmtMoney(ok.avg_win_usd ?? null)} · Avg Loss (USD): ${fmtMoney(
+                    ok.avg_loss_usd ?? null
+                  )}`,
+                  `Largest Win: ${fmtMoney(ok.largest_win_usd ?? null)} · Largest Loss: ${fmtMoney(
+                    ok.largest_loss_usd ?? null
+                  )}`,
                   `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
                   `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
-                  `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(ok.open_avg_price ?? null)}`,
+                  `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(
+                    ok.open_avg_price ?? null
+                  )}`,
                   `Since: ${ok.since ?? "—"}`,
                 ],
                 footer: ["PnL Snapshot is read-only and computed from your trade logs."],
@@ -957,8 +973,7 @@ export default function DashboardPage() {
   })();
 
   const coinbaseClickMsg = () => {
-    if (userCoinbaseConn === "ok")
-      return `✅ Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
+    if (userCoinbaseConn === "ok") return `✅ Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
 
     const r = coinbaseStatusRaw || {};
     const reason = r?.reason || r?.error || "unknown";
@@ -972,12 +987,8 @@ export default function DashboardPage() {
   const tradingClickMsg = () => {
     if (tradeExplain.traffic === "green") return "✅ Trading status verified (per-user).";
     if (tradeExplain.traffic === "yellow") return "🟡 Trading is locked (safe mode). Not an error.";
-    const blocks = tradeExplain.blocking.length
-      ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}`
-      : "";
-    const steps = tradeExplain.next_steps.length
-      ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}`
-      : "";
+    const blocks = tradeExplain.blocking.length ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}` : "";
+    const steps = tradeExplain.next_steps.length ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}` : "";
     return `⚠️ Trading is not green.${blocks}${steps}`;
   };
 
@@ -997,9 +1008,7 @@ export default function DashboardPage() {
           >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Status details
-                </p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Status details</p>
                 <h2 className="mt-1 text-xl font-bold text-slate-100">{pillModal.title}</h2>
 
                 <div className="mt-2">
@@ -1074,32 +1083,17 @@ export default function DashboardPage() {
                 Dashboard · Control Panel (Read-Only)
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  accP.wrap,
-                ].join(" ")}
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", accP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", accP.dot].join(" ")} />
                 SIGNED IN: {accP.label}
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  healthP.wrap,
-                ].join(" ")}
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", healthP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
                 HEALTH: {healthP.label}
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  planP.wrap,
-                ].join(" ")}
-              >
+              <span className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", planP.wrap].join(" ")}>
                 <span className={["h-2 w-2 rounded-full", planP.dot].join(" ")} />
                 PLAN ACCESS: {planP.label}
               </span>
@@ -1118,10 +1112,7 @@ export default function DashboardPage() {
                     footer: ["This is your personal connection status (server-verified)."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  userKeysP.wrap,
-                ].join(" ")}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", userKeysP.wrap].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
@@ -1165,10 +1156,7 @@ export default function DashboardPage() {
                     footer: ["Balances are read-only and server-verified."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  balP.wrap,
-                ].join(" ")}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", balP.wrap].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
@@ -1193,10 +1181,7 @@ export default function DashboardPage() {
                     footer: ["This is the platform’s server connectivity (not your personal keys)."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  platP.wrap,
-                ].join(" ")}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", platP.wrap].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", platP.dot].join(" ")} />
@@ -1222,10 +1207,7 @@ export default function DashboardPage() {
                     footer: ["This is per-user Pulse status (server-verified)."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  tradeP.wrap,
-                ].join(" ")}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", tradeP.wrap].join(" ")}
                 title={
                   tradeExplain.traffic === "green"
                     ? "Trading status verified (per-user)."
@@ -1274,18 +1256,27 @@ export default function DashboardPage() {
                       `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
                       `Trades: ${ok.total_trades ?? 0} (W ${ok.wins ?? 0} / L ${ok.losses ?? 0})`,
                       `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
+                      `Profit Factor: ${String(ok.profit_factor ?? "—")}`,
+                      `Gross Profit: ${fmtMoney(ok.gross_profit_usd ?? null)} · Gross Loss: ${fmtMoney(
+                        ok.gross_loss_usd ?? null
+                      )}`,
+                      `Avg Win (USD): ${fmtMoney(ok.avg_win_usd ?? null)} · Avg Loss (USD): ${fmtMoney(
+                        ok.avg_loss_usd ?? null
+                      )}`,
+                      `Largest Win: ${fmtMoney(ok.largest_win_usd ?? null)} · Largest Loss: ${fmtMoney(
+                        ok.largest_loss_usd ?? null
+                      )}`,
                       `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
                       `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
-                      `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(ok.open_avg_price ?? null)}`,
+                      `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(
+                        ok.open_avg_price ?? null
+                      )}`,
                       `Since: ${ok.since ?? "—"}`,
                     ],
                     footer: ["Read-only · computed from trade logs."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  pnlP.wrap,
-                ].join(" ")}
+                className={["inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold", pnlP.wrap].join(" ")}
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", pnlP.dot].join(" ")} />
