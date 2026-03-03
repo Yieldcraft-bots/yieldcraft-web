@@ -9,6 +9,10 @@ export const runtime = "nodejs";
  * - Requires Authorization: Bearer <supabase access token>
  * - Calls /api/pnl_snapshot_v1 with server secret + user_id
  * - Pass-through: since, limit
+ *
+ * Security hardening:
+ * - DO NOT put the server secret in the querystring.
+ * - Send secret via header x-cron-secret (engine already supports it).
  */
 
 function json(status: number, body: any) {
@@ -79,14 +83,18 @@ export async function GET(req: Request) {
     const origin = new URL(req.url).origin;
 
     const qs = new URLSearchParams();
-    qs.set("secret", secret);
     qs.set("user_id", userId);
     qs.set("limit", String(limit));
     if (since) qs.set("since", since);
 
     const engineUrl = `${origin}/api/pnl_snapshot_v1?${qs.toString()}`;
 
-    const r = await fetch(engineUrl, { cache: "no-store" });
+    // ✅ Send secret via header (NOT querystring)
+    const r = await fetch(engineUrl, {
+      cache: "no-store",
+      headers: { "x-cron-secret": secret },
+    });
+
     const j = await r.json().catch(() => null);
 
     if (!r.ok || !j) {
