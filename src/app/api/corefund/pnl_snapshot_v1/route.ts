@@ -18,8 +18,10 @@ export const runtime = "nodejs";
  *
  * Query:
  *  - secret=... (optional)
- *  - since=ISO (default: 2025-12-01T00:00:00.000Z)
- *  - limit=number (default 10000, max 100000)
+ *  - since=ISO (default: 2026-01-01T00:00:00.000Z)
+ *  - limit=number (default 100000, max 100000)
+ *    NOTE: If caller sends a tiny limit (ex: 1), we bump to MIN_LIMIT (default 1000)
+ *          so the PnL page can still compute trades.
  *  - symbol=BTC-USD (optional, default BTC-USD)
  *  - exchange=coinbase (optional, default coinbase)
  *
@@ -199,12 +201,21 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
 
+    // Default since bumped forward to avoid accidentally scanning empty early ranges
     const since =
-      cleanString(url.searchParams.get("since")) || "2025-12-01T00:00:00.000Z";
+      cleanString(url.searchParams.get("since")) || "2026-01-01T00:00:00.000Z";
 
-    const limit = Math.max(
+    // IMPORTANT: If caller passes tiny limit (like 1), PnL can’t compute trades.
+    // We bump to MIN_LIMIT unless they explicitly pass >= MIN_LIMIT.
+    const MIN_LIMIT = Math.max(
       1,
-      Math.min(100000, num(url.searchParams.get("limit"), 10000))
+      num(process.env.CORE_FUND_MIN_LIMIT, num(process.env.YC_CORE_FUND_MIN_LIMIT, 1000))
+    );
+
+    const rawLimit = num(url.searchParams.get("limit"), 100000);
+    const limit = Math.max(
+      MIN_LIMIT,
+      Math.min(100000, Number.isFinite(rawLimit) ? rawLimit : 100000)
     );
 
     const symbol = (
@@ -234,7 +245,13 @@ export async function GET(req: Request) {
     }
 
     const { data, error } = await q;
-    if (error) return json(500, { ok: false, runId, error: error.message || String(error) });
+    if (error) {
+      return json(500, {
+        ok: false,
+        runId,
+        error: error.message || String(error),
+      });
+    }
 
     const rows = (Array.isArray(data) ? (data as any as TradeRow[]) : []).filter(Boolean);
 
@@ -325,7 +342,10 @@ export async function GET(req: Request) {
       }
     }
 
-    const realizedPnLGross = realizedTrades.reduce((s, x) => s + (Number(x.pnl_usd) || 0), 0);
+    const realizedPnLGross = realizedTrades.reduce(
+      (s, x) => s + (Number(x.pnl_usd) || 0),
+      0
+    );
     const realizedPnLNet = realizedPnLGross - feeTotal;
 
     const wins = realizedTrades.filter((x) => x.pnl_usd > 0);
@@ -339,7 +359,9 @@ export async function GET(req: Request) {
       ? losses.reduce((s, x) => s + (Number(x.pnl_bps) || 0), 0) / losses.length
       : 0;
 
-    const winRate = realizedTrades.length ? (wins.length / realizedTrades.length) * 100 : 0;
+    const winRate = realizedTrades.length
+      ? (wins.length / realizedTrades.length) * 100
+      : 0;
 
     const openBase = buys.reduce((s, l) => s + (Number(l.qty) || 0), 0);
     const openCostUsd = buys.reduce(
@@ -362,7 +384,9 @@ export async function GET(req: Request) {
     let maxDdPct = 0;
     let running = startEquity;
 
-    const realizedByTime = [...realizedTrades].sort((a, b) => (a.time < b.time ? -1 : 1));
+    const realizedByTime = [...realizedTrades].sort((a, b) =>
+      a.time < b.time ? -1 : 1
+    );
     for (const x of realizedByTime) {
       running += Number(x.pnl_usd) || 0;
       if (running > peakEquity) peakEquity = running;
@@ -373,7 +397,8 @@ export async function GET(req: Request) {
     // Apply fees at end (best-effort)
     running -= feeTotal;
     if (running > peakEquity) peakEquity = running;
-    const ddAfterFees = peakEquity > 0 ? ((peakEquity - running) / peakEquity) * 100 : 0;
+    const ddAfterFees =
+      peakEquity > 0 ? ((peakEquity - running) / peakEquity) * 100 : 0;
     if (ddAfterFees > maxDdPct) maxDdPct = ddAfterFees;
 
     return json(200, {
@@ -410,7 +435,7 @@ export async function GET(req: Request) {
 
       debug: {
         note:
-          "Core Fund PnL uses FIFO matching on corefund_trade_logs. Open PnL uses last seen trade price from logs (best-effort). NULL exchange rows are treated as the requested exchange.",
+          "Core Fund PnL uses FIFO matching on corefund_trade_logs. Open PnL uses last seen trade price from logs (best-effort). NULL exchange rows are treated as the requested exchange. If caller sends a tiny limit, we bump it to MIN_LIMIT so trades can be computed.",
       },
     });
   } catch (e: any) {
