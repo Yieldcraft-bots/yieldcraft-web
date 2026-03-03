@@ -8,23 +8,16 @@ export const runtime = "nodejs";
 /**
  * Core Fund PnL Snapshot (server, admin-only)
  *
- * Reads: public.corefund_trade_logs
- * Computes:
- *  - realized PnL via FIFO matching (BUY lots matched to SELL)
- *  - open position + open PnL from last seen trade price (best-effort)
- *  - basic max drawdown from realized equity points (best-effort)
- *
  * Auth (either/or):
- *  A) Admin allowlist by email:
- *     - Set COREFUND_ADMIN_EMAILS="a@b.com,c@d.com"
- *     - Client must send an email header (x-user-email). Your /corefund page should do this server-side.
+ * A) Logged-in admin via Supabase JWT in Authorization: Bearer <access_token>
+ *    - Checks email against COREFUND_ADMIN_EMAILS (comma-separated)
  *
- *  B) Secret:
- *     - secret query param OR header x-cron-secret OR Authorization: Bearer <secret>
- *     - Uses CRON_SECRET or YC_CRON_SECRET
+ * B) Secret (server-to-server):
+ *    - secret query param OR header x-cron-secret OR Authorization: Bearer <secret>
+ *    - Uses CRON_SECRET or YC_CRON_SECRET
  *
  * Query:
- *  - secret=...
+ *  - secret=... (optional)
  *  - since=ISO (default: 2025-12-01T00:00:00.000Z)
  *  - limit=number (default 10000, max 100000)
  *  - symbol=BTC-USD (optional, default BTC-USD)
@@ -61,47 +54,13 @@ function shortId() {
   return crypto.randomBytes(6).toString("hex");
 }
 
-// -------------------- Auth helpers --------------------
-
-function parseEmailList(v: string): Set<string> {
-  return new Set(
-    v
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean)
-  );
+function getBearer(req: Request) {
+  const a = req.headers.get("authorization") || "";
+  const m = a.match(/^Bearer\s+(.+)$/i);
+  return m ? m[1].trim() : "";
 }
 
-function getRequestEmail(req: Request): string {
-  // Your server-side /corefund page should send x-user-email = logged-in email
-  const candidates = [
-    req.headers.get("x-user-email"),
-    req.headers.get("x-yc-email"),
-    req.headers.get("x-email"),
-  ];
-
-  for (const c of candidates) {
-    const e = (c || "").trim().toLowerCase();
-    if (e && e.includes("@")) return e;
-  }
-  return "";
-}
-
-function isSameOrigin(req: Request): boolean {
-  // best-effort: blocks obvious cross-site calls
-  const origin = (req.headers.get("origin") || "").toLowerCase();
-  const host = (req.headers.get("host") || "").toLowerCase();
-  if (!host) return true; // if host missing, don't hard-fail
-  if (!origin) return true; // some server-to-server calls won't have origin
-  try {
-    const u = new URL(origin);
-    return u.host === host;
-  } catch {
-    return true;
-  }
-}
-
-function okSecret(req: Request) {
+function okSecretAuth(req: Request) {
   const secret =
     (process.env.CRON_SECRET || "").trim() ||
     (process.env.YC_CRON_SECRET || "").trim();
@@ -120,29 +79,51 @@ function okSecret(req: Request) {
   return q === secret;
 }
 
-function okAdminAllowlist(req: Request) {
+function parseAllowlist() {
   const raw = (process.env.COREFUND_ADMIN_EMAILS || "").trim();
-  if (!raw) return false;
-
-  // basic same-origin guard (not perfect, but helps)
-  if (!isSameOrigin(req)) return false;
-
-  const allow = parseEmailList(raw);
-  const email = getRequestEmail(req);
-  if (!email) return false;
-
-  return allow.has(email);
+  const set = new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return set;
 }
 
-function okAuth(req: Request) {
-  // Either secret OR allowlist is sufficient
-  return okSecret(req) || okAdminAllowlist(req);
-}
-
-function sb() {
+function sbService() {
   const url = requireEnv("SUPABASE_URL");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
   return createClient(url, key, { auth: { persistSession: false } });
+}
+
+async function okUserAuth(req: Request) {
+  const allow = parseAllowlist();
+  if (allow.size === 0) {
+    return { ok: false as const, error: "missing_COREFUND_ADMIN_EMAILS" };
+  }
+
+  const token = getBearer(req);
+  if (!token) {
+    return { ok: false as const, error: "missing_bearer_token" };
+  }
+
+  const client = sbService();
+  const { data, error } = await client.auth.getUser(token);
+
+  if (error || !data?.user) {
+    return { ok: false as const, error: "invalid_session" };
+  }
+
+  const email = (data.user.email || "").toLowerCase().trim();
+  if (!email) {
+    return { ok: false as const, error: "missing_user_email" };
+  }
+
+  if (!allow.has(email)) {
+    return { ok: false as const, error: "not_admin", email };
+  }
+
+  return { ok: true as const, email };
 }
 
 // ---- Types we expect in corefund_trade_logs (best effort) ----
@@ -184,13 +165,21 @@ export async function GET(req: Request) {
   const runId = `corefund_pnl_${shortId()}`;
 
   try {
-    if (!okAuth(req)) {
-      return json(401, {
-        ok: false,
-        runId,
-        error: "unauthorized",
-        hint: "Provide CRON_SECRET/YC_CRON_SECRET OR set COREFUND_ADMIN_EMAILS and send x-user-email header.",
-      });
+    // ✅ Auth path 1: secret (server-to-server)
+    if (!okSecretAuth(req)) {
+      // ✅ Auth path 2: logged-in user token (browser)
+      const ua = await okUserAuth(req);
+      if (!ua.ok) {
+        return json(401, {
+          ok: false,
+          runId,
+          error: "unauthorized",
+          hint:
+            "Provide CRON_SECRET/YC_CRON_SECRET OR login as an allowed admin email (COREFUND_ADMIN_EMAILS) and send Authorization: Bearer <supabase_access_token>.",
+          detail: ua.error,
+          email: (ua as any).email,
+        });
+      }
     }
 
     const url = new URL(req.url);
@@ -201,7 +190,7 @@ export async function GET(req: Request) {
     const symbol = (cleanString(url.searchParams.get("symbol")) || "BTC-USD").toUpperCase();
     const exchange = (cleanString(url.searchParams.get("exchange")) || "coinbase").toLowerCase();
 
-    const client = sb();
+    const client = sbService();
 
     let q = client
       .from("corefund_trade_logs")
@@ -338,7 +327,6 @@ export async function GET(req: Request) {
       if (dd > maxDdPct) maxDdPct = dd;
     }
 
-    // apply fees as a single net hit (simple)
     running -= feeTotal;
     if (running > peakEquity) peakEquity = running;
     const ddAfterFees = peakEquity > 0 ? ((peakEquity - running) / peakEquity) * 100 : 0;
@@ -377,14 +365,12 @@ export async function GET(req: Request) {
       max_drawdown_pct: round2(maxDdPct),
 
       debug: {
-        auth_mode: okSecret(req) ? "secret" : "admin_email_allowlist",
-        request_email: getRequestEmail(req) || null,
         note:
           "Core Fund PnL uses FIFO matching on corefund_trade_logs. Open PnL uses last seen trade price from logs (best-effort).",
       },
     });
   } catch (e: any) {
-    return json(500, { ok: false, runId: `corefund_pnl_${shortId()}`, error: String(e?.message || e) });
+    return json(500, { ok: false, runId, error: String(e?.message || e) });
   }
 }
 
