@@ -84,9 +84,9 @@ type TradeRow = {
   symbol: string | null;
   side: "BUY" | "SELL" | string;
   order_id: string | null;
-  base_size: number | null;   // BTC amount
-  quote_size: number | null;  // USD notional
-  price: number | null;       // avg price (USD)
+  base_size: number | null; // BTC amount
+  quote_size: number | null; // USD notional
+  price: number | null; // avg price (USD)
   ok?: boolean | null;
 };
 
@@ -159,7 +159,11 @@ export async function GET(req: Request) {
       const b = Number(r.base_size ?? 0);
       const qv = Number(r.quote_size ?? 0);
       const p = Number(r.price ?? 0);
-      return (Number.isFinite(b) && b > 0) || (Number.isFinite(qv) && qv > 0) || (Number.isFinite(p) && p > 0);
+      return (
+        (Number.isFinite(b) && b > 0) ||
+        (Number.isFinite(qv) && qv > 0) ||
+        (Number.isFinite(p) && p > 0)
+      );
     });
 
     // FIFO matching
@@ -241,6 +245,19 @@ export async function GET(req: Request) {
     const wins = realizedTrades.filter((x) => x.pnl_usd > 0);
     const losses = realizedTrades.filter((x) => x.pnl_usd < 0);
 
+    // --- Institutional Metrics (additive, non-breaking) ---
+    const grossProfitUsd = wins.reduce((s, x) => s + (Number(x.pnl_usd) || 0), 0);
+    const grossLossUsdAbs = losses.reduce((s, x) => s + Math.abs(Number(x.pnl_usd) || 0), 0);
+
+    const avgWinUsd = wins.length ? grossProfitUsd / wins.length : 0;
+    const avgLossUsd = losses.length ? grossLossUsdAbs / losses.length : 0;
+
+    const largestWinUsd = wins.length ? Math.max(...wins.map((x) => Number(x.pnl_usd) || 0)) : 0;
+    const largestLossUsd = losses.length ? Math.min(...losses.map((x) => Number(x.pnl_usd) || 0)) : 0;
+
+    const profitFactor =
+      grossLossUsdAbs > 0 ? grossProfitUsd / grossLossUsdAbs : grossProfitUsd > 0 ? Infinity : 0;
+
     const avgWinBps = wins.length
       ? wins.reduce((s, x) => s + (Number(x.pnl_bps) || 0), 0) / wins.length
       : 0;
@@ -257,8 +274,7 @@ export async function GET(req: Request) {
     const openAvgPrice = openBase > 0 ? openCostUsd / openBase : 0;
 
     // Open PnL best effort (needs lastPrice)
-    const openPnlUsd =
-      openBase > 0 && lastPrice > 0 ? (lastPrice - openAvgPrice) * openBase : 0;
+    const openPnlUsd = openBase > 0 && lastPrice > 0 ? (lastPrice - openAvgPrice) * openBase : 0;
 
     // Simple “equity” curve from start equity env + realized pnl (best effort)
     const startEquity = num(process.env.YC_START_EQUITY_USD, 0);
@@ -298,6 +314,20 @@ export async function GET(req: Request) {
       avg_win_bps: round2(avgWinBps),
       avg_loss_bps: round2(avgLossBps),
       net_realized_pnl_usd: round2(realizedPnL),
+
+      // institutional additions (non-breaking)
+      gross_profit_usd: round2(grossProfitUsd),
+      gross_loss_usd: round2(grossLossUsdAbs),
+      avg_win_usd: round2(avgWinUsd),
+      avg_loss_usd: round2(avgLossUsd),
+      largest_win_usd: round2(largestWinUsd),
+      largest_loss_usd: round2(largestLossUsd),
+      profit_factor:
+        Number.isFinite(profitFactor) && profitFactor !== Infinity
+          ? round2(profitFactor)
+          : profitFactor === Infinity
+          ? "Infinity"
+          : 0,
 
       // open
       open_position_base: round4(openBase),
