@@ -57,20 +57,24 @@ type TradeRow = {
   id?: string | number;
   created_at?: string;
   product_id?: string;
-  side?: "BUY" | "SELL" | string;
-  base_size?: string | number;
-  quote_size?: string | number;
-  price?: string | number;
-  fee_usd?: string | number;
-  fee?: string | number;
-  pnl_usd?: string | number;
-  status?: string;
+  side?: "BUY" | "SELL" | string | null;
+  base_size?: string | number | null;
+  quote_size?: string | number | null;
+  price?: string | number | null;
+  fee_usd?: string | number | null;
+  fee?: string | number | null;
+  pnl_usd?: string | number | null;
+  status?: string | number | null | Record<string, any>;
 };
 
 function n(x: any): number {
   const v =
     typeof x === "string" ? Number(x) : typeof x === "number" ? x : NaN;
   return Number.isFinite(v) ? v : 0;
+}
+
+function s(x: any): string {
+  return typeof x === "string" ? x : x == null ? "" : String(x);
 }
 
 /**
@@ -80,15 +84,17 @@ function n(x: any): number {
  */
 function computeStats(rows: TradeRow[]) {
   const fills = rows
-    .filter((r) => (r.status || "").toLowerCase() !== "rejected")
+    // ✅ FIX: coerce status to string before toLowerCase
+    .filter((r) => s((r as any).status).toLowerCase() !== "rejected")
+    // ✅ FIX: coerce side to string before toUpperCase
     .filter((r) => {
-      const s = (r.side || "").toUpperCase();
-      return s === "BUY" || s === "SELL";
+      const side = s((r as any).side).toUpperCase();
+      return side === "BUY" || side === "SELL";
     })
     .sort(
       (a, b) =>
-        new Date(a.created_at || 0).getTime() -
-        new Date(b.created_at || 0).getTime()
+        new Date(s((a as any).created_at) || 0).getTime() -
+        new Date(s((b as any).created_at) || 0).getTime()
     );
 
   const trades = fills.length;
@@ -113,12 +119,12 @@ function computeStats(rows: TradeRow[]) {
     const lots: Lot[] = [];
 
     for (const r of fills) {
-      const side = (r.side || "").toUpperCase();
-      const qty = n(r.base_size);
-      const price = n(r.price);
+      const side = s((r as any).side).toUpperCase();
+      const qty = n((r as any).base_size);
+      const price = n((r as any).price);
 
       // If quote_size is present, prefer that for total cost/proceeds.
-      const quote = n(r.quote_size);
+      const quote = n((r as any).quote_size);
       const notional = quote > 0 ? quote : qty * price;
 
       if (side === "BUY") {
@@ -156,7 +162,7 @@ function computeStats(rows: TradeRow[]) {
   let wins = 0;
 
   for (const r of fills) {
-    if ((r.side || "").toUpperCase() !== "SELL") continue;
+    if (s((r as any).side).toUpperCase() !== "SELL") continue;
     sells++;
     if ("pnl_usd" in r && n((r as any).pnl_usd) > 0) wins++;
   }
