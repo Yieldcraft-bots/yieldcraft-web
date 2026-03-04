@@ -1,7 +1,10 @@
-// src/app/admin/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
+
+const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
 
 type PulseStatsResp =
   | {
@@ -64,9 +67,25 @@ function Pill({
 }
 
 export default function AdminMissionControl() {
+  const router = useRouter();
+
   const [data, setData] = useState<PulseStatsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [ts, setTs] = useState<number>(Date.now());
+
+  // 🔒 ADMIN LOCK
+  useEffect(() => {
+    async function checkAdmin() {
+      const { data } = await supabase.auth.getUser();
+      const user = data?.user;
+
+      if (!user || user.id !== ADMIN_USER_ID) {
+        router.replace("/dashboard");
+      }
+    }
+
+    checkAdmin();
+  }, [router]);
 
   async function load() {
     try {
@@ -82,7 +101,7 @@ export default function AdminMissionControl() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 30_000); // 30s refresh (mission-control feel)
+    const id = setInterval(load, 30000);
     return () => clearInterval(id);
   }, []);
 
@@ -96,8 +115,8 @@ export default function AdminMissionControl() {
     return "yellow";
   }, [stats]);
 
-  const liveTone: "green" | "yellow" | "red" | "gray" = "green"; // your system is confirmed LIVE
-  const autoTone: "green" | "yellow" | "red" | "gray" = "green"; // auto mode is enabled per our launch posture
+  const liveTone: "green" | "yellow" | "red" | "gray" = "green";
+  const autoTone: "green" | "yellow" | "red" | "gray" = "green";
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -116,9 +135,7 @@ export default function AdminMissionControl() {
             <Pill label="LIVE EXECUTION: ON" tone={liveTone} />
             <Pill label="AUTO MODE: ON" tone={autoTone} />
             <Pill
-              label={`NET P&L TODAY: ${
-                stats ? fmtMoney(stats.netPnL) : "—"
-              }`}
+              label={`NET P&L TODAY: ${stats ? fmtMoney(stats.netPnL) : "—"}`}
               tone={netTone}
             />
           </div>
@@ -174,6 +191,7 @@ export default function AdminMissionControl() {
                 {ready ? (data as any).dayStart : "—"}
               </span>
             </div>
+
             <button
               onClick={load}
               className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15"
