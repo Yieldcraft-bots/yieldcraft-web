@@ -12,21 +12,55 @@ export default function AuthNav() {
   const router = useRouter();
   const pathname = usePathname();
   const [state, setState] = useState<SessState>("loading");
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     let mounted = true;
 
     async function init() {
       const { data } = await supabase.auth.getSession();
+
       if (!mounted) return;
-      setState(data?.session ? "authed" : "guest");
+
+      if (data?.session) {
+        setState("authed");
+
+        // check admin flag
+        const userId = data.session.user.id;
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("is_admin")
+          .eq("user_id", userId)
+          .single();
+
+        if (profile?.is_admin) {
+          setIsAdmin(true);
+        }
+      } else {
+        setState("guest");
+      }
     }
 
     init();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_e, session) => {
       if (!mounted) return;
-      setState(session ? "authed" : "guest");
+
+      if (session) {
+        setState("authed");
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("is_admin")
+          .eq("user_id", session.user.id)
+          .single();
+
+        setIsAdmin(profile?.is_admin || false);
+      } else {
+        setState("guest");
+        setIsAdmin(false);
+      }
     });
 
     return () => {
@@ -41,12 +75,11 @@ export default function AuthNav() {
     router.refresh();
   };
 
-  // Avoid layout jump
   if (state === "loading") {
     return <span className="text-sm text-white/50">…</span>;
   }
 
-  // 🔓 Logged OUT
+  // Logged OUT
   if (state === "guest") {
     return (
       <div className="flex items-center gap-2">
@@ -67,7 +100,7 @@ export default function AuthNav() {
     );
   }
 
-  // 🔐 Logged IN
+  // Logged IN
   return (
     <div className="flex items-center gap-2">
       <Link
@@ -90,6 +123,15 @@ export default function AuthNav() {
       >
         Account
       </Link>
+
+      {isAdmin && (
+        <Link
+          href="/admin/platform"
+          className="rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-2 text-sm font-semibold text-yellow-300 hover:bg-yellow-400/20 transition"
+        >
+          Admin
+        </Link>
+      )}
 
       <button
         onClick={handleLogout}
