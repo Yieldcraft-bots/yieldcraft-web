@@ -4,6 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
 
+const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
+
 function json(status: number, body: any) {
   return NextResponse.json(body, {
     status,
@@ -17,7 +19,31 @@ function requireEnv(name: string) {
   return v.trim();
 }
 
-function okAdminAuth(req: Request) {
+/**
+ * Server-side Supabase admin client (service role) – used for reads.
+ */
+function sbAdmin() {
+  const url = requireEnv("SUPABASE_URL");
+  const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+/**
+ * Supabase "user" client – used ONLY to validate the requesting user via JWT.
+ * Uses anon key so we can call auth.getUser(token).
+ */
+function sbUser() {
+  const url = requireEnv("SUPABASE_URL");
+  const anon =
+    (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
+  if (!anon) throw new Error("Missing env: NEXT_PUBLIC_SUPABASE_ANON_KEY (or SUPABASE_ANON_KEY)");
+  return createClient(url, anon, { auth: { persistSession: false } });
+}
+
+/**
+ * Old secret-based auth (kept for cron/internal calls).
+ */
+function okSecretAuth(req: Request) {
   const secret = (
     process.env.ADMIN_SECRET ||
     process.env.CRON_SECRET ||
@@ -39,10 +65,25 @@ function okAdminAuth(req: Request) {
   return q === secret;
 }
 
-function sb() {
-  const url = requireEnv("SUPABASE_URL");
-  const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, key, { auth: { persistSession: false } });
+/**
+ * NEW: Browser-safe admin auth
+ * - Accepts Supabase session JWT via Authorization: Bearer <token>
+ * - Valid if token belongs to ADMIN_USER_ID
+ */
+async function okSupabaseAdmin(req: Request) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  if (!token) return false;
+
+  try {
+    const supa = sbUser();
+    const { data, error } = await supa.auth.getUser(token);
+    if (error) return false;
+    const userId = data?.user?.id || "";
+    return userId === ADMIN_USER_ID;
+  } catch {
+    return false;
+  }
 }
 
 function num(v: any, fallback: number) {
@@ -51,36 +92,33 @@ function num(v: any, fallback: number) {
 }
 
 export async function GET(req: Request) {
-  if (!okAdminAuth(req)) return json(401, { ok: false, error: "unauthorized" });
+  // ✅ Allow either:
+  // 1) secret header/query (cron/internal)
+  // 2) logged-in supabase user == ADMIN_USER_ID (browser admin dashboard)
+  const isAuthed = okSecretAuth(req) || (await okSupabaseAdmin(req));
+  if (!isAuthed) return json(401, { ok: false, error: "unauthorized" });
 
   const url = new URL(req.url);
 
-  // optional: allow selecting a specific CoreFund user_id for personal view
   const coreUserId =
-    (url.searchParams.get("core_user_id") || process.env.CORE_FUND_USER_ID || "")
-      .trim() || null;
+    (url.searchParams.get("core_user_id") || process.env.CORE_FUND_USER_ID || "").trim() || null;
 
   const limitTrades = Math.max(1, Math.min(200, num(url.searchParams.get("limit_trades"), 50)));
 
-  const client = sb();
+  const client = sbAdmin();
 
-  // 1) Institutional Snapshot (view you already created)
+  // 1) Institutional Snapshot
   const inst = await client
     .from("institutional_snapshot_v1")
     .select("*")
     .limit(1)
     .maybeSingle();
 
-  // 2) CoreFund snapshot:
-  // Try a few common sources in order:
-  // - user_account_snapshot (if you built it)
-  // - pnl_snapshots (if exists)
-  // - fallback: compute from equity_state for core user
+  // 2) CoreFund snapshot
   let coreSnapshot: any = null;
   let coreSnapshotSource: string | null = null;
 
   if (coreUserId) {
-    // Try user_account_snapshot first
     const s1 = await client
       .from("user_account_snapshot")
       .select("*")
@@ -93,7 +131,6 @@ export async function GET(req: Request) {
       coreSnapshot = s1.data;
       coreSnapshotSource = "user_account_snapshot";
     } else {
-      // Try pnl_snapshots (if your project uses this naming)
       const s2 = await client
         .from("pnl_snapshots")
         .select("*")
@@ -106,7 +143,6 @@ export async function GET(req: Request) {
         coreSnapshot = s2.data;
         coreSnapshotSource = "pnl_snapshots";
       } else {
-        // Fallback: equity_state (peak/last equity)
         const s3 = await client
           .from("equity_state")
           .select("user_id, peak_equity_usd, last_equity_usd, updated_at")
@@ -126,8 +162,7 @@ export async function GET(req: Request) {
     }
   }
 
-  // 3) Recent CoreFund trades (optional but super useful for daily review)
-  // If you have corefund_trade_logs table, use it; otherwise fall back to trade_logs filtered by core user.
+  // 3) Recent CoreFund trades
   let coreTrades: any[] = [];
   let coreTradesSource: string | null = null;
 
@@ -156,7 +191,6 @@ export async function GET(req: Request) {
     }
   }
 
-  // response
   return json(200, {
     ok: true,
     as_of: new Date().toISOString(),
@@ -174,6 +208,6 @@ export async function GET(req: Request) {
       limit_trades: limitTrades,
     },
     note:
-      "Use ?secret=... (or x-admin-secret header). Optional: ?core_user_id=<uuid>&limit_trades=50",
+      "Auth: either secret header/query OR Supabase logged-in ADMIN_USER_ID via Authorization Bearer token.",
   });
 }
