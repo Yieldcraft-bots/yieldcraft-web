@@ -1,10 +1,7 @@
+// src/app/admin/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
-
-const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
 
 type PulseStatsResp =
   | {
@@ -17,7 +14,7 @@ type PulseStatsResp =
         trades: number;
         sells: number;
         wins: number;
-        winRate: number | null;
+        winRate: number | null; // 0..1
         grossPnL: number;
         totalFees: number;
         netPnL: number;
@@ -26,6 +23,7 @@ type PulseStatsResp =
   | {
       ok: boolean;
       status: string;
+      error?: string;
       [k: string]: any;
     };
 
@@ -35,7 +33,7 @@ function fmtMoney(n: number) {
   return `${sign}$${v.toFixed(2)}`;
 }
 
-function fmtPct(x: number) {
+function fmtPct01(x: number) {
   return `${(x * 100).toFixed(0)}%`;
 }
 
@@ -67,25 +65,9 @@ function Pill({
 }
 
 export default function AdminMissionControl() {
-  const router = useRouter();
-
   const [data, setData] = useState<PulseStatsResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [ts, setTs] = useState<number>(Date.now());
-
-  // 🔒 ADMIN LOCK
-  useEffect(() => {
-    async function checkAdmin() {
-      const { data } = await supabase.auth.getUser();
-      const user = data?.user;
-
-      if (!user || user.id !== ADMIN_USER_ID) {
-        router.replace("/dashboard");
-      }
-    }
-
-    checkAdmin();
-  }, [router]);
 
   async function load() {
     try {
@@ -94,6 +76,9 @@ export default function AdminMissionControl() {
       const j = (await r.json()) as PulseStatsResp;
       setData(j);
       setTs(Date.now());
+      if (j && typeof (j as any).error === "string" && (j as any).error) {
+        setErr((j as any).error);
+      }
     } catch (e: any) {
       setErr(e?.message || String(e));
     }
@@ -101,7 +86,7 @@ export default function AdminMissionControl() {
 
   useEffect(() => {
     load();
-    const id = setInterval(load, 30000);
+    const id = setInterval(load, 30_000);
     return () => clearInterval(id);
   }, []);
 
@@ -123,12 +108,20 @@ export default function AdminMissionControl() {
       <div className="mx-auto max-w-5xl px-6 py-10">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Admin Mission Control
-            </h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Admin Mission Control</h1>
             <p className="mt-1 text-sm text-white/60">
               Live trading visibility — clean, fast, and honest.
             </p>
+
+            {/* Admin navigation */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <a
+                href="/admin/platform"
+                className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15"
+              >
+                Platform + CoreFund
+              </a>
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -144,9 +137,7 @@ export default function AdminMissionControl() {
         <div className="mt-8 grid gap-4 sm:grid-cols-3">
           <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
             <div className="text-xs text-white/60">Trades Today</div>
-            <div className="mt-2 text-3xl font-semibold">
-              {stats ? stats.trades : "—"}
-            </div>
+            <div className="mt-2 text-3xl font-semibold">{stats ? stats.trades : "—"}</div>
             <div className="mt-2 text-xs text-white/50">
               Source: <span className="text-white/70">/api/pulse-stats</span>
             </div>
@@ -155,25 +146,17 @@ export default function AdminMissionControl() {
           <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
             <div className="text-xs text-white/60">Win Rate</div>
             <div className="mt-2 text-3xl font-semibold">
-              {stats && stats.winRate != null ? fmtPct(stats.winRate) : "—"}
+              {stats && stats.winRate != null ? fmtPct01(stats.winRate) : "—"}
             </div>
             <div className="mt-2 text-xs text-white/50">
-              Wins:{" "}
-              <span className="text-white/70">
-                {stats ? stats.wins : "—"}
-              </span>{" "}
-              • Sells:{" "}
-              <span className="text-white/70">
-                {stats ? stats.sells : "—"}
-              </span>
+              Wins: <span className="text-white/70">{stats ? stats.wins : "—"}</span> • Sells:{" "}
+              <span className="text-white/70">{stats ? stats.sells : "—"}</span>
             </div>
           </div>
 
           <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
             <div className="text-xs text-white/60">Net P&L Today</div>
-            <div className="mt-2 text-3xl font-semibold">
-              {stats ? fmtMoney(stats.netPnL) : "—"}
-            </div>
+            <div className="mt-2 text-3xl font-semibold">{stats ? fmtMoney(stats.netPnL) : "—"}</div>
             <div className="mt-2 text-xs text-white/50">
               Fees:{" "}
               <span className="text-white/70">
@@ -187,11 +170,8 @@ export default function AdminMissionControl() {
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="text-sm text-white/70">
               Day start (Central):{" "}
-              <span className="text-white/90">
-                {ready ? (data as any).dayStart : "—"}
-              </span>
+              <span className="text-white/90">{ready ? (data as any).dayStart : "—"}</span>
             </div>
-
             <button
               onClick={load}
               className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15"
@@ -202,7 +182,7 @@ export default function AdminMissionControl() {
 
           {!ready && data ? (
             <pre className="mt-4 overflow-auto rounded-xl bg-black/40 p-4 text-xs text-white/70 ring-1 ring-white/10">
-{JSON.stringify(data, null, 2)}
+              {JSON.stringify(data, null, 2)}
             </pre>
           ) : null}
 
@@ -212,9 +192,7 @@ export default function AdminMissionControl() {
             </div>
           ) : null}
 
-          <div className="mt-4 text-xs text-white/40">
-            Last refresh: {new Date(ts).toLocaleTimeString()}
-          </div>
+          <div className="mt-4 text-xs text-white/40">Last refresh: {new Date(ts).toLocaleTimeString()}</div>
         </div>
       </div>
     </main>
