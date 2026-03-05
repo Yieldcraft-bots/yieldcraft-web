@@ -1,3 +1,4 @@
+```tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -36,12 +37,9 @@ type InstSnapshotResp =
           user_id?: string;
           as_of?: string;
           updated_at?: string;
-
           peak_equity_usd?: number;
           last_equity_usd?: number;
-
           dd_pct_portfolio?: number;
-
           total_volume_usd_30d?: number;
           total_trades_30d?: number;
           win_rate_pct?: number;
@@ -65,11 +63,13 @@ function money(n: any) {
   const abs = Math.abs(v);
   return `${sign}$${abs.toFixed(2)}`;
 }
+
 function pct(n: any, digits = 2) {
   const v = Number(n);
   if (!Number.isFinite(v)) return "—";
   return `${v.toFixed(digits)}%`;
 }
+
 function fmtDate(s: any) {
   if (!s) return "—";
   const d = new Date(s);
@@ -98,9 +98,7 @@ function TonePill({
   }, [tone]);
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}>
       {label}
     </span>
   );
@@ -135,13 +133,13 @@ export default function Admin() {
 
   const [ts, setTs] = useState<number>(Date.now());
 
-  // 🔒 ADMIN LOCK (client-side bounce for non-admins)
   useEffect(() => {
     let mounted = true;
 
     async function checkAdmin() {
       const { data } = await supabase.auth.getUser();
       const user = data?.user;
+
       if (!mounted) return;
 
       if (!user || user.id !== ADMIN_USER_ID) {
@@ -163,9 +161,7 @@ export default function Admin() {
       const j = (await r.json()) as PulseStatsResp;
       setPulse(j);
 
-      if (j && typeof (j as any).error === "string" && (j as any).error) {
-        setErrPulse((j as any).error);
-      }
+      if ((j as any)?.error) setErrPulse((j as any).error);
     } catch (e: any) {
       setErrPulse(e?.message || String(e));
     }
@@ -175,31 +171,23 @@ export default function Admin() {
     try {
       setErrInst(null);
 
-      // ✅ Use the Supabase session token (NO public secrets)
       const session = await supabase.auth.getSession();
       const token = session?.data?.session?.access_token;
 
       if (!token) {
-        setErrInst("No Supabase session token found. Please log in again.");
+        setErrInst("No Supabase session token found.");
         return;
       }
 
       const r = await fetch("/api/admin/institutional-snapshot", {
         cache: "no-store",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       const j = (await r.json()) as InstSnapshotResp;
       setInst(j);
 
-      if (j && typeof (j as any).error === "string" && (j as any).error) {
-        setErrInst((j as any).error);
-      }
-      if (!r.ok && !((j as any)?.error)) {
-        setErrInst(`Snapshot request failed (${r.status}).`);
-      }
+      if ((j as any)?.error) setErrInst((j as any).error);
     } catch (e: any) {
       setErrInst(e?.message || String(e));
     }
@@ -212,15 +200,14 @@ export default function Admin() {
 
   useEffect(() => {
     refreshAll();
-    const id = setInterval(refreshAll, 30_000);
+    const id = setInterval(refreshAll, 30000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pulseReady = pulse && (pulse as any).status === "PULSE_STATS_READY";
   const pStats = pulseReady ? (pulse as any).stats : null;
 
-  const netTone: "green" | "yellow" | "red" | "gray" = useMemo(() => {
+  const netTone = useMemo(() => {
     if (!pStats) return "gray";
     if (pStats.netPnL > 0) return "green";
     if (pStats.netPnL < 0) return "red";
@@ -232,87 +219,60 @@ export default function Admin() {
 
   const cf = instOk ? (inst as any).corefund : null;
   const cfSnap = cf?.snapshot || null;
-  const cfTrades: any[] = Array.isArray(cf?.trades) ? cf.trades : [];
-
-  const ddTone: "green" | "yellow" | "red" | "gray" = useMemo(() => {
-    const dd = Number(cfSnap?.dd_pct_portfolio);
-    if (!Number.isFinite(dd)) return "gray";
-    if (dd <= 2) return "green";
-    if (dd <= 5) return "yellow";
-    return "red";
-  }, [cfSnap?.dd_pct_portfolio]);
 
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-6xl px-6 py-10">
-        {/* Header */}
+
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+
           <div>
             <div className="text-xs text-white/50">ADMIN</div>
             <h1 className="mt-1 text-3xl font-semibold tracking-tight">
               Mission Control
             </h1>
-            <p className="mt-1 text-sm text-white/60">
-              Two-panel view:{" "}
-              <span className="text-white/80">Pulse Today</span> +{" "}
-              <span className="text-white/80">Platform & CoreFund</span>
-            </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+
             <TonePill label="LIVE EXECUTION: ON" tone="green" />
             <TonePill label="AUTO MODE: ON" tone="green" />
+
             <TonePill
               label={`NET P&L TODAY: ${pStats ? money(pStats.netPnL) : "—"}`}
-              tone={netTone}
+              tone={netTone as any}
             />
-            <TonePill
-              label={`DD: ${
-                cfSnap?.dd_pct_portfolio != null
-                  ? pct(cfSnap.dd_pct_portfolio, 2)
-                  : "—"
-              }`}
-              tone={ddTone}
-            />
+
             <button
               onClick={refreshAll}
               className="ml-1 rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15"
             >
               Refresh
             </button>
+
+            <button
+              onClick={() => router.push("/admin/investor")}
+              className="ml-1 rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-indigo-500/30 hover:bg-indigo-500/30"
+            >
+              Investor / Equity
+            </button>
+
           </div>
         </div>
 
-        {/* TWO PANELS */}
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
-          {/* LEFT: Pulse */}
-          <section className="rounded-3xl bg-white/4 p-6 ring-1 ring-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Pulse — Today</h2>
-                <div className="mt-1 text-xs text-white/45">
-                  Source:{" "}
-                  <span className="text-white/70">/api/pulse-stats</span> • Day
-                  start (CT):{" "}
-                  <span className="text-white/70">
-                    {pulseReady ? (pulse as any).dayStart : "—"}
-                  </span>
-                </div>
-              </div>
 
-              <div className="text-xs text-white/45">
-                Last refresh:{" "}
-                <span className="text-white/70">
-                  {new Date(ts).toLocaleTimeString()}
-                </span>
-              </div>
-            </div>
+          <section className="rounded-3xl bg-white/4 p-6 ring-1 ring-white/10">
+
+            <h2 className="text-lg font-semibold">Pulse — Today</h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
+
               <Stat
                 label="Trades Today"
                 value={pStats ? String(pStats.trades) : "—"}
               />
+
               <Stat
                 label="Win Rate"
                 value={
@@ -320,182 +280,77 @@ export default function Admin() {
                     ? `${Math.round(pStats.winRate * 100)}%`
                     : "—"
                 }
-                sub={`Wins: ${pStats ? pStats.wins : "—"} • Sells: ${
-                  pStats ? pStats.sells : "—"
-                }`}
               />
+
               <Stat
                 label="Net P&L Today"
                 value={pStats ? money(pStats.netPnL) : "—"}
-                sub={`Fees: ${pStats ? money(pStats.totalFees) : "—"}`}
               />
+
             </div>
 
-            {!pulseReady && pulse ? (
-              <pre className="mt-5 overflow-auto rounded-2xl bg-black/40 p-4 text-xs text-white/70 ring-1 ring-white/10">
-                {JSON.stringify(pulse, null, 2)}
-              </pre>
-            ) : null}
+            {errPulse && (
+              <div className="mt-4 text-sm text-red-400">{errPulse}</div>
+            )}
 
-            {errPulse ? (
-              <div className="mt-5 rounded-2xl bg-rose-500/10 p-4 text-sm text-rose-200 ring-1 ring-rose-500/20">
-                {errPulse}
-              </div>
-            ) : null}
           </section>
 
-          {/* RIGHT: Platform + CoreFund */}
           <section className="rounded-3xl bg-white/4 p-6 ring-1 ring-white/10">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Platform + CoreFund</h2>
-                <div className="mt-1 text-xs text-white/45">
-                  Source:{" "}
-                  <span className="text-white/70">
-                    /api/admin/institutional-snapshot
-                  </span>{" "}
-                  • As of:{" "}
-                  <span className="text-white/70">
-                    {instOk ? fmtDate((inst as any).as_of) : "—"}
-                  </span>
-                </div>
-              </div>
 
-              <TonePill
-                label={instOk ? "SNAPSHOT: OK" : "SNAPSHOT: —"}
-                tone={instOk ? "green" : "gray"}
-              />
-            </div>
+            <h2 className="text-lg font-semibold">Platform Snapshot</h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
+
               <Stat
                 label="Users (30d)"
                 value={instData ? String(instData.total_users_30d) : "—"}
-                sub={`Active 24h: ${
-                  instData ? instData.active_users_24h : "—"
-                }`}
               />
+
               <Stat
                 label="Trades (30d)"
                 value={instData ? String(instData.total_trades_30d) : "—"}
-                sub={`Maker %: ${
-                  instData?.maker_entry_pct != null
-                    ? `${Number(instData.maker_entry_pct).toFixed(1)}%`
-                    : "—"
-                }`}
               />
+
               <Stat
                 label="Volume (30d)"
                 value={instData ? money(instData.total_volume_usd_30d) : "—"}
-                sub={`Win rate: ${
-                  instData?.win_rate_pct != null ? `${instData.win_rate_pct}%` : "—"
-                }`}
               />
+
             </div>
 
-            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+
               <Stat
                 label="CoreFund Peak Equity"
                 value={cfSnap ? money(cfSnap.peak_equity_usd) : "—"}
-                sub={
-                  cf?.snapshot_source ? `Source: ${cf.snapshot_source}` : undefined
-                }
               />
+
               <Stat
                 label="CoreFund Current Equity"
                 value={cfSnap ? money(cfSnap.last_equity_usd) : "—"}
                 sub={
                   cfSnap?.dd_pct_portfolio != null
-                    ? `Drawdown: ${pct(cfSnap.dd_pct_portfolio, 2)}`
+                    ? `Drawdown: ${pct(cfSnap.dd_pct_portfolio)}`
                     : undefined
                 }
               />
-              <Stat
-                label="CoreFund Trades"
-                value={String(cfTrades.length)}
-                sub={cf?.trades_source ? `Source: ${cf.trades_source}` : undefined}
-              />
+
             </div>
 
-            <div className="mt-5 rounded-2xl bg-black/25 p-4 ring-1 ring-white/10">
-              <div className="mb-3 flex items-center justify-between">
-                <div className="text-sm font-semibold text-white/85">
-                  Recent Trades
-                </div>
-                <div className="text-xs text-white/45">
-                  Showing {Math.min(10, cfTrades.length)} / {cfTrades.length}
-                </div>
-              </div>
+            {errInst && (
+              <div className="mt-4 text-sm text-red-400">{errInst}</div>
+            )}
 
-              {cfTrades.length === 0 ? (
-                <div className="text-sm text-white/50">No trades returned yet.</div>
-              ) : (
-                <div className="overflow-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="text-xs text-white/50">
-                      <tr className="border-b border-white/10">
-                        <th className="py-2 pr-3">Time</th>
-                        <th className="py-2 pr-3">Symbol</th>
-                        <th className="py-2 pr-3">Side</th>
-                        <th className="py-2 pr-3">Quote</th>
-                        <th className="py-2 pr-3">Price</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-white/80">
-                      {cfTrades.slice(0, 10).map((t, i) => (
-                        <tr key={t?.id ?? i} className="border-b border-white/5">
-                          <td className="py-2 pr-3 text-white/60">
-                            {fmtDate(t?.created_at)}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {t?.symbol || t?.product_id || "—"}
-                          </td>
-                          <td className="py-2 pr-3">
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs ring-1 ${
-                                String(t?.side || "").toUpperCase() === "BUY"
-                                  ? "bg-emerald-500/10 text-emerald-200 ring-emerald-500/25"
-                                  : "bg-rose-500/10 text-rose-200 ring-rose-500/25"
-                              }`}
-                            >
-                              {String(t?.side || "—").toUpperCase()}
-                            </span>
-                          </td>
-                          <td className="py-2 pr-3">
-                            {t?.quote_size ? money(t.quote_size) : "—"}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {t?.price
-                              ? `$${Number(t.price).toLocaleString()}`
-                              : "—"}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {!instOk && inst ? (
-              <pre className="mt-5 overflow-auto rounded-2xl bg-black/40 p-4 text-xs text-white/70 ring-1 ring-white/10">
-                {JSON.stringify(inst, null, 2)}
-              </pre>
-            ) : null}
-
-            {errInst ? (
-              <div className="mt-5 rounded-2xl bg-rose-500/10 p-4 text-sm text-rose-200 ring-1 ring-rose-500/20">
-                {errInst}
-              </div>
-            ) : null}
           </section>
+
         </div>
 
         <div className="mt-8 text-xs text-white/35">
-          Admin page is locked to your Supabase user id. If anyone hits /admin,
-          they get bounced to /dashboard.
+          Admin page locked to your Supabase user ID.
         </div>
+
       </div>
     </main>
   );
 }
+```
