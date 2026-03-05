@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type Resp = {
@@ -18,96 +18,228 @@ type Resp = {
   error?: string;
 };
 
+function fmtMoney(v: any) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return n.toFixed(2);
+}
+function fmtNum(v: any, d = 2) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  return n.toFixed(d);
+}
+
 export default function AdminPlatform() {
   const [data, setData] = useState<Resp | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    try {
+      setLoading(true);
+      setErr(null);
+
+      const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+      if (sessionErr) throw sessionErr;
+
+      const token = sessionData?.session?.access_token;
+      if (!token) throw new Error("Not signed in. Please login again.");
+
+      const res = await fetch("/api/admin/institutional-snapshot?limit_trades=50", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+
+      const json = (await res.json()) as Resp;
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+
+      setData(json);
+    } catch (e: any) {
+      setErr(e?.message || "Failed to load");
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function load() {
-      try {
-        setErr(null);
-
-        // Must be signed in (admin) to access API via Bearer token
-        const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
-        if (sessionErr) throw sessionErr;
-
-        const token = sessionData?.session?.access_token;
-        if (!token) throw new Error("Not signed in. Please login again.");
-
-        const res = await fetch("/api/admin/institutional-snapshot?limit_trades=25", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          cache: "no-store",
-        });
-
-        const json = (await res.json()) as Resp;
-
-        if (!res.ok || !json?.ok) {
-          throw new Error(json?.error || `Request failed (${res.status})`);
-        }
-
-        setData(json);
-      } catch (e: any) {
-        setErr(e?.message || "Failed to load");
-        setData(null);
-      }
-    }
-
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (err) return <div style={{ padding: 40 }}>Error: {err}</div>;
-  if (!data) return <div style={{ padding: 40 }}>Loading platform metrics...</div>;
+  const inst = data?.institutional?.data;
+  const core = data?.corefund;
 
-  const inst = data.institutional?.data;
-  const core = data.corefund;
+  const rows = useMemo(() => {
+    const t = core?.trades || [];
+    return Array.isArray(t) ? t : [];
+  }, [core?.trades]);
+
+  if (loading) {
+    return <div className="p-10 text-white/80">Loading platform metrics…</div>;
+  }
+  if (err) {
+    return (
+      <div className="p-10 text-white">
+        <div className="text-xl font-semibold">Admin Platform</div>
+        <div className="mt-2 text-red-300">Error: {err}</div>
+      </div>
+    );
+  }
+  if (!data) return null;
 
   return (
-    <div style={{ padding: 40, fontFamily: "Arial" }}>
-      <h1>YieldCraft — Admin Platform</h1>
-      <div style={{ opacity: 0.7, marginTop: 6 }}>
-        As of: {data.as_of || "—"} • Snapshot: {data.institutional?.ok ? "OK" : "—"}
+    <div className="min-h-screen text-white">
+      <div className="mx-auto max-w-6xl px-6 py-10">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-3xl font-semibold">Admin Platform</div>
+            <div className="mt-2 text-white/70">
+              As of: {data.as_of || "—"}{" "}
+              <span className="mx-2">•</span>
+              Snapshot:{" "}
+              <span className={data.institutional?.ok ? "text-emerald-300" : "text-red-300"}>
+                {data.institutional?.ok ? "OK" : "ERROR"}
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={load}
+            className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/15"
+          >
+            Refresh
+          </button>
+        </div>
+
+        {/* KPI grid */}
+        <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+            <div className="text-sm text-white/60">Users (30d)</div>
+            <div className="mt-2 text-3xl font-semibold">{inst?.total_users_30d ?? "—"}</div>
+            <div className="mt-2 text-sm text-white/60">Active 24h: {inst?.active_users_24h ?? "—"}</div>
+          </div>
+
+          <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+            <div className="text-sm text-white/60">Trades (30d)</div>
+            <div className="mt-2 text-3xl font-semibold">{inst?.total_trades_30d ?? "—"}</div>
+            <div className="mt-2 text-sm text-white/60">
+              Maker entries: {fmtNum(inst?.maker_entry_pct, 2)}%
+            </div>
+          </div>
+
+          <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+            <div className="text-sm text-white/60">Volume (30d)</div>
+            <div className="mt-2 text-3xl font-semibold">${fmtMoney(inst?.total_volume_usd_30d)}</div>
+            <div className="mt-2 text-sm text-white/60">
+              Avg trade: ${fmtMoney(inst?.avg_trade_usd_30d)}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+            <div className="text-sm text-white/60">Win Rate</div>
+            <div className="mt-2 text-3xl font-semibold">{fmtNum(inst?.win_rate_pct, 2)}%</div>
+            <div className="mt-2 text-sm text-white/60">Avg exit: {fmtNum(inst?.avg_exit_bps, 2)} bps</div>
+          </div>
+
+          <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+            <div className="text-sm text-white/60">Avg Hold</div>
+            <div className="mt-2 text-3xl font-semibold">{fmtNum(inst?.avg_hold_minutes, 1)}m</div>
+            <div className="mt-2 text-sm text-white/60">Exits counted: {inst?.exits_30d ?? "—"}</div>
+          </div>
+
+          <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+            <div className="text-sm text-white/60">Portfolio DD</div>
+            <div className="mt-2 text-3xl font-semibold">{fmtNum(inst?.dd_pct_portfolio, 2)}%</div>
+            <div className="mt-2 text-sm text-white/60">
+              Equity: ${fmtMoney(inst?.total_equity_usd)} / Peak: ${fmtMoney(inst?.total_peak_equity_usd)}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+          <div className="text-sm text-white/60">Strategy</div>
+          <div className="mt-1 text-lg font-semibold">{inst?.strategy_version ?? "—"}</div>
+        </div>
+
+        {/* CoreFund */}
+        <div className="mt-10">
+          <div className="text-2xl font-semibold">CoreFund</div>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+              <div className="text-sm text-white/60">Core User</div>
+              <div className="mt-2 break-all text-sm font-semibold">{core?.core_user_id ?? "—"}</div>
+              <div className="mt-2 text-sm text-white/60">Source: {core?.snapshot_source ?? "—"}</div>
+            </div>
+
+            <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+              <div className="text-sm text-white/60">Peak Equity</div>
+              <div className="mt-2 text-3xl font-semibold">${fmtMoney(core?.snapshot?.peak_equity_usd)}</div>
+            </div>
+
+            <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+              <div className="text-sm text-white/60">Current Equity</div>
+              <div className="mt-2 text-3xl font-semibold">${fmtMoney(core?.snapshot?.last_equity_usd)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Trades table */}
+        <div className="mt-8 rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+          <div className="flex items-center justify-between">
+            <div className="text-xl font-semibold">Recent Trades</div>
+            <div className="text-sm text-white/60">Showing {rows.length}</div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-white/70">
+                <tr className="border-b border-white/10">
+                  <th className="py-2 text-left font-medium">Time</th>
+                  <th className="py-2 text-left font-medium">Symbol</th>
+                  <th className="py-2 text-left font-medium">Side</th>
+                  <th className="py-2 text-right font-medium">Base</th>
+                  <th className="py-2 text-right font-medium">Quote</th>
+                  <th className="py-2 text-right font-medium">Price</th>
+                </tr>
+              </thead>
+              <tbody className="text-white/90">
+                {rows.map((t: any) => (
+                  <tr key={t.id} className="border-b border-white/5">
+                    <td className="py-2">{t.created_at ? String(t.created_at) : "—"}</td>
+                    <td className="py-2">{t.symbol ?? "—"}</td>
+                    <td className="py-2">
+                      <span
+                        className={
+                          t.side === "BUY" ? "text-emerald-300" : t.side === "SELL" ? "text-red-300" : ""
+                        }
+                      >
+                        {t.side ?? "—"}
+                      </span>
+                    </td>
+                    <td className="py-2 text-right">{t.base_size ?? "—"}</td>
+                    <td className="py-2 text-right">{t.quote_size ?? "—"}</td>
+                    <td className="py-2 text-right">{t.price ? Number(t.price).toFixed(2) : "—"}</td>
+                  </tr>
+                ))}
+                {!rows.length && (
+                  <tr>
+                    <td className="py-3 text-white/60" colSpan={6}>
+                      No trades found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="mt-10 text-white/50 text-sm">
+          This page is admin-only (Supabase token enforced) and does not expose secrets to the browser.
+        </div>
       </div>
-
-      <hr style={{ margin: "24px 0", opacity: 0.2 }} />
-
-      <h2>Institutional Snapshot (30d)</h2>
-      <div>Total Users (30d): {inst?.total_users_30d ?? "—"}</div>
-      <div>Active Users (24h): {inst?.active_users_24h ?? "—"}</div>
-      <div>Total Trades (30d): {inst?.total_trades_30d ?? "—"}</div>
-      <div>Volume (30d): ${Number(inst?.total_volume_usd_30d ?? 0).toFixed(2)}</div>
-      <div>Avg Trade (30d): ${Number(inst?.avg_trade_usd_30d ?? 0).toFixed(2)}</div>
-      <div>Maker % (entries): {Number(inst?.maker_entry_pct ?? 0).toFixed(2)}%</div>
-
-      <div style={{ marginTop: 10 }}>
-        <b>Win Rate:</b> {Number(inst?.win_rate_pct ?? 0).toFixed(2)}% •{" "}
-        <b>Avg Exit:</b> {Number(inst?.avg_exit_bps ?? 0).toFixed(2)} bps •{" "}
-        <b>Avg Hold:</b> {Number(inst?.avg_hold_minutes ?? 0).toFixed(1)} min
-      </div>
-
-      <div style={{ marginTop: 10 }}>
-        <b>Total Equity:</b> ${Number(inst?.total_equity_usd ?? 0).toFixed(2)} •{" "}
-        <b>Peak Equity:</b> ${Number(inst?.total_peak_equity_usd ?? 0).toFixed(2)} •{" "}
-        <b>DD%:</b> {Number(inst?.dd_pct_portfolio ?? 0).toFixed(2)}%
-      </div>
-
-      <div style={{ marginTop: 10, opacity: 0.8 }}>
-        Strategy: {inst?.strategy_version ?? "—"}
-      </div>
-
-      <hr style={{ margin: "24px 0", opacity: 0.2 }} />
-
-      <h2>CoreFund</h2>
-      <div>Core User: {core?.core_user_id ?? "—"}</div>
-      <div>Snapshot Source: {core?.snapshot_source ?? "—"}</div>
-      <div>Peak Equity: ${Number(core?.snapshot?.peak_equity_usd ?? 0).toFixed(2)}</div>
-      <div>Current Equity: ${Number(core?.snapshot?.last_equity_usd ?? 0).toFixed(2)}</div>
-
-      <h3 style={{ marginTop: 20 }}>Recent Trades</h3>
-      <pre style={{ background: "#111", color: "#0f0", padding: 16, borderRadius: 8 }}>
-        {JSON.stringify(core?.trades ?? [], null, 2)}
-      </pre>
     </div>
   );
 }
