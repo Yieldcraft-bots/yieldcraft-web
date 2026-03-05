@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -41,7 +42,9 @@ function TonePill({
   }, [tone]);
 
   return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}>
+    <span
+      className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}
+    >
       {label}
     </span>
   );
@@ -70,19 +73,28 @@ export default function Admin() {
 
   const [pulse, setPulse] = useState<any>(null);
   const [inst, setInst] = useState<any>(null);
-  const [ts, setTs] = useState(Date.now());
+  const [ts, setTs] = useState<number>(Date.now());
 
+  // client-side admin bounce
   useEffect(() => {
+    let mounted = true;
+
     async function checkAdmin() {
       const { data } = await supabase.auth.getUser();
       const user = data?.user;
 
+      if (!mounted) return;
+
       if (!user || user.id !== ADMIN_USER_ID) {
         router.replace("/dashboard");
+        router.refresh();
       }
     }
 
     checkAdmin();
+    return () => {
+      mounted = false;
+    };
   }, [router]);
 
   async function refreshAll() {
@@ -90,7 +102,9 @@ export default function Admin() {
       const p = await fetch("/api/pulse-stats", { cache: "no-store" });
       const pJson = await p.json();
       setPulse(pJson);
-    } catch {}
+    } catch {
+      // ignore
+    }
 
     try {
       const session = await supabase.auth.getSession();
@@ -105,40 +119,44 @@ export default function Admin() {
         const j = await r.json();
         setInst(j);
       }
-    } catch {}
+    } catch {
+      // ignore
+    }
 
     setTs(Date.now());
   }
 
   useEffect(() => {
     refreshAll();
-    const id = setInterval(refreshAll, 30000);
+    const id = setInterval(refreshAll, 30_000);
     return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pStats = pulse?.stats;
 
-  const netTone =
+  const netTone: "green" | "yellow" | "red" | "gray" =
     pStats?.netPnL > 0 ? "green" : pStats?.netPnL < 0 ? "red" : "gray";
 
   const instData = inst?.institutional?.data;
   const cfSnap = inst?.corefund?.snapshot;
 
+  const lastRefresh = new Date(ts).toLocaleTimeString();
+
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-6xl px-6 py-10">
-
-        <div className="flex items-end justify-between">
-
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="text-xs text-white/50">ADMIN</div>
             <h1 className="text-3xl font-semibold">Mission Control</h1>
+            <div className="mt-1 text-xs text-white/45">
+              Last refresh: <span className="text-white/70">{lastRefresh}</span>
+            </div>
           </div>
 
-          <div className="flex gap-2">
-
+          <div className="flex flex-wrap items-center gap-2">
             <TonePill label="LIVE EXECUTION" tone="green" />
-
             <TonePill
               label={`NET PNL ${pStats ? money(pStats.netPnL) : "—"}`}
               tone={netTone}
@@ -146,39 +164,39 @@ export default function Admin() {
 
             <button
               onClick={refreshAll}
-              className="rounded-xl bg-white/10 px-4 py-2 text-sm"
+              className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15 transition"
             >
               Refresh
             </button>
 
-            <button
-              onClick={() => router.push("/admin/investor")}
-              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm"
+            <Link
+              href="/admin/investor"
+              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-indigo-500/30 transition"
             >
               Investor
-            </button>
+            </Link>
 
+            <Link
+              href="/admin/platform"
+              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-indigo-500/30 transition"
+            >
+              Platform
+            </Link>
           </div>
         </div>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
-
-          <section className="rounded-3xl bg-white/5 p-6">
-
+          <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
             <h2 className="text-lg font-semibold">Pulse</h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
-
-              <Stat
-                label="Trades"
-                value={pStats ? String(pStats.trades) : "—"}
-              />
+              <Stat label="Trades" value={pStats ? String(pStats.trades) : "—"} />
 
               <Stat
                 label="Win Rate"
                 value={
-                  pStats?.winRate
-                    ? `${Math.round(pStats.winRate * 100)}%`
+                  pStats && pStats.winRate != null
+                    ? `${Math.round(Number(pStats.winRate) * 100)}%`
                     : "—"
                 }
               />
@@ -187,17 +205,13 @@ export default function Admin() {
                 label="Net PNL"
                 value={pStats ? money(pStats.netPnL) : "—"}
               />
-
             </div>
-
           </section>
 
-          <section className="rounded-3xl bg-white/5 p-6">
-
+          <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
             <h2 className="text-lg font-semibold">Platform</h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
-
               <Stat
                 label="Users"
                 value={instData ? String(instData.total_users_30d) : "—"}
@@ -210,13 +224,13 @@ export default function Admin() {
 
               <Stat
                 label="Volume"
-                value={instData ? money(instData.total_volume_usd_30d) : "—"}
+                value={
+                  instData ? money(instData.total_volume_usd_30d) : "—"
+                }
               />
-
             </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
-
               <Stat
                 label="CoreFund Peak"
                 value={cfSnap ? money(cfSnap.peak_equity_usd) : "—"}
@@ -226,18 +240,14 @@ export default function Admin() {
                 label="CoreFund Equity"
                 value={cfSnap ? money(cfSnap.last_equity_usd) : "—"}
                 sub={
-                  cfSnap?.dd_pct_portfolio
+                  cfSnap?.dd_pct_portfolio != null
                     ? `DD ${pct(cfSnap.dd_pct_portfolio)}`
                     : undefined
                 }
               />
-
             </div>
-
           </section>
-
         </div>
-
       </div>
     </main>
   );
