@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { Resend } from "resend";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,6 @@ function requireEnv(name: string) {
 }
 
 function getBaseUrl() {
-  // prefer server-only, but allow your existing public var too
   return (
     process.env.APP_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
@@ -19,19 +19,90 @@ function getBaseUrl() {
 }
 
 function genCode() {
-  // short, human-safe-ish code
   return Math.random().toString(16).slice(2, 10);
 }
 
 async function getStripe() {
-  // IMPORTANT: lazy-load + lazy-require env so builds don't fail during "collect page data"
   const Stripe = (await import("stripe")).default;
-
-  // DO NOT pin apiVersion here — your installed Stripe types expect a different literal
-  // and Next build will fail on TypeScript.
   const stripe = new Stripe(requireEnv("STRIPE_SECRET_KEY"));
-
   return stripe;
+}
+
+function safeEmail(v: any) {
+  const s = String(v || "").trim().toLowerCase();
+  if (!s || !s.includes("@")) return "";
+  return s;
+}
+
+async function sendAffiliateEmails(args: {
+  to: string;
+  name: string;
+  affiliateLink: string;
+  onboardingUrl?: string | null;
+}) {
+  // Use Resend directly (fast + no internal fetch)
+  const resend = new Resend(requireEnv("RESEND_API_KEY"));
+  const from = "YieldCraft <dk@yieldcraft.co>";
+
+  const { to, name, affiliateLink, onboardingUrl } = args;
+
+  const subjectUser = "Your YieldCraft affiliate link is ready ✅";
+  const htmlUser = `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; line-height:1.55; color:#0f172a;">
+      <h2 style="margin:0 0 10px;">Affiliate application received ✅</h2>
+      <p style="margin:0 0 12px;">${name ? `Hey ${name}, ` : ""}your referral link is ready:</p>
+      <div style="padding:12px 14px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc; margin:0 0 14px;">
+        <div style="font-weight:700; margin-bottom:6px;">Your referral link</div>
+        <div style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12px; word-break:break-all;">
+          ${affiliateLink}
+        </div>
+      </div>
+      ${
+        onboardingUrl
+          ? `<a href="${onboardingUrl}" style="display:inline-block; padding:10px 14px; background:#111827; color:white; text-decoration:none; border-radius:10px; font-weight:700;">
+              Finish Stripe payout setup
+            </a>`
+          : `<div style="padding:12px 14px; border-left:4px solid #f59e0b; background:#fff7ed; border-radius:10px;">
+              <strong>Payout setup pending:</strong> We couldn’t generate your Stripe onboarding link yet. Your referral link is still valid.
+            </div>`
+      }
+      <p style="margin:14px 0 0; font-size:12px; color:#64748b;">
+        Keep it compliant: no spam, no guarantees, no misleading performance claims.
+      </p>
+    </div>
+  `;
+
+  const subjectAdmin = "New affiliate application (YieldCraft)";
+  const htmlAdmin = `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif; line-height:1.55; color:#0f172a;">
+      <h3 style="margin:0 0 10px;">New affiliate application</h3>
+      <p style="margin:0 0 6px;"><strong>Name:</strong> ${name || "(none)"}</p>
+      <p style="margin:0 0 6px;"><strong>Email:</strong> ${to}</p>
+      <p style="margin:0 0 6px;"><strong>Referral:</strong> ${affiliateLink}</p>
+      <p style="margin:0 0 6px;"><strong>Onboarding:</strong> ${onboardingUrl || "(none)"}</p>
+    </div>
+  `;
+
+  const adminTo = (process.env.AFFILIATE_ADMIN_EMAILS || "dk@yieldcraft.co")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const userSend = await resend.emails.send({
+    from,
+    to: [to],
+    subject: subjectUser,
+    html: htmlUser,
+  });
+
+  const adminSend = await resend.emails.send({
+    from,
+    to: adminTo,
+    subject: subjectAdmin,
+    html: htmlAdmin,
+  });
+
+  return { userSend, adminSend };
 }
 
 export async function POST(req: Request) {
@@ -40,7 +111,7 @@ export async function POST(req: Request) {
 
     const body = await req.json().catch(() => ({}));
     const fullName = String(body?.fullName || "").trim();
-    const email = String(body?.email || "").trim().toLowerCase();
+    const email = safeEmail(body?.email);
 
     const audience = String(body?.audience || body?.channel || "").trim();
     const website = String(body?.website || "").trim();
@@ -55,7 +126,6 @@ export async function POST(req: Request) {
 
     const baseUrl = getBaseUrl();
 
-    // Supabase (service role - server only)
     const supabaseUrl =
       process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
     if (!supabaseUrl) throw new Error("Missing env: SUPABASE_URL");
@@ -65,7 +135,6 @@ export async function POST(req: Request) {
       auth: { persistSession: false },
     });
 
-    // 1) Find existing affiliate by email (if they applied before)
     const { data: existing, error: existingErr } = await sb
       .from("affiliates")
       .select(
@@ -76,8 +145,8 @@ export async function POST(req: Request) {
 
     if (existingErr) throw existingErr;
 
-    // 2) Ensure Stripe Connect Express account exists
-    let stripeAccountId = existing?.stripe_account_id as string | null;
+    // Stripe Connect Express account
+    let stripeAccountId = (existing?.stripe_account_id as string | null) || null;
 
     if (!stripeAccountId) {
       const acct = await stripe.accounts.create({
@@ -94,10 +163,8 @@ export async function POST(req: Request) {
       stripeAccountId = acct.id;
     }
 
-    // 3) Ensure affiliate_code exists
     const affiliateCode = existing?.affiliate_code || genCode();
 
-    // 4) Upsert affiliate row
     const payload: any = {
       email,
       name: fullName,
@@ -110,7 +177,6 @@ export async function POST(req: Request) {
       notes,
     };
 
-    // Try update if exists, else insert
     if (existing?.id) {
       const { error: upErr } = await sb
         .from("affiliates")
@@ -118,7 +184,6 @@ export async function POST(req: Request) {
         .eq("id", existing.id);
 
       if (upErr) {
-        // fallback: update only core columns if extra cols don't exist
         const { error: upErr2 } = await sb
           .from("affiliates")
           .update({
@@ -147,7 +212,6 @@ export async function POST(req: Request) {
       ]);
 
       if (insErr) {
-        // fallback: insert only core columns if extra cols don't exist
         const { error: insErr2 } = await sb.from("affiliates").insert([
           {
             email,
@@ -161,7 +225,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 5) Create Stripe onboarding link (this is what your UI should redirect to)
+    // Stripe onboarding link
     const accountLink = await stripe.accountLinks.create({
       account: stripeAccountId,
       refresh_url: `${baseUrl}/affiliate?refresh=1`,
@@ -173,14 +237,29 @@ export async function POST(req: Request) {
 
     const affiliateLink = `${baseUrl}/?ref=${affiliateCode}`;
 
+    // ✅ Send emails (do NOT block affiliate flow if email fails)
+    let emailStatus: any = { ok: false };
+    try {
+      const sent = await sendAffiliateEmails({
+        to: email,
+        name: fullName,
+        affiliateLink,
+        onboardingUrl: accountLink.url,
+      });
+      emailStatus = { ok: true, sent };
+    } catch (e: any) {
+      emailStatus = { ok: false, error: e?.message || String(e) };
+    }
+
     return NextResponse.json({
       ok: true,
       status: existing?.status || "pending",
       commission_rate: existing?.commission_rate ?? 30,
       affiliateCode,
       affiliateLink,
-      onboardingUrl: accountLink.url, // ✅ KEY FIX
+      onboardingUrl: accountLink.url,
       stripeAccountId,
+      emailStatus,
     });
   } catch (err: any) {
     console.error("Affiliate onboarding error:", err?.message || err);
@@ -196,6 +275,5 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  // harmless at build / for health checks
   return NextResponse.json({ ok: true });
 }
