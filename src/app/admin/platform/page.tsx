@@ -28,6 +28,18 @@ function fmtNum(v: any, d = 2) {
   if (!Number.isFinite(n)) return "—";
   return n.toFixed(d);
 }
+function fmtTime(v: any) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (!Number.isFinite(d.getTime())) return String(v);
+  return d.toLocaleString();
+}
+function fmtMaybeFixed(v: any, d = 8) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "—";
+  // base sizes are tiny; keep precision, but avoid crazy long
+  return n.toFixed(d).replace(/\.?0+$/, "");
+}
 
 export default function AdminPlatform() {
   const [data, setData] = useState<Resp | null>(null);
@@ -45,7 +57,8 @@ export default function AdminPlatform() {
       const token = sessionData?.session?.access_token;
       if (!token) throw new Error("Not signed in. Please login again.");
 
-      const res = await fetch("/api/admin/institutional-snapshot?limit_trades=50", {
+      // ✅ request only 5 trades from server
+      const res = await fetch("/api/admin/institutional-snapshot?limit_trades=5", {
         headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
       });
@@ -70,9 +83,11 @@ export default function AdminPlatform() {
   const inst = data?.institutional?.data;
   const core = data?.corefund;
 
+  // ✅ guaranteed last 5 (even if server sends more by mistake)
   const rows = useMemo(() => {
     const t = core?.trades || [];
-    return Array.isArray(t) ? t : [];
+    const arr = Array.isArray(t) ? t : [];
+    return arr.slice(0, 5);
   }, [core?.trades]);
 
   if (loading) {
@@ -83,6 +98,12 @@ export default function AdminPlatform() {
       <div className="p-10 text-white">
         <div className="text-xl font-semibold">Admin Platform</div>
         <div className="mt-2 text-red-300">Error: {err}</div>
+        <button
+          onClick={load}
+          className="mt-4 rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold hover:bg-white/15"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -95,8 +116,7 @@ export default function AdminPlatform() {
           <div>
             <div className="text-3xl font-semibold">Admin Platform</div>
             <div className="mt-2 text-white/70">
-              As of: {data.as_of || "—"}{" "}
-              <span className="mx-2">•</span>
+              As of: {data.as_of ? fmtTime(data.as_of) : "—"} <span className="mx-2">•</span>
               Snapshot:{" "}
               <span className={data.institutional?.ok ? "text-emerald-300" : "text-red-300"}>
                 {data.institutional?.ok ? "OK" : "ERROR"}
@@ -131,9 +151,7 @@ export default function AdminPlatform() {
           <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
             <div className="text-sm text-white/60">Volume (30d)</div>
             <div className="mt-2 text-3xl font-semibold">${fmtMoney(inst?.total_volume_usd_30d)}</div>
-            <div className="mt-2 text-sm text-white/60">
-              Avg trade: ${fmtMoney(inst?.avg_trade_usd_30d)}
-            </div>
+            <div className="mt-2 text-sm text-white/60">Avg trade: ${fmtMoney(inst?.avg_trade_usd_30d)}</div>
           </div>
         </div>
 
@@ -186,11 +204,11 @@ export default function AdminPlatform() {
           </div>
         </div>
 
-        {/* Trades table */}
+        {/* Trades table (LAST 5) */}
         <div className="mt-8 rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
           <div className="flex items-center justify-between">
             <div className="text-xl font-semibold">Recent Trades</div>
-            <div className="text-sm text-white/60">Showing {rows.length}</div>
+            <div className="text-sm text-white/60">Showing {rows.length} / 5</div>
           </div>
 
           <div className="mt-4 overflow-x-auto">
@@ -207,23 +225,24 @@ export default function AdminPlatform() {
               </thead>
               <tbody className="text-white/90">
                 {rows.map((t: any) => (
-                  <tr key={t.id} className="border-b border-white/5">
-                    <td className="py-2">{t.created_at ? String(t.created_at) : "—"}</td>
+                  <tr key={`${t.id ?? ""}-${t.order_id ?? ""}-${t.created_at ?? ""}`} className="border-b border-white/5">
+                    <td className="py-2">{fmtTime(t.created_at)}</td>
                     <td className="py-2">{t.symbol ?? "—"}</td>
                     <td className="py-2">
                       <span
                         className={
-                          t.side === "BUY" ? "text-emerald-300" : t.side === "SELL" ? "text-red-300" : ""
+                          t.side === "BUY" ? "text-emerald-300" : t.side === "SELL" ? "text-red-300" : "text-white/80"
                         }
                       >
                         {t.side ?? "—"}
                       </span>
                     </td>
-                    <td className="py-2 text-right">{t.base_size ?? "—"}</td>
-                    <td className="py-2 text-right">{t.quote_size ?? "—"}</td>
-                    <td className="py-2 text-right">{t.price ? Number(t.price).toFixed(2) : "—"}</td>
+                    <td className="py-2 text-right">{fmtMaybeFixed(t.base_size, 8)}</td>
+                    <td className="py-2 text-right">{fmtMaybeFixed(t.quote_size, 8)}</td>
+                    <td className="py-2 text-right">{Number.isFinite(Number(t.price)) ? Number(t.price).toFixed(2) : "—"}</td>
                   </tr>
                 ))}
+
                 {!rows.length && (
                   <tr>
                     <td className="py-3 text-white/60" colSpan={6}>
@@ -237,7 +256,7 @@ export default function AdminPlatform() {
         </div>
 
         <div className="mt-10 text-white/50 text-sm">
-          This page is admin-only (Supabase token enforced) and does not expose secrets to the browser.
+          Admin-only (Supabase token enforced). No secrets are exposed to the browser.
         </div>
       </div>
     </div>
