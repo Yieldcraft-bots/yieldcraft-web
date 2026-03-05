@@ -98,7 +98,9 @@ function TonePill({
   }, [tone]);
 
   return (
-    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}>
+    <span
+      className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}
+    >
       {label}
     </span>
   );
@@ -149,6 +151,7 @@ export default function Admin() {
     }
 
     checkAdmin();
+
     return () => {
       mounted = false;
     };
@@ -161,7 +164,9 @@ export default function Admin() {
       const j = (await r.json()) as PulseStatsResp;
       setPulse(j);
 
-      if ((j as any)?.error) setErrPulse((j as any).error);
+      if ((j as any)?.error) {
+        setErrPulse((j as any).error);
+      }
     } catch (e: any) {
       setErrPulse(e?.message || String(e));
     }
@@ -181,13 +186,17 @@ export default function Admin() {
 
       const r = await fetch("/api/admin/institutional-snapshot", {
         cache: "no-store",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
 
       const j = (await r.json()) as InstSnapshotResp;
       setInst(j);
 
-      if ((j as any)?.error) setErrInst((j as any).error);
+      if ((j as any)?.error) {
+        setErrInst((j as any).error);
+      }
     } catch (e: any) {
       setErrInst(e?.message || String(e));
     }
@@ -236,7 +245,6 @@ export default function Admin() {
           <div className="flex flex-wrap items-center gap-2">
 
             <TonePill label="LIVE EXECUTION: ON" tone="green" />
-            <TonePill label="AUTO MODE: ON" tone="green" />
 
             <TonePill
               label={`NET P&L TODAY: ${pStats ? money(pStats.netPnL) : "—"}`}
@@ -245,14 +253,14 @@ export default function Admin() {
 
             <button
               onClick={refreshAll}
-              className="ml-1 rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15"
+              className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15"
             >
               Refresh
             </button>
 
             <button
               onClick={() => router.push("/admin/investor")}
-              className="ml-1 rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-indigo-500/30 hover:bg-indigo-500/30"
+              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-indigo-500/30 hover:bg-indigo-500/30"
             >
               Investor / Equity
             </button>
