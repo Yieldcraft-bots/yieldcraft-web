@@ -38,7 +38,7 @@ function okAdminSecret(req: Request) {
   const h =
     req.headers.get("x-admin-secret") ||
     req.headers.get("x-cron-secret") ||
-    req.headers.get("authorization");
+    req.headers.get("x-yc-secret");
 
   if (h && (h === secret || h === `Bearer ${secret}`)) return true;
 
@@ -50,12 +50,10 @@ function okAdminSecret(req: Request) {
 async function okSupabaseAdmin(req: Request) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-
   if (!token) return false;
 
   const supabase = sbService();
 
-  // Verify token with Supabase and enforce admin user id
   const { data, error } = await supabase.auth.getUser(token);
   if (error || !data?.user) return false;
 
@@ -70,9 +68,7 @@ function num(v: any, fallback: number) {
 export async function GET(req: Request) {
   try {
     // ✅ allow either server secret OR verified Supabase admin token
-    const ok =
-      okAdminSecret(req) || (await okSupabaseAdmin(req));
-
+    const ok = okAdminSecret(req) || (await okSupabaseAdmin(req));
     if (!ok) return json(401, { ok: false, error: "unauthorized" });
 
     const url = new URL(req.url);
@@ -88,10 +84,11 @@ export async function GET(req: Request) {
 
     const client = sbService();
 
-    // 1) Institutional Snapshot
+    // 1) Institutional Snapshot (latest)
     const inst = await client
       .from("institutional_snapshot_v1")
       .select("*")
+      .order("as_of", { ascending: false }) // use created_at if you don't have as_of
       .limit(1)
       .maybeSingle();
 
@@ -196,4 +193,8 @@ export async function GET(req: Request) {
       error: e?.message || String(e),
     });
   }
+}
+
+export async function POST(req: Request) {
+  return GET(req);
 }
