@@ -83,8 +83,12 @@ export default function AffiliatePage() {
       // A) { ok:true, affiliateCode, affiliateLink, onboardingUrl? }
       // B) { ok:true, status:'pending', commission_rate, affiliateCode, affiliateLink, onboardingUrl? }
       const ok = Boolean(data?.ok);
-      const affiliateCode = String(data?.affiliateCode || data?.affiliate_code || "");
-      const affiliateLink = String(data?.affiliateLink || data?.affiliate_link || "");
+      const affiliateCode = String(
+        data?.affiliateCode || data?.affiliate_code || ""
+      );
+      const affiliateLink = String(
+        data?.affiliateLink || data?.affiliate_link || ""
+      );
       const onboardingUrl = (data?.onboardingUrl || data?.onboarding_url || null) as
         | string
         | null;
@@ -104,9 +108,7 @@ export default function AffiliatePage() {
         affiliateCode,
         affiliateLink,
         onboardingUrl,
-        message:
-          data?.message ||
-          "Application received. Your referral link is ready.",
+        message: data?.message || "Application received. Your referral link is ready.",
       });
     } catch (err: any) {
       setApplyState({
@@ -129,7 +131,6 @@ export default function AffiliatePage() {
             Affiliate <span className="text-[#ffcf33]">Program</span>
           </h1>
 
-          {/* ✅ copy fixed here */}
           <p className="mt-4 text-lg text-white/80">
             Earn <span className="font-bold text-[#ffcf33]">30% recurring</span>{" "}
             when you refer new members to YieldCraft.
@@ -153,7 +154,7 @@ export default function AffiliatePage() {
             </div>
 
             <div className="mt-6 rounded-2xl border border-white/10 bg-black/20 p-5 text-sm text-white/75">
-              <div className="font-semibold text-white mb-2">
+              <div className="mb-2 font-semibold text-white">
                 Strict rules (keeps you + YieldCraft protected):
               </div>
               <ul className="space-y-1">
@@ -262,7 +263,7 @@ export default function AffiliatePage() {
                   </div>
 
                   <div className="mt-3">
-                    <div className="text-white/70 text-xs">Your referral link</div>
+                    <div className="text-xs text-white/70">Your referral link</div>
                     <div className="mt-1 flex items-center gap-2">
                       <code className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/90">
                         {applyState.affiliateLink}
@@ -282,11 +283,8 @@ export default function AffiliatePage() {
                       type="button"
                       onClick={() => {
                         if (applyState.onboardingUrl) {
-                          window.open(
-                            applyState.onboardingUrl,
-                            "_blank",
-                            "noopener,noreferrer"
-                          );
+                          // ✅ Same-tab redirect avoids popup blockers
+                          window.location.href = applyState.onboardingUrl;
                         }
                       }}
                       disabled={!applyState.onboardingUrl}
@@ -295,9 +293,9 @@ export default function AffiliatePage() {
                       Finish Stripe Payout Setup
                     </button>
                     <p className="mt-2 text-xs text-white/60">
-                      If the Stripe onboarding button is disabled, it means the server
-                      didn’t return an onboarding URL yet (usually missing Stripe Connect
-                      config). Your referral link is still valid.
+                      If this button is disabled, it means the server didn’t return an
+                      onboarding URL yet (usually missing Stripe Connect config). Your
+                      referral link is still valid.
                     </p>
                   </div>
                 </div>
