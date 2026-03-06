@@ -496,19 +496,29 @@ async function fetchReconDecision(): Promise<ReconDecision> {
     const confRaw = j.confidence ?? j.conf ?? j.score;
     const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
 
-    const confident = confidence !== null && confidence >= minConf;
     const isChop = regimeRaw ? looksChoppy(regimeRaw) : false;
 
-    const blocksOnSell = confident && side === "SELL";
-    const blocksOnChop = confident && chopBlock && isChop;
+    // STRICTER ENTRY GATE:
+    // To allow a new entry, Recon must be confident enough AND explicitly BUY.
+    const belowMinConf = confidence === null || confidence < minConf;
+    const notBuy = side !== "BUY";
+    const blocksOnChop = chopBlock && isChop;
 
-    const entryAllowed = !(blocksOnSell || blocksOnChop);
+    const entryAllowed = !(belowMinConf || notBuy || blocksOnChop);
 
-    const why = entryAllowed
-      ? "recon_allows_entries"
-      : blocksOnSell
-      ? `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2)}`
-      : `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2)}`;
+    let why = "recon_allows_entries";
+
+    if (!entryAllowed) {
+      if (blocksOnChop) {
+        why = `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2) ?? "na"}`;
+      } else if (belowMinConf) {
+        why = `recon_blocks_entries_low_conf_${confidence?.toFixed(2) ?? "na"}_min_${minConf.toFixed(2)}`;
+      } else if (side === "SELL") {
+        why = `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2) ?? "na"}`;
+      } else {
+        why = `recon_blocks_entries_side_${side ?? "null"}_conf_${confidence?.toFixed(2) ?? "na"}`;
+      }
+    }
 
     return {
       enabled,
@@ -900,7 +910,12 @@ async function fetchFillsForOrder(
 
     const time = String(f?.trade_time || f?.created_time || f?.time || "");
 
-    if (Number.isFinite(price) && price > 0 && Number.isFinite(size) && size > 0) {
+    if (
+      Number.isFinite(price) &&
+      price > 0 &&
+      Number.isFinite(size) &&
+      size > 0
+    ) {
       fills.push({ side, price, size, quote, time: time || undefined, raw: f });
     }
   }
@@ -1309,8 +1324,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   // Entry USD: bounded by caps, then scaled by gov.multiplier, then bounded again
   const baseEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
-  const scaledEntryUsd = Math.max(0.01, baseEntryUsd * (Number(gov.multiplier) || 1.0));
-  const finalEntryUsd = Math.max(0.01, Math.min(scaledEntryUsd, entMaxUsd, hardMaxUsd));
+  const scaledEntryUsd = Math.max(
+    0.01,
+    baseEntryUsd * (Number(gov.multiplier) || 1.0)
+  );
+  const finalEntryUsd = Math.max(
+    0.01,
+    Math.min(scaledEntryUsd, entMaxUsd, hardMaxUsd)
+  );
   const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
@@ -1321,7 +1342,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     alg: algFor(ctx),
     gates,
     entryQuoteUsd,
-    caps: { hardMaxUsd, entMaxUsd, envEntryUsd, baseEntryUsd, scaledEntryUsd, finalEntryUsd },
+    caps: {
+      hardMaxUsd,
+      entMaxUsd,
+      envEntryUsd,
+      baseEntryUsd,
+      scaledEntryUsd,
+      finalEntryUsd,
+    },
     equityGov: gov,
     maker: {
       makerEntries,
@@ -1330,19 +1358,47 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       makerTimeoutMs: mTimeout,
       makerAllowIocFallback: mAllowIoc,
     },
-    trail: { trailMinHoldMin, trailVolFloorBps, trailOffsetBpsBase, trailArmBps, profitTargetBps },
+    trail: {
+      trailMinHoldMin,
+      trailVolFloorBps,
+      trailOffsetBpsBase,
+      trailArmBps,
+      profitTargetBps,
+    },
     hardStop: { hardStopEnabled, hardStopLossBps },
     reconStatus,
   });
 
   if (!gates.PULSE_ENTITLED)
-    return { ok: true, mode: "NOOP_NOT_ENTITLED", gates, position, reconStatus, equityGov: gov };
+    return {
+      ok: true,
+      mode: "NOOP_NOT_ENTITLED",
+      gates,
+      position,
+      reconStatus,
+      equityGov: gov,
+    };
 
   if (!gates.LIVE_ALLOWED)
-    return { ok: true, mode: "NOOP_GATES", gates, position, reconStatus, equityGov: gov };
+    return {
+      ok: true,
+      mode: "NOOP_GATES",
+      gates,
+      position,
+      reconStatus,
+      equityGov: gov,
+    };
 
   if (!(position as any)?.ok) {
-    return { ok: false, mode: "BLOCKED", gates, error: "cannot_read_position", position, reconStatus, equityGov: gov };
+    return {
+      ok: false,
+      mode: "BLOCKED",
+      gates,
+      error: "cannot_read_position",
+      position,
+      reconStatus,
+      equityGov: gov,
+    };
   }
 
   // cooldown + re-entry guard (post-exit anti-churn)
@@ -1356,7 +1412,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   // block re-entry after a SELL for N minutes
   const reentryCooldownMs = num(process.env.REENTRY_COOLDOWN_MS, 10 * 60_000);
-  const reentryBlocked = lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
+  const reentryBlocked =
+    lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
 
   const cooldown = {
     lastFillIso,
@@ -1371,21 +1428,58 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   // ---------------- ENTRY ----------------
   if (!(position as any).has_position) {
     if (!entriesEnabled)
-      return { ok: true, mode: "NO_POSITION_ENTRIES_DISABLED", gates, position, cooldown, reconStatus, equityGov: gov };
+      return {
+        ok: true,
+        mode: "NO_POSITION_ENTRIES_DISABLED",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+      };
 
     if (!cooldownOk)
-      return { ok: true, mode: "NO_POSITION_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
+      return {
+        ok: true,
+        mode: "NO_POSITION_COOLDOWN",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+      };
 
     if (reentryBlocked)
-      return { ok: true, mode: "NO_POSITION_REENTRY_COOLDOWN", gates, position, cooldown, reconStatus, equityGov: gov };
+      return {
+        ok: true,
+        mode: "NO_POSITION_REENTRY_COOLDOWN",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+      };
 
     // Equity defense mode: only allow entry if Recon confidence >= DEFENSE_CONF AND recon allows entry
     if (gov.defense) {
       const conf = Number(reconStatus.confidence ?? 0);
-      const okDefense = Number.isFinite(conf) && conf >= defenseConf && reconStatus.entryAllowed;
+      const okDefense =
+        Number.isFinite(conf) && conf >= defenseConf && reconStatus.entryAllowed;
       if (!okDefense) {
-        log(runId, "DEFENSE_BLOCK_ENTRY", { ddPct: gov.ddPct, reqConf: defenseConf, reconStatus });
-        return { ok: true, mode: "NO_POSITION_DEFENSE_BLOCK", gates, position, cooldown, reconStatus, equityGov: gov };
+        log(runId, "DEFENSE_BLOCK_ENTRY", {
+          ddPct: gov.ddPct,
+          reqConf: defenseConf,
+          reconStatus,
+        });
+        return {
+          ok: true,
+          mode: "NO_POSITION_DEFENSE_BLOCK",
+          gates,
+          position,
+          cooldown,
+          reconStatus,
+          equityGov: gov,
+        };
       }
     }
 
@@ -1397,11 +1491,28 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         conf: reconStatus.confidence,
         side: reconStatus.side,
       });
-      return { ok: true, mode: "NO_POSITION_RECON_BLOCK", gates, position, cooldown, reconStatus, equityGov: gov };
+      return {
+        ok: true,
+        mode: "NO_POSITION_RECON_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+      };
     }
 
     if (entriesDryRun) {
-      return { ok: true, mode: "DRY_RUN_BUY", gates, position, cooldown, reconStatus, equityGov: gov, would_buy_quote_usd: entryQuoteUsd };
+      return {
+        ok: true,
+        mode: "DRY_RUN_BUY",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        would_buy_quote_usd: entryQuoteUsd,
+      };
     }
 
     // If maker entries disabled or no ref price: BUY IOC
@@ -1457,7 +1568,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         }),
       });
 
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC", gates, position, cooldown, reconStatus, equityGov: gov, buy };
+      return {
+        ok: buy.ok,
+        mode: "ENTRY_BUY_IOC",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        buy,
+      };
     }
 
     // Maker-first buy
@@ -1469,7 +1589,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     // If maker submit fails: fallback IOC if allowed
     if (!makerOk || !makerOrderId) {
       if (!mAllowIoc) {
-        return { ok: false, mode: "ENTRY_BUY_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, error: "maker_order_failed" };
+        return {
+          ok: false,
+          mode: "ENTRY_BUY_MAKER_FAILED",
+          gates,
+          position,
+          cooldown,
+          reconStatus,
+          equityGov: gov,
+          error: "maker_order_failed",
+        };
       }
 
       const path = "/api/v3/brokerage/orders";
@@ -1501,7 +1630,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         run_id: runId,
         mode: "ENTRY_BUY_IOC_FALLBACK",
         reason: "maker_failed_fallback_ioc",
-        decision: { makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice, maker_submit: makerJson } },
+        decision: {
+          makerAttempt: {
+            baseSize: attempt.baseSize,
+            limitPrice: attempt.limitPrice,
+            maker_submit: makerJson,
+          },
+        },
         recon_status: reconStatus,
         equity_gov: gov,
 
@@ -1524,7 +1659,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         }),
       });
 
-      return { ok: buy.ok, mode: "ENTRY_BUY_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, buy };
+      return {
+        ok: buy.ok,
+        mode: "ENTRY_BUY_IOC_FALLBACK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        buy,
+      };
     }
 
     // poll maker order for up to makerTimeoutMs
@@ -1553,13 +1697,22 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
         base_size: exec.filledBase ?? null,
         quote_size: exec.filledQuote ?? Number(entryQuoteUsd),
-        price: exec.avgPrice ?? (attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null),
+        price:
+          exec.avgPrice ??
+          (attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null),
 
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_MAKER",
         reason: "maker_filled_or_done",
-        decision: { maker_order_id: makerOrderId, status: lastSt, makerAttempt: { baseSize: attempt.baseSize, limitPrice: attempt.limitPrice } },
+        decision: {
+          maker_order_id: makerOrderId,
+          status: lastSt,
+          makerAttempt: {
+            baseSize: attempt.baseSize,
+            limitPrice: attempt.limitPrice,
+          },
+        },
         recon_status: reconStatus,
         equity_gov: gov,
 
@@ -1574,7 +1727,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             product_id: PRODUCT_ID,
             side: "BUY",
             order_configuration: {
-              limit_limit_gtc: { base_size: attempt.baseSize, limit_price: attempt.limitPrice, post_only: true },
+              limit_limit_gtc: {
+                base_size: attempt.baseSize,
+                limit_price: attempt.limitPrice,
+                post_only: true,
+              },
             },
           },
           response_status: attempt.maker.status,
@@ -1587,12 +1744,30 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         }),
       });
 
-      return { ok: true, mode: "ENTRY_BUY_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
+      return {
+        ok: true,
+        mode: "ENTRY_BUY_MAKER",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        maker_order_id: makerOrderId,
+      };
     }
 
     // maker timed out (no fill). fallback IOC if allowed
     if (!mAllowIoc) {
-      return { ok: true, mode: "ENTRY_BUY_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, maker_order_id: makerOrderId };
+      return {
+        ok: true,
+        mode: "ENTRY_BUY_MAKER_TIMEOUT",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        maker_order_id: makerOrderId,
+      };
     }
 
     const path = "/api/v3/brokerage/orders";
@@ -1647,24 +1822,67 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       }),
     });
 
-    return { ok: buy.ok, mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, buy };
+    return {
+      ok: buy.ok,
+      mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      buy,
+    };
   }
 
   // ---------------- EXIT ----------------
   if (!exitsEnabled) {
     log(runId, "EXIT_DECISION", { reason: "exits_disabled", pnlBps: null });
-    return { ok: true, mode: "HOLD_EXITS_DISABLED", gates, position, cooldown, reconStatus, equityGov: gov };
+    return {
+      ok: true,
+      mode: "HOLD_EXITS_DISABLED",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+    };
   }
 
   if (!lastBuy.ok) {
-    log(runId, "EXIT_DECISION", { reason: "blocked_cannot_read_entry", pnlBps: null });
-    return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, error: "cannot_read_entry", lastBuy };
+    log(runId, "EXIT_DECISION", {
+      reason: "blocked_cannot_read_entry",
+      pnlBps: null,
+    });
+    return {
+      ok: false,
+      mode: "BLOCKED",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      error: "cannot_read_entry",
+      lastBuy,
+    };
   }
 
   const peak = await fetchPeakWindowWithVol(ctx);
   if (!peak.ok) {
-    log(runId, "EXIT_DECISION", { reason: "blocked_cannot_read_peak", pnlBps: null });
-    return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, error: "cannot_read_peak", peak };
+    log(runId, "EXIT_DECISION", {
+      reason: "blocked_cannot_read_peak",
+      pnlBps: null,
+    });
+    return {
+      ok: false,
+      mode: "BLOCKED",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      error: "cannot_read_peak",
+      peak,
+    };
   }
 
   const entryPrice = lastBuy.entryPrice;
@@ -1683,13 +1901,22 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const trailArmed = pnlBps >= trailArmBps;
 
   const halfVol = Number.isFinite(peak.volBps) ? peak.volBps * 0.5 : 0;
-  const effectiveTrailOffsetBps = Math.max(trailOffsetBpsBase, trailVolFloorBps, halfVol);
+  const effectiveTrailOffsetBps = Math.max(
+    trailOffsetBpsBase,
+    trailVolFloorBps,
+    halfVol
+  );
 
   const minHoldOk = trailMinHoldMs > 0 ? heldMs >= trailMinHoldMs : true;
-  const shouldTrailStop = trailArmed && minHoldOk && drawdownFromPeakBps >= effectiveTrailOffsetBps;
+  const shouldTrailStop =
+    trailArmed &&
+    minHoldOk &&
+    drawdownFromPeakBps >= effectiveTrailOffsetBps;
 
   const shouldHardStop =
-    hardStopEnabled && hardStopLossBps > 0 && pnlBps <= -Math.abs(hardStopLossBps);
+    hardStopEnabled &&
+    hardStopLossBps > 0 &&
+    pnlBps <= -Math.abs(hardStopLossBps);
 
   const shouldTimeStop =
     timeStopEnabled &&
@@ -1698,14 +1925,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     heldMs >= maxHoldMs &&
     pnlBps < 0;
 
-  const anyExit = shouldHardStop || shouldTimeStop || shouldTakeProfit || shouldTrailStop;
+  const anyExit =
+    shouldHardStop || shouldTimeStop || shouldTakeProfit || shouldTrailStop;
 
-  const reason =
-    shouldHardStop ? "hard_stop" :
-    shouldTimeStop ? "time_stop" :
-    shouldTakeProfit ? "take_profit" :
-    shouldTrailStop ? "trail_stop" :
-    "hold";
+  const reason = shouldHardStop
+    ? "hard_stop"
+    : shouldTimeStop
+    ? "time_stop"
+    : shouldTakeProfit
+    ? "take_profit"
+    : shouldTrailStop
+    ? "trail_stop"
+    : "hold";
 
   const decision = {
     entryPrice,
@@ -1746,12 +1977,32 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     minHoldOk,
   });
 
-  if (!anyExit) return { ok: true, mode: "HOLD", gates, position, cooldown, reconStatus, equityGov: gov, decision };
+  if (!anyExit)
+    return {
+      ok: true,
+      mode: "HOLD",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+    };
 
   const baseSize = fmtBaseSize((position as any).base_available);
 
   if (exitsDryRun) {
-    return { ok: true, mode: "DRY_RUN_SELL", gates, position, cooldown, reconStatus, equityGov: gov, decision, would_sell_base_size: baseSize };
+    return {
+      ok: true,
+      mode: "DRY_RUN_SELL",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+      would_sell_base_size: baseSize,
+    };
   }
 
   // Exits default IOC for reliability
@@ -1807,14 +2058,35 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       }),
     });
 
-    return { ok: sell.ok, mode: "EXIT_SELL_IOC", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
+    return {
+      ok: sell.ok,
+      mode: "EXIT_SELL_IOC",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+      sell,
+      reason,
+    };
   }
 
   // Maker exit path if explicitly enabled
   const exitRef = current;
   if (!Number.isFinite(exitRef) || exitRef <= 0) {
     if (!makerAllowIocFallback()) {
-      return { ok: false, mode: "BLOCKED", gates, position, cooldown, reconStatus, equityGov: gov, decision, error: "no_ref_price_for_exit" };
+      return {
+        ok: false,
+        mode: "BLOCKED",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        decision,
+        error: "no_ref_price_for_exit",
+      };
     }
 
     const path = "/api/v3/brokerage/orders";
@@ -1868,7 +2140,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       }),
     });
 
-    return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK_NO_REF", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
+    return {
+      ok: sell.ok,
+      mode: "EXIT_SELL_IOC_FALLBACK_NO_REF",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+      sell,
+      reason,
+    };
   }
 
   const attempt = await makerFirstSell(ctx, baseSize, exitRef);
@@ -1878,7 +2161,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   if (!makerOk || !makerOrderId) {
     if (!makerAllowIocFallback()) {
-      return { ok: false, mode: "EXIT_SELL_MAKER_FAILED", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, error: "maker_exit_failed" };
+      return {
+        ok: false,
+        mode: "EXIT_SELL_MAKER_FAILED",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        decision,
+        reason,
+        error: "maker_exit_failed",
+      };
     }
 
     const path = "/api/v3/brokerage/orders";
@@ -1911,7 +2205,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       run_id: runId,
       mode: "EXIT_SELL_IOC_FALLBACK",
       reason,
-      decision: { ...decision, makerAttempt: { limitPrice: attempt.limitPrice, maker_order_id: makerOrderId, maker_submit: makerJson } },
+      decision: {
+        ...decision,
+        makerAttempt: {
+          limitPrice: attempt.limitPrice,
+          maker_order_id: makerOrderId,
+          maker_submit: makerJson,
+        },
+      },
       recon_status: reconStatus,
       equity_gov: gov,
 
@@ -1934,7 +2235,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       }),
     });
 
-    return { ok: sell.ok, mode: "EXIT_SELL_IOC_FALLBACK", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
+    return {
+      ok: sell.ok,
+      mode: "EXIT_SELL_IOC_FALLBACK",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+      sell,
+      reason,
+    };
   }
 
   const deadline = Date.now() + makerTimeoutMs();
@@ -1960,7 +2272,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       base_size: exec.filledBase ?? Number(baseSize),
       quote_size: exec.filledQuote ?? null,
-      price: exec.avgPrice ?? (attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null),
+      price:
+        exec.avgPrice ??
+        (attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null),
 
       user_id: ctx.user_id,
       run_id: runId,
@@ -1981,7 +2295,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           product_id: PRODUCT_ID,
           side: "SELL",
           order_configuration: {
-            limit_limit_gtc: { base_size: baseSize, limit_price: attempt.limitPrice, post_only: true },
+            limit_limit_gtc: {
+              base_size: baseSize,
+              limit_price: attempt.limitPrice,
+              post_only: true,
+            },
           },
         },
         response_status: attempt.maker.status,
@@ -1994,11 +2312,33 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       }),
     });
 
-    return { ok: true, mode: "EXIT_SELL_MAKER", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
+    return {
+      ok: true,
+      mode: "EXIT_SELL_MAKER",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+      reason,
+      maker_order_id: makerOrderId,
+    };
   }
 
   if (!makerAllowIocFallback())
-    return { ok: true, mode: "EXIT_SELL_MAKER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, reason, maker_order_id: makerOrderId };
+    return {
+      ok: true,
+      mode: "EXIT_SELL_MAKER_TIMEOUT",
+      gates,
+      position,
+      cooldown,
+      reconStatus,
+      equityGov: gov,
+      decision,
+      reason,
+      maker_order_id: makerOrderId,
+    };
 
   const path = "/api/v3/brokerage/orders";
   const reqPayload = {
@@ -2053,13 +2393,25 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     }),
   });
 
-  return { ok: sell.ok, mode: "EXIT_SELL_IOC_AFTER_TIMEOUT", gates, position, cooldown, reconStatus, equityGov: gov, decision, sell, reason };
+  return {
+    ok: sell.ok,
+    mode: "EXIT_SELL_IOC_AFTER_TIMEOUT",
+    gates,
+    position,
+    cooldown,
+    reconStatus,
+    equityGov: gov,
+    decision,
+    sell,
+    reason,
+  };
 }
 
 // ---------- orchestrator ----------
 async function runForAllUsers(masterRunId: string) {
   const loaded = await loadAllCoinbaseKeys();
-  if (!loaded.ok) return { ok: false, error: "cannot_load_users", details: loaded.error };
+  if (!loaded.ok)
+    return { ok: false, error: "cannot_load_users", details: loaded.error };
 
   let rows = loaded.rows;
 
@@ -2149,13 +2501,26 @@ export async function GET(req: Request) {
 
   const masterRunId = uuid();
 
-  log(masterRunId, "REQUEST", { method: "GET", url: req.url, action, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "REQUEST", {
+    method: "GET",
+    url: req.url,
+    action,
+    onlyUserId: ONLY_USER_ID,
+  });
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+    onlyUserId: ONLY_USER_ID,
+  });
 
-  return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
+  return json((result as any).ok ? 200 : 500, {
+    runId: masterRunId,
+    action,
+    ...result,
+  });
 }
 
 export async function POST(req: Request) {
@@ -2163,7 +2528,11 @@ export async function POST(req: Request) {
 
   const masterRunId = uuid();
 
-  log(masterRunId, "REQUEST", { method: "POST", url: req.url, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "REQUEST", {
+    method: "POST",
+    url: req.url,
+    onlyUserId: ONLY_USER_ID,
+  });
 
   let body: any = null;
   try {
@@ -2175,7 +2544,15 @@ export async function POST(req: Request) {
 
   const result = await runForAllUsers(masterRunId);
 
-  log(masterRunId, "END", { ok: (result as any).ok, usersProcessed: (result as any)?.usersProcessed, onlyUserId: ONLY_USER_ID });
+  log(masterRunId, "END", {
+    ok: (result as any).ok,
+    usersProcessed: (result as any)?.usersProcessed,
+    onlyUserId: ONLY_USER_ID,
+  });
 
-  return json((result as any).ok ? 200 : 500, { runId: masterRunId, action, ...result });
+  return json((result as any).ok ? 200 : 500, {
+    runId: masterRunId,
+    action,
+    ...result,
+  });
 }
