@@ -21,6 +21,8 @@ type StrategyIntelResp =
     }
   | { ok: false; error?: string; [k: string]: any };
 
+type Tone = "green" | "yellow" | "red" | "gray";
+
 function money(n: any) {
   const v = Number(n);
   if (!Number.isFinite(v)) return "—";
@@ -41,25 +43,110 @@ function bps(n: any, digits = 2) {
   return `${v.toFixed(digits)} bps`;
 }
 
+function toneClasses(tone: Tone) {
+  switch (tone) {
+    case "green":
+      return {
+        pill: "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30",
+        card: "bg-emerald-500/10 ring-1 ring-emerald-500/25",
+        value: "text-emerald-300",
+        sub: "text-emerald-200/70",
+      };
+    case "yellow":
+      return {
+        pill: "bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/30",
+        card: "bg-amber-500/10 ring-1 ring-amber-500/25",
+        value: "text-amber-200",
+        sub: "text-amber-100/70",
+      };
+    case "red":
+      return {
+        pill: "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/30",
+        card: "bg-rose-500/10 ring-1 ring-rose-500/25",
+        value: "text-rose-200",
+        sub: "text-rose-100/70",
+      };
+    default:
+      return {
+        pill: "bg-white/5 text-white/70 ring-1 ring-white/10",
+        card: "bg-white/5 ring-1 ring-white/10",
+        value: "text-white",
+        sub: "text-white/45",
+      };
+  }
+}
+
+function pnlTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n > 0) return "green";
+  if (n < 0) return "red";
+  return "gray";
+}
+
+function edgeTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n > 0) return "green";
+  if (n >= -10) return "yellow";
+  return "red";
+}
+
+function entryQualityTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n > 0) return "green";
+  if (n >= -0.5) return "yellow";
+  return "red";
+}
+
+function exitEfficiencyTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n >= 85) return "green";
+  if (n >= 70) return "yellow";
+  return "red";
+}
+
+function winRateTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n >= 55) return "green";
+  if (n >= 40) return "yellow";
+  return "red";
+}
+
+function drawdownTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n <= 5) return "green";
+  if (n <= 10) return "yellow";
+  return "red";
+}
+
+function avgWinTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n > 0) return "green";
+  return "red";
+}
+
+function avgLossTone(v: any): Tone {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "gray";
+  if (n <= 120) return "green";
+  if (n <= 170) return "yellow";
+  return "red";
+}
+
 function TonePill({
   label,
   tone,
 }: {
   label: string;
-  tone: "green" | "yellow" | "red" | "gray";
+  tone: Tone;
 }) {
-  const cls = useMemo(() => {
-    switch (tone) {
-      case "green":
-        return "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30";
-      case "yellow":
-        return "bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/30";
-      case "red":
-        return "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/30";
-      default:
-        return "bg-white/5 text-white/70 ring-1 ring-white/10";
-    }
-  }, [tone]);
+  const cls = useMemo(() => toneClasses(tone).pill, [tone]);
 
   return (
     <span
@@ -74,16 +161,22 @@ function Stat({
   label,
   value,
   sub,
+  tone = "gray",
 }: {
   label: string;
   value: string;
   sub?: string;
+  tone?: Tone;
 }) {
+  const cls = toneClasses(tone);
+
   return (
-    <div className="rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
+    <div className={`rounded-2xl p-5 ${cls.card}`}>
       <div className="text-xs text-white/60">{label}</div>
-      <div className="mt-2 text-3xl font-semibold tracking-tight">{value}</div>
-      {sub ? <div className="mt-2 text-xs text-white/45">{sub}</div> : null}
+      <div className={`mt-2 text-3xl font-semibold tracking-tight ${cls.value}`}>
+        {value}
+      </div>
+      {sub ? <div className={`mt-2 text-xs ${cls.sub}`}>{sub}</div> : null}
     </div>
   );
 }
@@ -98,7 +191,6 @@ export default function Admin() {
   );
   const [ts, setTs] = useState<number>(Date.now());
 
-  // client-side admin bounce
   useEffect(() => {
     let mounted = true;
 
@@ -167,21 +259,45 @@ export default function Admin() {
   }, []);
 
   const pStats = pulse?.stats;
-
-  const netTone: "green" | "yellow" | "red" | "gray" =
-    pStats?.netPnL > 0 ? "green" : pStats?.netPnL < 0 ? "red" : "gray";
-
-  const edgeTone: "green" | "yellow" | "red" | "gray" =
-    strategyIntel && strategyIntel.ok
-      ? strategyIntel.edgePerTradeBps > 0
-        ? "green"
-        : strategyIntel.edgePerTradeBps < 0
-        ? "red"
-        : "gray"
-      : "gray";
-
   const instData = inst?.institutional?.data;
   const cfSnap = inst?.corefund?.snapshot;
+
+  const netTone = pnlTone(pStats?.netPnL);
+  const topEdgeTone =
+    strategyIntel && strategyIntel.ok
+      ? edgeTone(strategyIntel.edgePerTradeBps)
+      : "gray";
+
+  const winRatePct =
+    pStats && pStats.winRate != null ? Number(pStats.winRate) * 100 : null;
+
+  const pulseWinRateTone = winRateTone(winRatePct);
+  const coreFundDdTone = drawdownTone(cfSnap?.dd_pct_portfolio);
+
+  const strategyEdgeTone =
+    strategyIntel && strategyIntel.ok
+      ? edgeTone(strategyIntel.edgePerTradeBps)
+      : "gray";
+
+  const strategyEntryTone =
+    strategyIntel && strategyIntel.ok
+      ? entryQualityTone(strategyIntel.entryQualityPct)
+      : "gray";
+
+  const strategyExitTone =
+    strategyIntel && strategyIntel.ok
+      ? exitEfficiencyTone(strategyIntel.exitEfficiencyPct)
+      : "gray";
+
+  const strategyAvgWinTone =
+    strategyIntel && strategyIntel.ok
+      ? avgWinTone(strategyIntel.avgWinBps)
+      : "gray";
+
+  const strategyAvgLossTone =
+    strategyIntel && strategyIntel.ok
+      ? avgLossTone(strategyIntel.avgLossBps)
+      : "gray";
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
 
@@ -209,26 +325,26 @@ export default function Admin() {
                   ? bps(strategyIntel.edgePerTradeBps)
                   : "—"
               }`}
-              tone={edgeTone}
+              tone={topEdgeTone}
             />
 
             <button
               onClick={refreshAll}
-              className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-white/15 transition"
+              className="rounded-xl bg-white/10 px-4 py-2 text-sm ring-1 ring-white/10 transition hover:bg-white/15"
             >
               Refresh
             </button>
 
             <Link
               href="/admin/investor"
-              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-indigo-500/30 transition"
+              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 transition hover:bg-indigo-500/30"
             >
               Investor
             </Link>
 
             <Link
               href="/admin/platform"
-              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 hover:bg-indigo-500/30 transition"
+              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 transition hover:bg-indigo-500/30"
             >
               Platform
             </Link>
@@ -240,7 +356,10 @@ export default function Admin() {
             <h2 className="text-lg font-semibold">Pulse</h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
-              <Stat label="Trades" value={pStats ? String(pStats.trades) : "—"} />
+              <Stat
+                label="Trades"
+                value={pStats ? String(pStats.trades) : "—"}
+              />
 
               <Stat
                 label="Win Rate"
@@ -249,11 +368,13 @@ export default function Admin() {
                     ? `${Math.round(Number(pStats.winRate) * 100)}%`
                     : "—"
                 }
+                tone={pulseWinRateTone}
               />
 
               <Stat
                 label="Net PNL"
                 value={pStats ? money(pStats.netPnL) : "—"}
+                tone={netTone}
               />
             </div>
           </section>
@@ -292,6 +413,7 @@ export default function Admin() {
                     ? `DD ${pct(cfSnap.dd_pct_portfolio)}`
                     : undefined
                 }
+                tone={coreFundDdTone}
               />
             </div>
           </section>
@@ -327,6 +449,7 @@ export default function Admin() {
                   ? bps(strategyIntel.edgePerTradeBps)
                   : "—"
               }
+              tone={strategyEdgeTone}
             />
 
             <Stat
@@ -336,6 +459,7 @@ export default function Admin() {
                   ? pct(strategyIntel.entryQualityPct)
                   : "—"
               }
+              tone={strategyEntryTone}
             />
 
             <Stat
@@ -345,6 +469,7 @@ export default function Admin() {
                   ? pct(strategyIntel.exitEfficiencyPct)
                   : "—"
               }
+              tone={strategyExitTone}
             />
           </div>
 
@@ -374,6 +499,7 @@ export default function Admin() {
                   ? bps(strategyIntel.avgWinBps)
                   : "—"
               }
+              tone={strategyAvgWinTone}
             />
 
             <Stat
@@ -383,6 +509,7 @@ export default function Admin() {
                   ? bps(strategyIntel.avgLossBps)
                   : "—"
               }
+              tone={strategyAvgLossTone}
             />
           </div>
         </section>
