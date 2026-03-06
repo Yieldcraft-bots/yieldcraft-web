@@ -21,6 +21,31 @@ type StrategyIntelResp =
     }
   | { ok: false; error?: string; [k: string]: any };
 
+type StrategyAdjustmentsResp =
+  | {
+      ok: true;
+      status: string;
+      stats: {
+        trades: number;
+        wins: number;
+        losses: number;
+        winRate: number;
+        avgWinBps: number;
+        avgLossBps: number;
+      };
+      current: {
+        profitTargetBps: number;
+        trailOffsetBps: number;
+        reconConfidence: number;
+      };
+      recommended: {
+        profitTargetBps: number;
+        trailOffsetBps: number;
+        reconConfidence: number;
+      };
+    }
+  | { ok: false; error?: string; [k: string]: any };
+
 type Tone = "green" | "yellow" | "red" | "gray";
 
 function money(n: any) {
@@ -139,6 +164,15 @@ function avgLossTone(v: any): Tone {
   return "red";
 }
 
+function suggestionTone(current: any, recommended: any): Tone {
+  const c = Number(current);
+  const r = Number(recommended);
+  if (!Number.isFinite(c) || !Number.isFinite(r)) return "gray";
+  if (r === c) return "gray";
+  if (r < c) return "yellow";
+  return "green";
+}
+
 function TonePill({
   label,
   tone,
@@ -189,6 +223,8 @@ export default function Admin() {
   const [strategyIntel, setStrategyIntel] = useState<StrategyIntelResp | null>(
     null
   );
+  const [strategyAdjustments, setStrategyAdjustments] =
+    useState<StrategyAdjustmentsResp | null>(null);
   const [ts, setTs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -248,6 +284,16 @@ export default function Admin() {
       // ignore
     }
 
+    try {
+      const adjustmentsRes = await fetch("/api/strategy-adjustments", {
+        cache: "no-store",
+      });
+      const adjustmentsJson = await adjustmentsRes.json();
+      setStrategyAdjustments(adjustmentsJson);
+    } catch {
+      // ignore
+    }
+
     setTs(Date.now());
   }
 
@@ -263,7 +309,7 @@ export default function Admin() {
   const cfSnap = inst?.corefund?.snapshot;
 
   const netTone = pnlTone(pStats?.netPnL);
-  const topEdgeTone =
+  const topEdgeTone: Tone =
     strategyIntel && strategyIntel.ok
       ? edgeTone(strategyIntel.edgePerTradeBps)
       : "gray";
@@ -274,29 +320,58 @@ export default function Admin() {
   const pulseWinRateTone = winRateTone(winRatePct);
   const coreFundDdTone = drawdownTone(cfSnap?.dd_pct_portfolio);
 
-  const strategyEdgeTone =
+  const strategyEdgeTone: Tone =
     strategyIntel && strategyIntel.ok
       ? edgeTone(strategyIntel.edgePerTradeBps)
       : "gray";
 
-  const strategyEntryTone =
+  const strategyEntryTone: Tone =
     strategyIntel && strategyIntel.ok
       ? entryQualityTone(strategyIntel.entryQualityPct)
       : "gray";
 
-  const strategyExitTone =
+  const strategyExitTone: Tone =
     strategyIntel && strategyIntel.ok
       ? exitEfficiencyTone(strategyIntel.exitEfficiencyPct)
       : "gray";
 
-  const strategyAvgWinTone =
+  const strategyAvgWinTone: Tone =
     strategyIntel && strategyIntel.ok
       ? avgWinTone(strategyIntel.avgWinBps)
       : "gray";
 
-  const strategyAvgLossTone =
+  const strategyAvgLossTone: Tone =
     strategyIntel && strategyIntel.ok
       ? avgLossTone(strategyIntel.avgLossBps)
+      : "gray";
+
+  const recommendedProfitTone: Tone =
+    strategyAdjustments && strategyAdjustments.ok
+      ? suggestionTone(
+          strategyAdjustments.current.profitTargetBps,
+          strategyAdjustments.recommended.profitTargetBps
+        )
+      : "gray";
+
+  const recommendedTrailTone: Tone =
+    strategyAdjustments && strategyAdjustments.ok
+      ? suggestionTone(
+          strategyAdjustments.current.trailOffsetBps,
+          strategyAdjustments.recommended.trailOffsetBps
+        )
+      : "gray";
+
+  const recommendedReconTone: Tone =
+    strategyAdjustments && strategyAdjustments.ok
+      ? suggestionTone(
+          strategyAdjustments.current.reconConfidence,
+          strategyAdjustments.recommended.reconConfidence
+        )
+      : "gray";
+
+  const adjustmentWinRateTone: Tone =
+    strategyAdjustments && strategyAdjustments.ok
+      ? winRateTone(Number(strategyAdjustments.stats.winRate) * 100)
       : "gray";
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
@@ -510,6 +585,121 @@ export default function Admin() {
                   : "—"
               }
               tone={strategyAvgLossTone}
+            />
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Strategy Suggestions</h2>
+            <TonePill
+              label={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? "ADVISORY ONLY"
+                  : "SUGGESTIONS OFFLINE"
+              }
+              tone={strategyAdjustments && strategyAdjustments.ok ? "yellow" : "gray"}
+            />
+          </div>
+
+          <div className="mt-3 text-sm text-white/60">
+            Daily read-only recommendations based on recent trade behavior. Nothing
+            changes automatically.
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Stat
+              label="Trades Reviewed"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? String(strategyAdjustments.stats.trades)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Win Rate"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? pct(Number(strategyAdjustments.stats.winRate) * 100)
+                  : "—"
+              }
+              tone={adjustmentWinRateTone}
+            />
+
+            <Stat
+              label="Avg Win"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? bps(strategyAdjustments.stats.avgWinBps)
+                  : "—"
+              }
+              tone={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? avgWinTone(strategyAdjustments.stats.avgWinBps)
+                  : "gray"
+              }
+            />
+
+            <Stat
+              label="Avg Loss"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? bps(strategyAdjustments.stats.avgLossBps)
+                  : "—"
+              }
+              tone={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? avgLossTone(strategyAdjustments.stats.avgLossBps)
+                  : "gray"
+              }
+            />
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-1 xl:grid-cols-3">
+            <Stat
+              label="Profit Target"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? bps(strategyAdjustments.recommended.profitTargetBps, 0)
+                  : "—"
+              }
+              sub={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? `Current ${bps(strategyAdjustments.current.profitTargetBps, 0)}`
+                  : undefined
+              }
+              tone={recommendedProfitTone}
+            />
+
+            <Stat
+              label="Trail Offset"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? bps(strategyAdjustments.recommended.trailOffsetBps, 0)
+                  : "—"
+              }
+              sub={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? `Current ${bps(strategyAdjustments.current.trailOffsetBps, 0)}`
+                  : undefined
+              }
+              tone={recommendedTrailTone}
+            />
+
+            <Stat
+              label="Recon Confidence"
+              value={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? strategyAdjustments.recommended.reconConfidence.toFixed(2)
+                  : "—"
+              }
+              sub={
+                strategyAdjustments && strategyAdjustments.ok
+                  ? `Current ${strategyAdjustments.current.reconConfidence.toFixed(2)}`
+                  : undefined
+              }
+              tone={recommendedReconTone}
             />
           </div>
         </section>
