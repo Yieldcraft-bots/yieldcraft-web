@@ -73,11 +73,6 @@ function s(x: any): string {
   return typeof x === "string" ? x : x == null ? "" : String(x);
 }
 
-/**
- * Simple realized P&L for a single-position style bot:
- * - If pnl_usd exists on rows, we sum it (preferred).
- * - Otherwise estimate realized pnl from SELL proceeds - BUY cost - fees using FIFO inventory.
- */
 function computeStats(rows: TradeRow[]) {
   const fills = rows
     .filter((r) => s((r as any).status).toLowerCase() !== "rejected")
@@ -93,19 +88,33 @@ function computeStats(rows: TradeRow[]) {
 
   const trades = fills.length;
 
-  const hasPnLField = fills.some(
-    (r) => "pnl_usd" in r && n((r as any).pnl_usd) !== 0
-  );
-
   const totalFees = fills.reduce(
     (acc, r) => acc + n((r as any).fee_usd ?? (r as any).fee),
     0
   );
 
-  let realized = 0;
+  const hasPnLField = fills.some(
+    (r) => "pnl_usd" in r && Number.isFinite(Number((r as any).pnl_usd))
+  );
+
+  let grossPnL = 0;
+  let sells = 0;
+  let wins = 0;
+  let losses = 0;
 
   if (hasPnLField) {
-    realized = fills.reduce((acc, r) => acc + n((r as any).pnl_usd), 0);
+    for (const r of fills) {
+      const side = s((r as any).side).toUpperCase();
+      const rowPnl = n((r as any).pnl_usd);
+
+      grossPnL += rowPnl;
+
+      if (side === "SELL") {
+        sells++;
+        if (rowPnl > 0) wins++;
+        else if (rowPnl < 0) losses++;
+      }
+    }
   } else {
     type Lot = { qty: number; cost: number };
     const lots: Lot[] = [];
@@ -119,7 +128,12 @@ function computeStats(rows: TradeRow[]) {
 
       if (side === "BUY") {
         lots.push({ qty, cost: notional });
-      } else if (side === "SELL") {
+        continue;
+      }
+
+      if (side === "SELL") {
+        sells++;
+
         let remaining = qty;
         let costBasis = 0;
 
@@ -137,29 +151,23 @@ function computeStats(rows: TradeRow[]) {
           if (lot.qty <= 1e-12) lots.shift();
         }
 
-        realized += notional - costBasis;
+        const realizedSellPnl = notional - costBasis;
+        grossPnL += realizedSellPnl;
+
+        if (realizedSellPnl > 0) wins++;
+        else if (realizedSellPnl < 0) losses++;
       }
     }
   }
 
-  const grossPnL = realized;
-  const netPnL = realized - totalFees;
-
-  let sells = 0;
-  let wins = 0;
-
-  for (const r of fills) {
-    if (s((r as any).side).toUpperCase() !== "SELL") continue;
-    sells++;
-    if ("pnl_usd" in r && n((r as any).pnl_usd) > 0) wins++;
-  }
-
+  const netPnL = grossPnL - totalFees;
   const winRate = sells > 0 ? wins / sells : null;
 
   return {
     trades,
     sells,
     wins,
+    losses,
     winRate,
     grossPnL,
     totalFees,
