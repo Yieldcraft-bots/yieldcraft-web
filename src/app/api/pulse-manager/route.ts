@@ -630,7 +630,7 @@ function computeMultiplierFromDdPct(ddPct: number) {
   if (ddPct < 3) return 0.8;
   if (ddPct < 4) return 0.65;
   if (ddPct < 5) return 0.4;
-  return 1.0;
+  return 0.25;
 }
 
 async function getOrInitEquityState(user_id: string) {
@@ -736,7 +736,7 @@ async function computeEquityGovernor(
         ? ((peakEquityUsd - equityUsd) / peakEquityUsd) * 100
         : 0;
 
-    const defense = ddPct >= 5;
+    const defense = ddPct >= 10;
     const multiplier = computeMultiplierFromDdPct(ddPct);
 
     return {
@@ -892,9 +892,11 @@ async function fetchFillsForOrder(
     // quote might be provided as `commissionable_value` / `trade_value` etc.
     // If not present, compute: price * size
     const quoteRaw =
-      Number(f?.trade_value || f?.value || f?.quote_size || f?.filled_value || 0) ||
-      0;
-    const quote = quoteRaw > 0 ? quoteRaw : price > 0 && size > 0 ? price * size : 0;
+      Number(
+        f?.trade_value || f?.value || f?.quote_size || f?.filled_value || 0
+      ) || 0;
+    const quote =
+      quoteRaw > 0 ? quoteRaw : price > 0 && size > 0 ? price * size : 0;
 
     const time = String(f?.trade_time || f?.created_time || f?.time || "");
 
@@ -984,9 +986,7 @@ async function fetchExecutionSummary(
     fromFills.avgPrice ??
     (st?.ok && st.avgPrice > 0 ? Number(st.avgPrice) : null);
 
-  const side =
-    fromFills.side ??
-    (expectedSide ? expectedSide : null);
+  const side = fromFills.side ?? (expectedSide ? expectedSide : null);
 
   return {
     ok: true,
