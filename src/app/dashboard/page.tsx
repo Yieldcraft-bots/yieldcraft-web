@@ -134,6 +134,23 @@ function fmtBps(n: number | null | undefined, digits = 2) {
   return `${n.toFixed(digits)} bps`;
 }
 
+function safeCount(n: number | null | undefined) {
+  return typeof n === "number" && Number.isFinite(n) ? n : 0;
+}
+
+function pnlPerfStateFromSnapshot(pnlSnapshot: PnlSnapshotResp | null, pnlConn: Conn): Conn {
+  if (!pnlSnapshot || (pnlSnapshot as any).ok !== true) return pnlConn;
+
+  const ok = pnlSnapshot as PnlSnapshotOk;
+  const realized = ok.net_realized_pnl_usd ?? 0;
+
+  // Tiny negative = caution, not disaster
+  if (realized > 0) return "ok";
+  if (realized < -1) return "no";
+  if (realized < 0) return "warn";
+  return "warn";
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
@@ -552,11 +569,9 @@ export default function DashboardPage() {
       }
 
       // ✅ 7) PnL Snapshot (read-only, user-scoped)
-      // IMPORTANT: This must hit a server endpoint that DOES NOT expose secrets to the browser.
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
-        // default: last 30 days
         const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
         const r = await fetch(`/api/pnl-snapshot?since=${encodeURIComponent(since)}`, {
@@ -574,7 +589,7 @@ export default function DashboardPage() {
         if (!mountedRef.current) return;
 
         if (r.ok && j && j.ok === true) {
-          setPnlConn("ok"); // connectivity ok
+          setPnlConn("ok");
           setPnlSnapshot(j as PnlSnapshotOk);
         } else {
           const errMsg =
@@ -703,19 +718,9 @@ export default function DashboardPage() {
   const balP = pill(balancesConn);
   const tradeP = pill(tradeConn);
 
-  // ✅ NEW: PNL pill reflects performance when snapshot is available
-  const pnlPerfState: Conn =
-    pnlSnapshot && (pnlSnapshot as any).ok === true
-      ? ((pnlSnapshot as PnlSnapshotOk).net_realized_pnl_usd ?? 0) > 0
-        ? "ok"
-        : ((pnlSnapshot as PnlSnapshotOk).net_realized_pnl_usd ?? 0) < 0
-        ? "no"
-        : "warn"
-      : pnlConn;
-
+  const pnlPerfState = pnlPerfStateFromSnapshot(pnlSnapshot, pnlConn);
   const pnlP = pill(pnlPerfState);
 
-  // Sidebar label: locked should be YELLOW, not GREEN
   const armedLabel = tradeGates.LIVE_ALLOWED
     ? {
         title: "HOT (Live Allowed)",
@@ -826,7 +831,6 @@ export default function DashboardPage() {
   })();
 
   const pnlBox = (() => {
-    // Only show PnL if user has Pulse access OR is admin (admin can still see)
     const allowed = entitlements.pulse || isAdmin;
 
     if (!allowed) {
@@ -891,8 +895,14 @@ export default function DashboardPage() {
 
     const realized = ok.net_realized_pnl_usd ?? 0;
     const runningEq = ok.running_equity_usd ?? 0;
+    const wins = safeCount(ok.wins);
+    const losses = safeCount(ok.losses);
+    const totalTrades = safeCount(ok.total_trades);
+    const winLossDisplay = `${wins}/${losses}`;
+    const tradeLineDisplay = `${totalTrades} (${winLossDisplay})`;
 
-    const tone = realized > 0 ? "green" : realized < 0 ? "red" : "neutral";
+    const tone =
+      realized > 0 ? "green" : realized < -1 ? "red" : realized < 0 ? "yellow" : "neutral";
 
     return (
       <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
@@ -904,14 +914,22 @@ export default function DashboardPage() {
             onClick={() => {
               openPillModal({
                 title: "PNL SNAPSHOT",
-                tone: tone === "green" ? "green" : tone === "red" ? "red" : "neutral",
+                tone:
+                  tone === "green"
+                    ? "green"
+                    : tone === "red"
+                    ? "red"
+                    : tone === "yellow"
+                    ? "yellow"
+                    : "neutral",
                 body: [
                   `Realized PnL: ${fmtSignedMoney(ok.net_realized_pnl_usd)}`,
                   `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
-                  `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
-                  `Trades: ${ok.total_trades ?? 0} (W ${ok.wins ?? 0} / L ${ok.losses ?? 0})`,
+                  `W/L: ${winLossDisplay}`,
+                  `Trades: ${totalTrades}`,
                   `Win rate: ${typeof ok.win_rate === "number" ? `${ok.win_rate}%` : "—"}`,
                   `Avg win: ${fmtBps(ok.avg_win_bps)} · Avg loss: ${fmtBps(ok.avg_loss_bps)}`,
+                  `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
                   `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
                   `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
                   `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(ok.open_avg_price ?? null)}`,
@@ -943,9 +961,19 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex justify-between">
-            <span className="text-slate-400">Trades (W/L)</span>
+            <span className="text-slate-400">W/L</span>
+            <span className="font-mono text-slate-100">{winLossDisplay}</span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-slate-400">Trades</span>
+            <span className="font-mono text-slate-100">{tradeLineDisplay}</span>
+          </div>
+
+          <div className="flex justify-between">
+            <span className="text-slate-400">Win Rate</span>
             <span className="font-mono text-slate-100">
-              {ok.total_trades ?? 0} ({ok.wins ?? 0}/{ok.losses ?? 0})
+              {typeof ok.win_rate === "number" ? `${ok.win_rate}%` : "—"}
             </span>
           </div>
 
@@ -990,7 +1018,6 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
-      {/* ✅ Pill Details Modal (UI-only) */}
       {pillModal.open && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
@@ -1111,7 +1138,6 @@ export default function DashboardPage() {
                 PLAN ACCESS: {planP.label}
               </span>
 
-              {/* ✅ Clickable Coinbase pill */}
               <button
                 type="button"
                 onClick={() => {
@@ -1135,7 +1161,6 @@ export default function DashboardPage() {
                 YOUR COINBASE: {userKeysP.label}
               </button>
 
-              {/* ✅ BALANCES pill (clickable) */}
               <button
                 type="button"
                 onClick={() => {
@@ -1182,7 +1207,6 @@ export default function DashboardPage() {
                 BALANCES: {balP.label}
               </button>
 
-              {/* ✅ PLATFORM ENGINE pill (clickable) */}
               <button
                 type="button"
                 onClick={() => {
@@ -1210,7 +1234,6 @@ export default function DashboardPage() {
                 PLATFORM ENGINE: {platP.label}
               </button>
 
-              {/* ✅ Clickable Trading Status pill */}
               <button
                 type="button"
                 onClick={() => {
@@ -1249,7 +1272,6 @@ export default function DashboardPage() {
                 TRADING STATUS: {tradeP.label}
               </button>
 
-              {/* ✅ PnL pill (clickable) */}
               <button
                 type="button"
                 onClick={() => {
@@ -1267,19 +1289,25 @@ export default function DashboardPage() {
                   }
 
                   const ok = pnlSnapshot as PnlSnapshotOk;
+                  const wins = safeCount(ok.wins);
+                  const losses = safeCount(ok.losses);
 
                   openPillModal({
                     title: "PNL SNAPSHOT",
                     tone:
                       (ok.net_realized_pnl_usd ?? 0) > 0
                         ? "green"
-                        : (ok.net_realized_pnl_usd ?? 0) < 0
+                        : (ok.net_realized_pnl_usd ?? 0) < -1
                         ? "red"
+                        : (ok.net_realized_pnl_usd ?? 0) < 0
+                        ? "yellow"
                         : "neutral",
                     body: [
                       `Realized PnL: ${fmtSignedMoney(ok.net_realized_pnl_usd)}`,
                       `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
-                      `Trades: ${ok.total_trades ?? 0} (W ${ok.wins ?? 0} / L ${ok.losses ?? 0})`,
+                      `W/L: ${wins}/${losses}`,
+                      `Trades: ${safeCount(ok.total_trades)}`,
+                      `Win rate: ${typeof ok.win_rate === "number" ? `${ok.win_rate}%` : "—"}`,
                       `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
                       `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
                       `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
@@ -1366,8 +1394,6 @@ export default function DashboardPage() {
                 </div>
 
                 {balancesBox}
-
-                {/* ✅ PnL Snapshot card (this is where clients will see it) */}
                 {pnlBox}
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
