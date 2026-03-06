@@ -7,6 +7,20 @@ import { supabase } from "@/lib/supabaseClient";
 
 const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
 
+type StrategyIntelResp =
+  | {
+      ok: true;
+      tradesAnalyzed: number;
+      wins: number;
+      losses: number;
+      avgWinBps: number;
+      avgLossBps: number;
+      edgePerTradeBps: number;
+      entryQualityPct: number;
+      exitEfficiencyPct: number;
+    }
+  | { ok: false; error?: string; [k: string]: any };
+
 function money(n: any) {
   const v = Number(n);
   if (!Number.isFinite(v)) return "—";
@@ -19,6 +33,12 @@ function pct(n: any, digits = 2) {
   const v = Number(n);
   if (!Number.isFinite(v)) return "—";
   return `${v.toFixed(digits)}%`;
+}
+
+function bps(n: any, digits = 2) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "—";
+  return `${v.toFixed(digits)} bps`;
 }
 
 function TonePill({
@@ -73,6 +93,9 @@ export default function Admin() {
 
   const [pulse, setPulse] = useState<any>(null);
   const [inst, setInst] = useState<any>(null);
+  const [strategyIntel, setStrategyIntel] = useState<StrategyIntelResp | null>(
+    null
+  );
   const [ts, setTs] = useState<number>(Date.now());
 
   // client-side admin bounce
@@ -123,6 +146,16 @@ export default function Admin() {
       // ignore
     }
 
+    try {
+      const strategyRes = await fetch("/api/strategy-intelligence", {
+        cache: "no-store",
+      });
+      const strategyJson = await strategyRes.json();
+      setStrategyIntel(strategyJson);
+    } catch {
+      // ignore
+    }
+
     setTs(Date.now());
   }
 
@@ -137,6 +170,15 @@ export default function Admin() {
 
   const netTone: "green" | "yellow" | "red" | "gray" =
     pStats?.netPnL > 0 ? "green" : pStats?.netPnL < 0 ? "red" : "gray";
+
+  const edgeTone: "green" | "yellow" | "red" | "gray" =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.edgePerTradeBps > 0
+        ? "green"
+        : strategyIntel.edgePerTradeBps < 0
+        ? "red"
+        : "gray"
+      : "gray";
 
   const instData = inst?.institutional?.data;
   const cfSnap = inst?.corefund?.snapshot;
@@ -160,6 +202,14 @@ export default function Admin() {
             <TonePill
               label={`NET PNL ${pStats ? money(pStats.netPnL) : "—"}`}
               tone={netTone}
+            />
+            <TonePill
+              label={`EDGE ${
+                strategyIntel && strategyIntel.ok
+                  ? bps(strategyIntel.edgePerTradeBps)
+                  : "—"
+              }`}
+              tone={edgeTone}
             />
 
             <button
@@ -224,9 +274,7 @@ export default function Admin() {
 
               <Stat
                 label="Volume"
-                value={
-                  instData ? money(instData.total_volume_usd_30d) : "—"
-                }
+                value={instData ? money(instData.total_volume_usd_30d) : "—"}
               />
             </div>
 
@@ -248,6 +296,96 @@ export default function Admin() {
             </div>
           </section>
         </div>
+
+        <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Strategy Intelligence</h2>
+            <TonePill
+              label={
+                strategyIntel && strategyIntel.ok
+                  ? "LEARNING ACTIVE"
+                  : "INTEL OFFLINE"
+              }
+              tone={strategyIntel && strategyIntel.ok ? "green" : "gray"}
+            />
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Stat
+              label="Trades Analyzed"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? String(strategyIntel.tradesAnalyzed)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Edge / Trade"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? bps(strategyIntel.edgePerTradeBps)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Entry Quality"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? pct(strategyIntel.entryQualityPct)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Exit Efficiency"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? pct(strategyIntel.exitEfficiencyPct)
+                  : "—"
+              }
+            />
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Stat
+              label="Wins"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? String(strategyIntel.wins)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Losses"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? String(strategyIntel.losses)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Avg Win"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? bps(strategyIntel.avgWinBps)
+                  : "—"
+              }
+            />
+
+            <Stat
+              label="Avg Loss"
+              value={
+                strategyIntel && strategyIntel.ok
+                  ? bps(strategyIntel.avgLossBps)
+                  : "—"
+              }
+            />
+          </div>
+        </section>
       </div>
     </main>
   );
