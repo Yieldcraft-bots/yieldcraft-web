@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import jwt, { type SignOptions } from "jsonwebtoken";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import { detectMarketRegime } from "@/lib/marketRegime";
 
 export const runtime = "nodejs";
 
@@ -498,8 +499,6 @@ async function fetchReconDecision(): Promise<ReconDecision> {
 
     const isChop = regimeRaw ? looksChoppy(regimeRaw) : false;
 
-    // STRICTER ENTRY GATE:
-    // To allow a new entry, Recon must be confident enough AND explicitly BUY.
     const belowMinConf = confidence === null || confidence < minConf;
     const notBuy = side !== "BUY";
     const blocksOnChop = chopBlock && isChop;
@@ -1246,13 +1245,19 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const trailVolFloorBps = num(process.env.TRAIL_VOL_FLOOR_BPS, 100);
 
   // Hard stop (default ON)
-  const hardStopEnabled = truthyDefault(process.env.PULSE_HARD_STOP_ENABLED, true);
+  const hardStopEnabled = truthyDefault(
+    process.env.PULSE_HARD_STOP_ENABLED,
+    true
+  );
   const hardStopLossBps = num(
     process.env.PULSE_HARD_STOP_LOSS_BPS,
     num(process.env.YC_DEFAULT_HARD_STOP_BPS, 120)
   );
 
-  const timeStopEnabled = truthyDefault(process.env.PULSE_TIME_STOP_ENABLED, false);
+  const timeStopEnabled = truthyDefault(
+    process.env.PULSE_TIME_STOP_ENABLED,
+    false
+  );
   const maxHoldMinutes = num(
     process.env.PULSE_MAX_HOLD_MINUTES,
     num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0)
@@ -1315,7 +1320,10 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         };
 
   // Entry USD: bounded by caps, then scaled by gov.multiplier, then bounded again
-  const baseEntryUsd = Math.max(0.01, Math.min(envEntryUsd, entMaxUsd, hardMaxUsd));
+  const baseEntryUsd = Math.max(
+    0.01,
+    Math.min(envEntryUsd, entMaxUsd, hardMaxUsd)
+  );
   const scaledEntryUsd = Math.max(
     0.01,
     baseEntryUsd * (Number(gov.multiplier) || 1.0)
@@ -1328,6 +1336,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
   const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 12);
+  let currentRegime: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE" =
+    "LOW_LIQUIDITY";
 
   log(runId, "START", {
     user_id: ctx.user_id,
@@ -1360,7 +1370,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     },
     hardStop: { hardStopEnabled, hardStopLossBps },
     reconStatus,
-    volGate: { minEntryVolBps },
+    volGate: { minEntryVolBps, currentRegime },
   });
 
   if (!gates.PULSE_ENTITLED)
@@ -1399,7 +1409,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const lastBuy = await fetchLastBuyFill(ctx);
   const lastFill = await fetchLastFillAny(ctx);
 
-  const lastFillIso = lastFill.ok ? lastFill.time : lastBuy.ok ? lastBuy.entryTime : null;
+  const lastFillIso = lastFill.ok
+    ? lastFill.time
+    : lastBuy.ok
+    ? lastBuy.entryTime
+    : null;
   const sinceMs = msSince(lastFillIso);
 
   const cooldownOk = sinceMs >= cooldownMs;
@@ -1456,12 +1470,22 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     const entryPeak = await fetchPeakWindowWithVol(ctx);
     const measuredEntryVolBps =
-      entryPeak.ok && Number.isFinite(entryPeak.volBps) ? entryPeak.volBps : null;
+      entryPeak.ok && Number.isFinite(entryPeak.volBps)
+        ? entryPeak.volBps
+        : null;
 
-    if (measuredEntryVolBps !== null && measuredEntryVolBps < minEntryVolBps) {
+    if (measuredEntryVolBps !== null) {
+      currentRegime = detectMarketRegime(measuredEntryVolBps);
+    }
+
+    if (
+      currentRegime === "LOW_LIQUIDITY" ||
+      (measuredEntryVolBps !== null && measuredEntryVolBps < minEntryVolBps)
+    ) {
       log(runId, "VOL_BLOCK_ENTRY", {
         measuredEntryVolBps,
         minEntryVolBps,
+        currentRegime,
       });
       return {
         ok: true,
@@ -1471,6 +1495,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
       };
     }
 
@@ -1478,12 +1503,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     if (gov.defense) {
       const conf = Number(reconStatus.confidence ?? 0);
       const okDefense =
-        Number.isFinite(conf) && conf >= defenseConf && reconStatus.entryAllowed;
+        Number.isFinite(conf) &&
+        conf >= defenseConf &&
+        reconStatus.entryAllowed;
       if (!okDefense) {
         log(runId, "DEFENSE_BLOCK_ENTRY", {
           ddPct: gov.ddPct,
           reqConf: defenseConf,
           reconStatus,
+          currentRegime,
         });
         return {
           ok: true,
@@ -1493,6 +1521,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           cooldown,
           reconStatus,
           equityGov: gov,
+          regime: currentRegime,
         };
       }
     }
@@ -1504,6 +1533,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         regime: reconStatus.regime,
         conf: reconStatus.confidence,
         side: reconStatus.side,
+        currentRegime,
       });
       return {
         ok: true,
@@ -1513,6 +1543,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
       };
     }
 
@@ -1525,6 +1556,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
         would_buy_quote_usd: entryQuoteUsd,
       };
     }
@@ -1536,7 +1568,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         client_order_id: `yc_mgr_${ctx.user_id}_buy_ioc_${Date.now()}`,
         product_id: PRODUCT_ID,
         side: "BUY",
-        order_configuration: { market_market_ioc: { quote_size: entryQuoteUsd } },
+        order_configuration: {
+          market_market_ioc: { quote_size: entryQuoteUsd },
+        },
       };
 
       const buy = await cbPost(ctx, path, reqPayload);
@@ -1561,7 +1595,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         run_id: runId,
         mode: "ENTRY_BUY_IOC",
         reason: "entry",
-        decision: null,
+        decision: { regime: currentRegime },
         recon_status: reconStatus,
         equity_gov: gov,
 
@@ -1590,6 +1624,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
         buy,
       };
     }
@@ -1611,6 +1646,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           cooldown,
           reconStatus,
           equityGov: gov,
+          regime: currentRegime,
           error: "maker_order_failed",
         };
       }
@@ -1620,7 +1656,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         client_order_id: `yc_mgr_${ctx.user_id}_buy_ioc_${Date.now()}`,
         product_id: PRODUCT_ID,
         side: "BUY",
-        order_configuration: { market_market_ioc: { quote_size: entryQuoteUsd } },
+        order_configuration: {
+          market_market_ioc: { quote_size: entryQuoteUsd },
+        },
       };
       const buy = await cbPost(ctx, path, reqPayload);
       const orderId = extractOrderId(buy.json);
@@ -1645,6 +1683,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         mode: "ENTRY_BUY_IOC_FALLBACK",
         reason: "maker_failed_fallback_ioc",
         decision: {
+          regime: currentRegime,
           makerAttempt: {
             baseSize: attempt.baseSize,
             limitPrice: attempt.limitPrice,
@@ -1681,6 +1720,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
         buy,
       };
     }
@@ -1720,6 +1760,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         mode: "ENTRY_BUY_MAKER",
         reason: "maker_filled_or_done",
         decision: {
+          regime: currentRegime,
           maker_order_id: makerOrderId,
           status: lastSt,
           makerAttempt: {
@@ -1766,6 +1807,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
         maker_order_id: makerOrderId,
       };
     }
@@ -1780,6 +1822,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         cooldown,
         reconStatus,
         equityGov: gov,
+        regime: currentRegime,
         maker_order_id: makerOrderId,
       };
     }
@@ -1813,7 +1856,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       run_id: runId,
       mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT",
       reason: "maker_timeout_fallback_ioc",
-      decision: { maker_order_id: makerOrderId, status: lastSt },
+      decision: {
+        regime: currentRegime,
+        maker_order_id: makerOrderId,
+        status: lastSt,
+      },
       recon_status: reconStatus,
       equity_gov: gov,
 
@@ -1844,6 +1891,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       cooldown,
       reconStatus,
       equityGov: gov,
+      regime: currentRegime,
       buy,
     };
   }
@@ -1952,6 +2000,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     ? "trail_stop"
     : "hold";
 
+  currentRegime = detectMarketRegime(peak.volBps);
+
   const decision = {
     entryPrice,
     entryTime: lastBuy.entryTime,
@@ -1961,6 +2011,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     current,
     peakPrice,
     pnlBps,
+    regime: currentRegime,
     trailingActive: trailArmed,
     drawdownFromPeakBps,
     profitTargetBps,
@@ -1984,6 +2035,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   log(runId, "EXIT_DECISION", {
     reason,
     pnlBps,
+    regime: currentRegime,
     trailingActive: trailArmed,
     drawdownFromPeakBps,
     positionSize: (position as any).base_available,
@@ -2480,6 +2532,7 @@ async function runForAllUsers(masterRunId: string) {
         equityGov: (out as any)?.equityGov,
         reconStatus: (out as any)?.reconStatus,
         reason: (out as any)?.reason,
+        regime: (out as any)?.regime,
         error: (out as any)?.error,
       });
     } catch (e: any) {
