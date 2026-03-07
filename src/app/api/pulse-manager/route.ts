@@ -870,8 +870,6 @@ async function fetchFillsForOrder(
   | { ok: true; fills: ExecFill[]; raw: any; text: string }
   | { ok: false; error: any; raw: any; text: string }
 > {
-  // Coinbase fills endpoint is the authoritative source of executions.
-  // Some accounts return `fills`, others nest differently; we parse best-effort.
   const path = `/api/v3/brokerage/orders/historical/fills?order_ids=${encodeURIComponent(
     orderId
   )}&product_ids=${encodeURIComponent(PRODUCT_ID)}&limit=100`;
@@ -899,8 +897,6 @@ async function fetchFillsForOrder(
     const price = Number(f?.price || f?.fill_price || 0);
     const size = Number(f?.size || f?.filled_size || f?.base_size || 0);
 
-    // quote might be provided as `commissionable_value` / `trade_value` etc.
-    // If not present, compute: price * size
     const quoteRaw =
       Number(
         f?.trade_value || f?.value || f?.quote_size || f?.filled_value || 0
@@ -963,7 +959,6 @@ async function fetchExecutionSummary(
   let status: string | null = null;
   let done = false;
 
-  // 1) Poll order status a few times (fast)
   let st: any = null;
   for (let i = 0; i < 6; i++) {
     const s = await fetchOrderStatus(ctx, orderId);
@@ -973,20 +968,17 @@ async function fetchExecutionSummary(
       status = s.status || null;
       done = !!s.done;
 
-      // if we already have filledBase from status, still prefer fills for accuracy
       if (done || (s.filledBase ?? 0) > 0) break;
     }
     await sleep(500);
   }
 
-  // 2) Pull fills for this order (authoritative)
   const fr = await fetchFillsForOrder(ctx, orderId);
   raw.fillsResp = fr.raw;
   raw.fillsText = fr.text;
 
   const fills = fr.ok ? fr.fills : [];
 
-  // 3) Prefer fills-derived numbers; fallback to status-derived numbers
   const fromFills = summarizeFills(orderId, fills);
 
   const filledBase =
@@ -1335,6 +1327,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
+  const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 12);
 
   log(runId, "START", {
     user_id: ctx.user_id,
@@ -1367,6 +1360,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     },
     hardStop: { hardStopEnabled, hardStopLossBps },
     reconStatus,
+    volGate: { minEntryVolBps },
   });
 
   if (!gates.PULSE_ENTITLED)
@@ -1459,6 +1453,26 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         reconStatus,
         equityGov: gov,
       };
+
+    const entryPeak = await fetchPeakWindowWithVol(ctx);
+    const measuredEntryVolBps =
+      entryPeak.ok && Number.isFinite(entryPeak.volBps) ? entryPeak.volBps : null;
+
+    if (measuredEntryVolBps !== null && measuredEntryVolBps < minEntryVolBps) {
+      log(runId, "VOL_BLOCK_ENTRY", {
+        measuredEntryVolBps,
+        minEntryVolBps,
+      });
+      return {
+        ok: true,
+        mode: "NO_POSITION_VOL_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+      };
+    }
 
     // Equity defense mode: only allow entry if Recon confidence >= DEFENSE_CONF AND recon allows entry
     if (gov.defense) {
