@@ -17,6 +17,10 @@ export default function AffiliateSuccessPage({
       ? codeRaw[0]
       : "";
 
+  const dashboardHref = code
+    ? `/affiliate/dashboard?code=${encodeURIComponent(code)}`
+    : "/affiliate/dashboard";
+
   return (
     <main className="min-h-screen bg-[#050B16] text-white">
       <div className="mx-auto max-w-3xl px-6 py-16">
@@ -47,29 +51,29 @@ export default function AffiliateSuccessPage({
           )}
 
           <div className="mt-4 text-sm text-white/75">
-            Next: refer members with your link from the Affiliate page. Payouts will
-            be available once the affiliate is approved.
+            Next: open your affiliate dashboard to copy your referral link and
+            start sharing it.
           </div>
         </div>
 
         <div className="mt-8 grid gap-3 sm:grid-cols-2">
           <Link
             href="/affiliate"
-            className="w-full rounded-xl bg-[#ffcf33] px-4 py-3 text-center font-bold text-black"
+            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-center font-bold text-white"
           >
             Back to Affiliate Page
           </Link>
 
           <Link
-            href="/dashboard"
-            className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-center font-bold text-white"
+            href={dashboardHref}
+            className="w-full rounded-xl bg-[#ffcf33] px-4 py-3 text-center font-bold text-black"
           >
-            Go to Dashboard
+            Go to Affiliate Dashboard
           </Link>
         </div>
 
         <div className="mt-6 text-xs text-white/45">
-          affiliate-success-page-build: v1
+          affiliate-success-page-build: v2-dashboard-flow
         </div>
       </div>
     </main>
