@@ -1,115 +1,178 @@
+"use client";
+
 // src/app/pricing/page.tsx
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 const STARTER_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_STARTER ?? "#";
 const RECON_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_RECON ?? "#";
 const PRO_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_PRO ?? "#";
 const ATLAS_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ?? "#";
 
+const REF_STORAGE_KEY = "yc_ref";
+
+function normalizeRef(value: string | null | undefined) {
+  return String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "")
+    .slice(0, 64);
+}
+
+function buildCheckoutUrl(baseUrl: string, refCode: string) {
+  if (!baseUrl || baseUrl === "#") return "#";
+
+  try {
+    const url = new URL(baseUrl);
+    if (refCode) {
+      url.searchParams.set("client_reference_id", `aff_${refCode}`);
+    }
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
+}
+
 export default function PricingPage() {
+  const searchParams = useSearchParams();
+  const [refCode, setRefCode] = useState("");
+
+  useEffect(() => {
+    const fromUrl = normalizeRef(searchParams.get("ref"));
+
+    if (fromUrl) {
+      try {
+        localStorage.setItem(REF_STORAGE_KEY, fromUrl);
+      } catch {}
+      setRefCode(fromUrl);
+      return;
+    }
+
+    try {
+      const saved = normalizeRef(localStorage.getItem(REF_STORAGE_KEY));
+      if (saved) setRefCode(saved);
+    } catch {}
+  }, [searchParams]);
+
+  const starterHref = useMemo(
+    () => buildCheckoutUrl(STARTER_URL, refCode),
+    [refCode]
+  );
+  const growthHref = useMemo(
+    () => buildCheckoutUrl(RECON_URL, refCode),
+    [refCode]
+  );
+  const proHref = useMemo(() => buildCheckoutUrl(PRO_URL, refCode), [refCode]);
+  const atlasHref = useMemo(
+    () => buildCheckoutUrl(ATLAS_URL, refCode),
+    [refCode]
+  );
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <div className="mx-auto max-w-6xl px-4 py-20">
-        {/* HERO */}
         <div className="mb-14 max-w-3xl">
           <p className="text-xs font-semibold tracking-[0.3em] text-sky-400 uppercase">
             Pricing
           </p>
 
-          <h1 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
-            Real trading engines.
+          <h1 className="mt-4 text-4xl font-extrabold leading-tight md:text-5xl">
+            Direct execution memberships.
             <br />
             <span className="text-amber-400">
-              Direct execution. Real guardrails.
+              Real guardrails. Real account control.
             </span>
           </h1>
 
           <p className="mt-6 text-lg text-slate-300">
-            YieldCraft is a direct-execution AI trading platform.
+            YieldCraft is a direct-execution AI trading platform built for
+            disciplined operators.
             <br />
-            Start simple. Turn engines on as you grow.
+            Start lean. Upgrade as your account and needs grow.
           </p>
 
           <p className="mt-3 text-sm text-slate-400">
-            No signal chasing. No black boxes. Your capital stays on your exchange —
-            YieldCraft only executes.
+            No signal chasing. No black boxes. Your capital stays on your
+            exchange — YieldCraft only executes your enabled strategy stack.
           </p>
+
+          {refCode ? (
+            <div className="mt-5 inline-flex rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-xs font-semibold text-emerald-200">
+              Affiliate referral applied: {refCode}
+            </div>
+          ) : null}
         </div>
 
-        {/* ACTIVE TRADING ENGINES */}
         <div className="grid gap-6 md:grid-cols-3">
-          {/* Pulse Starter */}
           <PlanCard
-            title="Pulse Starter"
-            description="A single BTC execution engine with strict risk controls."
+            title="Starter"
+            description="Entry-level direct execution for smaller accounts and disciplined first-time users."
             price="$4.99"
             bullets={[
-              "Pulse BTC bot (maker-first execution)",
-              "Designed for small accounts",
-              "Daily loss caps & cooldowns",
-              "Email-only support",
+              "BTC execution engine",
+              "Risk caps, cooldowns, and hard stops",
+              "Built for smaller starting balances",
+              "Email support",
             ]}
-            cta="Subscribe to Pulse Starter"
-            href={STARTER_URL}
+            cta="Start Starter"
+            href={starterHref}
           />
 
-          {/* Pulse + Recon */}
           <PlanCard
-            title="Pulse + Recon"
+            title="Growth"
             highlight
-            description="Execution plus market-regime intelligence."
+            description="Execution plus market-awareness for users who want a smarter and more stable operating layer."
             price="$9"
             bullets={[
-              "Everything in Pulse Starter",
-              "Recon regime & confidence detection",
-              "Smarter entries & exits",
-              "More stable behavior across cycles",
+              "Everything in Starter",
+              "Regime and confidence intelligence",
+              "Smarter entry filtering",
+              "Better cycle-to-cycle stability",
             ]}
-            cta="Subscribe to Pulse + Recon"
-            href={RECON_URL}
+            cta="Start Growth"
+            href={growthHref}
           />
 
-          {/* Pro Suite */}
           <PlanCard
-            title="Pro Suite (All Bots)"
-            description="Full active-trading stack for serious operators."
+            title="Pro"
+            description="Full membership tier for serious operators who want the complete YieldCraft stack."
             price="$39"
             bullets={[
-              "Pulse + Recon included",
-              "Horizon, Ignition, Edge, Hybrid (as released)",
-              "Future BTC bots automatically added",
+              "Everything in Growth",
+              "Access to the full active stack",
+              "New released systems included",
               "Priority feature access",
             ]}
-            cta="Subscribe to Pro Suite"
-            href={PRO_URL}
+            cta="Start Pro"
+            href={proHref}
           />
         </div>
 
-        {/* ATLAS */}
         <div className="relative mt-12 rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
           <div className="max-w-3xl">
             <p className="mb-2 inline-flex rounded-full bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-300">
-              Long-Term Engine
+              Long-Term Allocation
             </p>
 
-            <h2 className="text-2xl md:text-3xl font-bold">
-              YieldCraft Atlas
+            <h2 className="text-2xl font-bold md:text-3xl">
+              Atlas Membership
             </h2>
 
             <p className="mt-4 text-slate-300">
               A buy-only, weekly capital allocator designed for disciplined
-              long-term accumulation — without timing or predictions.
+              long-term accumulation without prediction-based exits.
             </p>
 
             <ul className="mt-5 space-y-2 text-sm text-slate-300">
               <li>• Buy-only weekly execution</li>
-              <li>• Client-controlled exits (you decide when to sell)</li>
+              <li>• Client-controlled exits</li>
               <li>• Liquidity-first universe</li>
-              <li>• Runs in a separate portfolio (no risk bleed)</li>
+              <li>• Separate portfolio logic</li>
             </ul>
 
             <p className="mt-4 text-xs text-slate-500">
-              Atlas adjusts future buys over time — it never auto-sells existing holdings.
+              Atlas adjusts future buys over time — it never auto-sells existing
+              holdings.
             </p>
           </div>
 
@@ -127,17 +190,16 @@ export default function PricingPage() {
             </Link>
 
             <a
-              href={ATLAS_URL}
+              href={atlasHref}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300"
             >
-              Subscribe to Atlas
+              Start Atlas
             </a>
           </div>
         </div>
 
-        {/* FOOTER ACTIONS */}
         <div className="mt-14 flex flex-wrap gap-4">
           <Link
             href="/quick-start"
