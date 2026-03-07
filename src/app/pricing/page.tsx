@@ -3,7 +3,6 @@
 // src/app/pricing/page.tsx
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
 const STARTER_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_STARTER ?? "#";
 const RECON_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_RECON ?? "#";
@@ -34,25 +33,25 @@ function buildCheckoutUrl(baseUrl: string, refCode: string) {
 }
 
 export default function PricingPage() {
-  const searchParams = useSearchParams();
   const [refCode, setRefCode] = useState("");
 
   useEffect(() => {
-    const fromUrl = normalizeRef(searchParams.get("ref"));
-
-    if (fromUrl) {
-      try {
-        localStorage.setItem(REF_STORAGE_KEY, fromUrl);
-      } catch {}
-      setRefCode(fromUrl);
-      return;
-    }
-
     try {
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = normalizeRef(params.get("ref"));
+
+      if (fromUrl) {
+        localStorage.setItem(REF_STORAGE_KEY, fromUrl);
+        setRefCode(fromUrl);
+        return;
+      }
+
       const saved = normalizeRef(localStorage.getItem(REF_STORAGE_KEY));
       if (saved) setRefCode(saved);
-    } catch {}
-  }, [searchParams]);
+    } catch {
+      // no-op
+    }
+  }, []);
 
   const starterHref = useMemo(
     () => buildCheckoutUrl(STARTER_URL, refCode),
@@ -72,7 +71,7 @@ export default function PricingPage() {
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <div className="mx-auto max-w-6xl px-4 py-20">
         <div className="mb-14 max-w-3xl">
-          <p className="text-xs font-semibold tracking-[0.3em] text-sky-400 uppercase">
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">
             Pricing
           </p>
 
