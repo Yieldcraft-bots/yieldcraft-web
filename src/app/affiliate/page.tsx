@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, type FormEvent } from "react";
 
 type ApplyState =
@@ -79,9 +80,6 @@ export default function AffiliatePage() {
         return;
       }
 
-      // Expected shapes we support:
-      // A) { ok:true, affiliateCode, affiliateLink, onboardingUrl? }
-      // B) { ok:true, status:'pending', commission_rate, affiliateCode, affiliateLink, onboardingUrl? }
       const ok = Boolean(data?.ok);
       const affiliateCode = String(
         data?.affiliateCode || data?.affiliate_code || ""
@@ -89,9 +87,9 @@ export default function AffiliatePage() {
       const affiliateLink = String(
         data?.affiliateLink || data?.affiliate_link || ""
       );
-      const onboardingUrl = (data?.onboardingUrl || data?.onboarding_url || null) as
-        | string
-        | null;
+      const onboardingUrl = (
+        data?.onboardingUrl || data?.onboarding_url || null
+      ) as string | null;
 
       if (!ok || !affiliateCode || !affiliateLink) {
         setApplyState({
@@ -108,7 +106,8 @@ export default function AffiliatePage() {
         affiliateCode,
         affiliateLink,
         onboardingUrl,
-        message: data?.message || "Application received. Your referral link is ready.",
+        message:
+          data?.message || "Application received. Your referral link is ready.",
       });
     } catch (err: any) {
       setApplyState({
@@ -126,19 +125,27 @@ export default function AffiliatePage() {
   return (
     <main className="min-h-screen bg-[#050B16] text-white">
       <div className="mx-auto max-w-5xl px-6 py-16">
-        <div className="mb-10">
-          <h1 className="text-5xl font-extrabold tracking-tight">
-            Affiliate <span className="text-[#ffcf33]">Program</span>
-          </h1>
+        <div className="mb-10 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h1 className="text-5xl font-extrabold tracking-tight">
+              Affiliate <span className="text-[#ffcf33]">Program</span>
+            </h1>
 
-          <p className="mt-4 text-lg text-white/80">
-            Earn <span className="font-bold text-[#ffcf33]">30% recurring</span>{" "}
-            when you refer new members to YieldCraft.
-          </p>
+            <p className="mt-4 text-lg text-white/80">
+              Earn <span className="font-bold text-[#ffcf33]">30% recurring</span>{" "}
+              when you refer new members to YieldCraft.
+            </p>
+          </div>
+
+          <Link
+            href="/affiliate/dashboard"
+            className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white hover:bg-white/10"
+          >
+            Already an affiliate? Open Dashboard
+          </Link>
         </div>
 
         <div className="grid gap-10 md:grid-cols-2">
-          {/* Left: value props */}
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
             <h2 className="text-xl font-semibold">What you get</h2>
             <ul className="mt-4 space-y-2 text-white/80">
@@ -177,7 +184,6 @@ export default function AffiliatePage() {
             </div>
           </div>
 
-          {/* Right: form */}
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
             <form onSubmit={onSubmit} className="space-y-4">
               <input
@@ -244,7 +250,6 @@ export default function AffiliatePage() {
                 {applyState.status === "submitting" ? "Submitting..." : "Apply"}
               </button>
 
-              {/* Status */}
               {applyState.status === "error" && (
                 <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
                   <div className="font-semibold">{applyState.message}</div>
@@ -278,12 +283,11 @@ export default function AffiliatePage() {
                     </div>
                   </div>
 
-                  <div className="mt-4">
+                  <div className="mt-4 space-y-3">
                     <button
                       type="button"
                       onClick={() => {
                         if (applyState.onboardingUrl) {
-                          // ✅ Same-tab redirect avoids popup blockers
                           window.location.href = applyState.onboardingUrl;
                         }
                       }}
@@ -292,18 +296,30 @@ export default function AffiliatePage() {
                     >
                       Finish Stripe Payout Setup
                     </button>
-                    <p className="mt-2 text-xs text-white/60">
-                      If this button is disabled, it means the server didn’t return an
-                      onboarding URL yet (usually missing Stripe Connect config). Your
-                      referral link is still valid.
+
+                    <Link
+                      href={
+                        applyState.affiliateCode
+                          ? `/affiliate/dashboard?code=${encodeURIComponent(
+                              applyState.affiliateCode
+                            )}`
+                          : "/affiliate/dashboard"
+                      }
+                      className="block w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-center text-sm font-bold text-white"
+                    >
+                      Open Affiliate Dashboard
+                    </Link>
+
+                    <p className="text-xs text-white/60">
+                      If Stripe setup is already done, you can open your affiliate
+                      dashboard anytime to copy your referral link.
                     </p>
                   </div>
                 </div>
               )}
 
-              {/* Keep this so you KNOW if you’re on old build */}
               <div className="pt-2 text-[11px] text-white/35">
-                affiliate-page-build: v2-members-copy
+                affiliate-page-build: v3-dashboard-entry
               </div>
             </form>
           </div>
