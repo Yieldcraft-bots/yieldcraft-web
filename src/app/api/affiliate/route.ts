@@ -40,7 +40,6 @@ async function sendAffiliateEmails(args: {
   affiliateLink: string;
   onboardingUrl?: string | null;
 }) {
-  // Use Resend directly (fast + no internal fetch)
   const resend = new Resend(requireEnv("RESEND_API_KEY"));
   const from = "YieldCraft <dk@yieldcraft.co>";
 
@@ -145,7 +144,6 @@ export async function POST(req: Request) {
 
     if (existingErr) throw existingErr;
 
-    // Stripe Connect Express account
     let stripeAccountId = (existing?.stripe_account_id as string | null) || null;
 
     if (!stripeAccountId) {
@@ -225,7 +223,6 @@ export async function POST(req: Request) {
       }
     }
 
-    // Stripe onboarding link
     const accountLink = await stripe.accountLinks.create({
       account: stripeAccountId,
       refresh_url: `${baseUrl}/affiliate?refresh=1`,
@@ -235,9 +232,8 @@ export async function POST(req: Request) {
       type: "account_onboarding",
     });
 
-    const affiliateLink = `${baseUrl}/?ref=${affiliateCode}`;
+    const affiliateLink = `${baseUrl}/pricing?ref=${affiliateCode}`;
 
-    // ✅ Send emails (do NOT block affiliate flow if email fails)
     let emailStatus: any = { ok: false };
     try {
       const sent = await sendAffiliateEmails({
