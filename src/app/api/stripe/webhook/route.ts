@@ -24,7 +24,7 @@ export async function GET() {
   return json(200, {
     ok: true,
     route: "api/stripe/webhook",
-    version: "entitlements_writer_v6_fix_user_match_and_subscriptions",
+    version: "entitlements_writer_v7_auth_listusers_fallback",
     ts: new Date().toISOString(),
   });
 }
@@ -80,13 +80,26 @@ async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
   const cleanEmail = String(email || "").trim().toLowerCase();
   if (!cleanEmail) return null;
 
-  // 1) Best path: Auth admin lookup
+  // 1) Supabase Auth admin lookup via listUsers()
   try {
-    const admin = supabaseAdmin.auth?.admin as any;
-    if (admin?.getUserByEmail) {
-      const res = await admin.getUserByEmail(cleanEmail);
-      const user = res?.data?.user;
-      if (user?.id) return user.id as string;
+    const pageSize = 1000;
+    let page = 1;
+
+    while (page <= 5) {
+      const res = await supabaseAdmin.auth.admin.listUsers({
+        page,
+        perPage: pageSize,
+      });
+
+      const users = res?.data?.users || [];
+      const matched = users.find(
+        (u: any) => String(u?.email || "").trim().toLowerCase() === cleanEmail
+      );
+
+      if (matched?.id) return matched.id as string;
+
+      if (users.length < pageSize) break;
+      page += 1;
     }
   } catch {
     // ignore
@@ -201,14 +214,12 @@ async function upsertSubscriptionRow(
       updated_at: new Date().toISOString(),
     };
 
-    // Primary path: unique index on stripe_subscription_id
     const { error } = await supabaseAdmin
       .from("subscriptions")
       .upsert(payload, { onConflict: "stripe_subscription_id" });
 
     if (!error) return { ok: true };
 
-    // Fallback: update latest row for this user if needed
     const { error: updErr } = await supabaseAdmin
       .from("subscriptions")
       .update({
@@ -223,7 +234,11 @@ async function upsertSubscriptionRow(
 
     if (!updErr) return { ok: true };
 
-    return { ok: false, error: updErr?.message || error?.message || "subscription_upsert_failed" };
+    return {
+      ok: false,
+      error:
+        updErr?.message || error?.message || "subscription_upsert_failed",
+    };
   } catch (err: any) {
     return { ok: false, error: err?.message || err };
   }
@@ -394,10 +409,6 @@ export async function POST(req: Request) {
       ? { pulse: false, recon: false, atlas: false }
       : entitlementsFromPrice(priceId);
 
-    /**
-     * Log affiliate conversion FIRST on checkout completion,
-     * even if no app user match exists yet.
-     */
     let affiliateLogged = false;
     let affiliateCode: string | null = null;
 
@@ -443,9 +454,6 @@ export async function POST(req: Request) {
       }
     }
 
-    /**
-     * USER MATCHING FOR ENTITLEMENTS / SUBSCRIPTIONS
-     */
     let userId: string | null = null;
 
     if (email) userId = await resolveUserIdByEmail(supabaseAdmin, email);
