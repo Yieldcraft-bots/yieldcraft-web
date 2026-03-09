@@ -15,6 +15,15 @@ type Entitlements = {
   created_at?: string | null;
 };
 
+type SubscriptionRow = {
+  plan: string | null;
+  status: string | null;
+  stripe_subscription_id: string | null;
+  stripe_price_id?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 function fmtDate(d?: Date | null) {
   if (!d) return "—";
   try {
@@ -101,12 +110,14 @@ function SoftButton({
   href,
   variant = "neutral",
   className,
+  disabled = false,
 }: {
   children: ReactNode;
   onClick?: () => void;
   href?: string;
   variant?: "neutral" | "danger" | "gold";
   className?: string;
+  disabled?: boolean;
 }) {
   const base =
     "inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-white/10";
@@ -117,9 +128,13 @@ function SoftButton({
       ? "border border-amber-400/30 bg-amber-400/10 text-amber-100 hover:bg-amber-400/15"
       : "border border-white/10 bg-white/5 text-white/85 hover:bg-white/10";
 
+  const disabledStyles = disabled
+    ? "cursor-not-allowed opacity-50 hover:bg-inherit"
+    : "";
+
   if (href) {
     return (
-      <Link href={href} className={cx(base, styles, className)}>
+      <Link href={href} className={cx(base, styles, disabledStyles, className)}>
         {children}
       </Link>
     );
@@ -129,7 +144,8 @@ function SoftButton({
     <button
       type="button"
       onClick={onClick}
-      className={cx(base, styles, className)}
+      disabled={disabled}
+      className={cx(base, styles, disabledStyles, className)}
     >
       {children}
     </button>
@@ -229,6 +245,10 @@ export default function AccountPage() {
   const [coinbaseConnected, setCoinbaseConnected] = useState(false);
   const [coinbaseGreen, setCoinbaseGreen] = useState(false);
 
+  const [subscription, setSubscription] = useState<SubscriptionRow | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelMessage, setCancelMessage] = useState<string>("");
+
   useEffect(() => {
     let mounted = true;
 
@@ -264,6 +284,30 @@ export default function AccountPage() {
         setPlanName(metaPlan);
 
         try {
+          const { data: subRow } = await supabase
+            .from("subscriptions")
+            .select(
+              "plan, status, stripe_subscription_id, stripe_price_id, created_at, updated_at"
+            )
+            .eq("user_id", u.id)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (mounted && subRow) {
+            setSubscription(subRow as SubscriptionRow);
+
+            if (subRow.plan && typeof subRow.plan === "string") {
+              const cleanPlan =
+                subRow.plan.charAt(0).toUpperCase() + subRow.plan.slice(1);
+              setPlanName(`${cleanPlan} Plan`);
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        try {
           const r = await fetch("/api/entitlements", {
             cache: "no-store",
             headers: { Authorization: `Bearer ${accessToken}` },
@@ -281,9 +325,6 @@ export default function AccountPage() {
               atlas: !!e.atlas,
               created_at: e.created_at ?? null,
             });
-
-            const anyOn = !!(e.pulse || e.recon || e.atlas);
-            setPlanName(anyOn ? "Active Member" : "Starter Plan");
           } else {
             setEntitlements({
               pulse: false,
@@ -385,6 +426,63 @@ export default function AccountPage() {
     router.push(`/forgot-password${q}`);
   }
 
+  async function cancelSubscription() {
+    if (!subscription?.stripe_subscription_id) {
+      setCancelMessage(
+        "No active Stripe subscription was found on this account yet."
+      );
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Are you sure you want to cancel your subscription? This stops future billing."
+    );
+    if (!confirmed) return;
+
+    try {
+      setCancelBusy(true);
+      setCancelMessage("");
+
+      const res = await fetch("/api/cancel-subscription", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subscriptionId: subscription.stripe_subscription_id,
+        }),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Cancel failed");
+      }
+
+      setSubscription((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "canceled",
+            }
+          : prev
+      );
+
+      setEntitlements({
+        pulse: false,
+        recon: false,
+        atlas: false,
+        created_at: entitlements.created_at ?? null,
+      });
+
+      setCancelMessage("Subscription canceled successfully.");
+    } catch (err: any) {
+      setCancelMessage(err?.message || "Unable to cancel subscription.");
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-950 text-white/70">
@@ -402,6 +500,9 @@ export default function AccountPage() {
     entitlements.recon,
     entitlements.atlas,
   ].filter(Boolean).length;
+
+  const hasCancelableSubscription =
+    !!subscription?.stripe_subscription_id && subscription.status === "active";
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -474,6 +575,83 @@ export default function AccountPage() {
                 <div className="mt-1">
                   <Chip tone="good">Active</Chip>
                 </div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-white">
+                    Billing & Subscription
+                  </div>
+                  <div className="mt-1 text-sm text-white/60">
+                    Manage your active Stripe membership.
+                  </div>
+                </div>
+
+                <Chip
+                  tone={
+                    subscription?.status === "canceled"
+                      ? "bad"
+                      : subscription?.status === "active"
+                      ? "good"
+                      : "warn"
+                  }
+                >
+                  {subscription?.status || "No record"}
+                </Chip>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3">
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="text-[11px] uppercase tracking-wider text-white/45">
+                    Current plan
+                  </div>
+                  <div className="mt-1 font-semibold text-white">
+                    {subscription?.plan || "Starter"}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="text-[11px] uppercase tracking-wider text-white/45">
+                    Stripe subscription ID
+                  </div>
+                  <div className="mt-1 break-all text-sm text-white/75">
+                    {subscription?.stripe_subscription_id || "Not found yet"}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-3">
+                <SoftButton
+                  onClick={cancelSubscription}
+                  variant="danger"
+                  disabled={!hasCancelableSubscription || cancelBusy}
+                >
+                  {cancelBusy ? "Canceling..." : "Cancel Subscription"}
+                </SoftButton>
+
+                <SoftButton href="/pricing" variant="neutral">
+                  Change plan
+                </SoftButton>
+              </div>
+
+              {cancelMessage ? (
+                <div
+                  className={cx(
+                    "mt-4 rounded-2xl border px-4 py-3 text-sm",
+                    cancelMessage.toLowerCase().includes("success")
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                      : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                  )}
+                >
+                  {cancelMessage}
+                </div>
+              ) : null}
+
+              <div className="mt-4 text-xs text-white/45">
+                Canceling stops future billing. Access and entitlement updates
+                may take a moment to fully sync.
               </div>
             </div>
 
