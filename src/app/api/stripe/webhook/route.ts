@@ -1,4 +1,3 @@
-// src/app/api/stripe/webhook/route.ts
 import Stripe from "stripe";
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
@@ -25,7 +24,7 @@ export async function GET() {
   return json(200, {
     ok: true,
     route: "api/stripe/webhook",
-    version: "entitlements_writer_v5_affiliate_before_user_match",
+    version: "entitlements_writer_v6_fix_user_match_and_subscriptions",
     ts: new Date().toISOString(),
   });
 }
@@ -64,11 +63,28 @@ function entitlementsFromPrice(priceId: string) {
   return { pulse, recon, atlas };
 }
 
+function planFromPrice(priceId: string) {
+  const PULSE_STARTER = process.env.STRIPE_PRICE_PULSE_STARTER || "";
+  const PULSE_RECON = process.env.STRIPE_PRICE_PULSE_RECON || "";
+  const ATLAS = process.env.STRIPE_PRICE_ATLAS || "";
+  const PRO = process.env.STRIPE_PRICE_PRO_SUITE || "";
+
+  if (priceId === PULSE_STARTER) return "starter";
+  if (priceId === PULSE_RECON) return "growth";
+  if (priceId === ATLAS) return "atlas";
+  if (priceId === PRO) return "pro";
+  return "starter";
+}
+
 async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  if (!cleanEmail) return null;
+
+  // 1) Best path: Auth admin lookup
   try {
     const admin = supabaseAdmin.auth?.admin as any;
     if (admin?.getUserByEmail) {
-      const res = await admin.getUserByEmail(email);
+      const res = await admin.getUserByEmail(cleanEmail);
       const user = res?.data?.user;
       if (user?.id) return user.id as string;
     }
@@ -76,14 +92,18 @@ async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
     // ignore
   }
 
+  // 2) Fallback: profiles table may use user_id instead of id
   try {
     const { data, error } = await supabaseAdmin
       .from("profiles")
-      .select("id")
-      .eq("email", email)
+      .select("*")
+      .eq("email", cleanEmail)
       .maybeSingle();
 
-    if (!error && data?.id) return data.id as string;
+    if (!error && data) {
+      if (data.user_id) return data.user_id as string;
+      if (data.id) return data.id as string;
+    }
   } catch {
     // ignore
   }
@@ -163,6 +183,7 @@ async function upsertSubscriptionRow(
   supabaseAdmin: any,
   row: {
     user_id: string;
+    plan: string;
     stripe_customer_id: string | null;
     stripe_subscription_id: string;
     stripe_price_id: string | null;
@@ -170,19 +191,41 @@ async function upsertSubscriptionRow(
   }
 ) {
   try {
-    await supabaseAdmin.from("subscriptions").upsert(
-      {
-        user_id: row.user_id,
+    const payload = {
+      user_id: row.user_id,
+      plan: row.plan,
+      stripe_customer_id: row.stripe_customer_id,
+      stripe_subscription_id: row.stripe_subscription_id,
+      stripe_price_id: row.stripe_price_id,
+      status: row.status,
+      updated_at: new Date().toISOString(),
+    };
+
+    // Primary path: unique index on stripe_subscription_id
+    const { error } = await supabaseAdmin
+      .from("subscriptions")
+      .upsert(payload, { onConflict: "stripe_subscription_id" });
+
+    if (!error) return { ok: true };
+
+    // Fallback: update latest row for this user if needed
+    const { error: updErr } = await supabaseAdmin
+      .from("subscriptions")
+      .update({
+        plan: row.plan,
         stripe_customer_id: row.stripe_customer_id,
         stripe_subscription_id: row.stripe_subscription_id,
         stripe_price_id: row.stripe_price_id,
         status: row.status,
         updated_at: new Date().toISOString(),
-      },
-      { onConflict: "stripe_subscription_id" }
-    );
-  } catch {
-    // ignore if table/constraint not present
+      })
+      .eq("user_id", row.user_id);
+
+    if (!updErr) return { ok: true };
+
+    return { ok: false, error: updErr?.message || error?.message || "subscription_upsert_failed" };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || err };
   }
 }
 
@@ -344,13 +387,14 @@ export async function POST(req: Request) {
       });
     }
 
+    const plan = planFromPrice(priceId);
+
     const isCanceled = type === "customer.subscription.deleted";
     const ent = isCanceled
       ? { pulse: false, recon: false, atlas: false }
       : entitlementsFromPrice(priceId);
 
     /**
-     * SAFE CHANGE:
      * Log affiliate conversion FIRST on checkout completion,
      * even if no app user match exists yet.
      */
@@ -401,7 +445,6 @@ export async function POST(req: Request) {
 
     /**
      * USER MATCHING FOR ENTITLEMENTS / SUBSCRIPTIONS
-     * This remains protected and only runs when we can resolve a user.
      */
     let userId: string | null = null;
 
@@ -424,10 +467,6 @@ export async function POST(req: Request) {
       }
     }
 
-    /**
-     * If no user match, do NOT fail the webhook.
-     * Affiliate logging may still have succeeded, which is what we want.
-     */
     if (!userId) {
       return json(200, {
         ok: true,
@@ -438,6 +477,7 @@ export async function POST(req: Request) {
         customerId,
         subscriptionId,
         priceId,
+        plan,
         entitlements: ent,
         affiliate_code: affiliateCode,
         affiliate_logged: affiliateLogged,
@@ -453,8 +493,9 @@ export async function POST(req: Request) {
       return json(500, { ok: false, error: "entitlements_write_failed" });
     }
 
-    await upsertSubscriptionRow(supabaseAdmin, {
+    const subWrite = await upsertSubscriptionRow(supabaseAdmin, {
       user_id: userId,
+      plan,
       stripe_customer_id: customerId,
       stripe_subscription_id: subscriptionId,
       stripe_price_id: priceId,
@@ -465,6 +506,11 @@ export async function POST(req: Request) {
         : "active",
     });
 
+    if (!subWrite.ok) {
+      console.log("[stripe.webhook] subscription write error:", subWrite.error);
+      return json(500, { ok: false, error: "subscription_write_failed" });
+    }
+
     return json(200, {
       ok: true,
       mapped: true,
@@ -473,6 +519,7 @@ export async function POST(req: Request) {
       customerId,
       subscriptionId,
       priceId,
+      plan,
       entitlements: ent,
       type,
       ent_write: entWrite.mode,
