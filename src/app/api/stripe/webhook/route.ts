@@ -25,7 +25,7 @@ export async function GET() {
   return json(200, {
     ok: true,
     route: "api/stripe/webhook",
-    version: "entitlements_writer_v4_affiliate_logging",
+    version: "entitlements_writer_v5_affiliate_before_user_match",
     ts: new Date().toISOString(),
   });
 }
@@ -349,6 +349,60 @@ export async function POST(req: Request) {
       ? { pulse: false, recon: false, atlas: false }
       : entitlementsFromPrice(priceId);
 
+    /**
+     * SAFE CHANGE:
+     * Log affiliate conversion FIRST on checkout completion,
+     * even if no app user match exists yet.
+     */
+    let affiliateLogged = false;
+    let affiliateCode: string | null = null;
+
+    if (type === "checkout.session.completed" && clientReferenceId) {
+      affiliateCode = extractAffiliateCode(clientReferenceId);
+
+      if (affiliateCode) {
+        const affiliate = await findAffiliateByCode(
+          supabaseAdmin,
+          affiliateCode
+        );
+
+        if (affiliate) {
+          const commissionRate =
+            typeof affiliate.commission_rate === "number"
+              ? affiliate.commission_rate
+              : Number(affiliate.commission_rate || 0);
+
+          const amount = checkoutAmountTotal;
+          const commissionAmount =
+            typeof amount === "number"
+              ? Number(((amount * commissionRate) / 100).toFixed(2))
+              : null;
+
+          const conv = await insertAffiliateConversion(supabaseAdmin, {
+            affiliate_code: affiliateCode,
+            affiliate_id: affiliate.id || null,
+            customer_email: email,
+            stripe_customer_id: customerId,
+            stripe_subscription_id: subscriptionId,
+            stripe_price_id: priceId,
+            amount,
+            commission_amount: commissionAmount,
+          });
+
+          affiliateLogged = !!conv.ok;
+        } else {
+          console.log(
+            "[stripe.webhook] affiliate code not found:",
+            affiliateCode
+          );
+        }
+      }
+    }
+
+    /**
+     * USER MATCHING FOR ENTITLEMENTS / SUBSCRIPTIONS
+     * This remains protected and only runs when we can resolve a user.
+     */
     let userId: string | null = null;
 
     if (email) userId = await resolveUserIdByEmail(supabaseAdmin, email);
@@ -370,6 +424,10 @@ export async function POST(req: Request) {
       }
     }
 
+    /**
+     * If no user match, do NOT fail the webhook.
+     * Affiliate logging may still have succeeded, which is what we want.
+     */
     if (!userId) {
       return json(200, {
         ok: true,
@@ -381,6 +439,8 @@ export async function POST(req: Request) {
         subscriptionId,
         priceId,
         entitlements: ent,
+        affiliate_code: affiliateCode,
+        affiliate_logged: affiliateLogged,
       });
     }
 
@@ -405,47 +465,6 @@ export async function POST(req: Request) {
         : "active",
     });
 
-    // Log affiliate conversion on completed checkout
-    if (type === "checkout.session.completed" && clientReferenceId) {
-      const affiliateCode = extractAffiliateCode(clientReferenceId);
-
-      if (affiliateCode) {
-        const affiliate = await findAffiliateByCode(
-          supabaseAdmin,
-          affiliateCode
-        );
-
-        if (affiliate) {
-          const commissionRate =
-            typeof affiliate.commission_rate === "number"
-              ? affiliate.commission_rate
-              : Number(affiliate.commission_rate || 0);
-
-          const amount = checkoutAmountTotal;
-          const commissionAmount =
-            typeof amount === "number"
-              ? Number(((amount * commissionRate) / 100).toFixed(2))
-              : null;
-
-          await insertAffiliateConversion(supabaseAdmin, {
-            affiliate_code: affiliateCode,
-            affiliate_id: affiliate.id || null,
-            customer_email: email,
-            stripe_customer_id: customerId,
-            stripe_subscription_id: subscriptionId,
-            stripe_price_id: priceId,
-            amount,
-            commission_amount: commissionAmount,
-          });
-        } else {
-          console.log(
-            "[stripe.webhook] affiliate code not found:",
-            affiliateCode
-          );
-        }
-      }
-    }
-
     return json(200, {
       ok: true,
       mapped: true,
@@ -457,8 +476,8 @@ export async function POST(req: Request) {
       entitlements: ent,
       type,
       ent_write: entWrite.mode,
-      affiliate_logged:
-        type === "checkout.session.completed" && !!clientReferenceId,
+      affiliate_code: affiliateCode,
+      affiliate_logged: affiliateLogged,
     });
   } catch (err: any) {
     console.log("[stripe.webhook] ERROR:", err?.message || err);
