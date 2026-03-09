@@ -25,7 +25,7 @@ export async function GET() {
   return json(200, {
     ok: true,
     route: "api/stripe/webhook",
-    version: "entitlements-writer-v3_idempotent_cancel_fix",
+    version: "entitlements_writer_v4_affiliate_logging",
     ts: new Date().toISOString(),
   });
 }
@@ -65,7 +65,6 @@ function entitlementsFromPrice(priceId: string) {
 }
 
 async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
-  // 1) Try auth.admin.getUserByEmail (if available)
   try {
     const admin = supabaseAdmin.auth?.admin as any;
     if (admin?.getUserByEmail) {
@@ -77,7 +76,6 @@ async function resolveUserIdByEmail(supabaseAdmin: any, email: string) {
     // ignore
   }
 
-  // 2) Fallback to profiles table (common pattern)
   try {
     const { data, error } = await supabaseAdmin
       .from("profiles")
@@ -111,7 +109,6 @@ async function getSubscriptionPriceId(stripe: Stripe, subscriptionId: string) {
  * - Else INSERT
  */
 async function setEntitlements(supabaseAdmin: any, userId: string, ent: any) {
-  // Try UPDATE first (safe even if row doesn't exist)
   const { data: upd, error: updErr } = await supabaseAdmin
     .from("entitlements")
     .update({
@@ -126,7 +123,6 @@ async function setEntitlements(supabaseAdmin: any, userId: string, ent: any) {
 
   if (!updErr && upd?.user_id) return { ok: true, mode: "update" };
 
-  // If no row updated, INSERT
   const { error: insErr } = await supabaseAdmin.from("entitlements").insert({
     user_id: userId,
     pulse: !!ent.pulse,
@@ -141,9 +137,12 @@ async function setEntitlements(supabaseAdmin: any, userId: string, ent: any) {
 }
 
 /**
- * Resolve user by Stripe customer id via our subscriptions table (preferred for subscription.* events)
+ * Resolve user by Stripe customer id via our subscriptions table
  */
-async function resolveUserIdByCustomerId(supabaseAdmin: any, customerId: string) {
+async function resolveUserIdByCustomerId(
+  supabaseAdmin: any,
+  customerId: string
+) {
   try {
     const { data, error } = await supabaseAdmin
       .from("subscriptions")
@@ -187,6 +186,75 @@ async function upsertSubscriptionRow(
   }
 }
 
+function extractAffiliateCode(clientReferenceId: string | null | undefined) {
+  const raw = String(clientReferenceId || "").trim();
+  if (!raw) return null;
+  if (!raw.startsWith("aff_")) return null;
+  const code = raw.slice(4).trim();
+  return code || null;
+}
+
+async function findAffiliateByCode(
+  supabaseAdmin: any,
+  affiliateCode: string
+) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("affiliates")
+      .select("id, affiliate_code, commission_rate")
+      .eq("affiliate_code", affiliateCode)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function insertAffiliateConversion(
+  supabaseAdmin: any,
+  row: {
+    affiliate_code: string;
+    affiliate_id: string | null;
+    customer_email: string | null;
+    stripe_customer_id: string | null;
+    stripe_subscription_id: string;
+    stripe_price_id: string | null;
+    amount: number | null;
+    commission_amount: number | null;
+  }
+) {
+  try {
+    const { error } = await supabaseAdmin.from("affiliate_conversions").insert({
+      affiliate_code: row.affiliate_code,
+      affiliate_id: row.affiliate_id,
+      customer_email: row.customer_email,
+      stripe_customer_id: row.stripe_customer_id,
+      stripe_subscription_id: row.stripe_subscription_id,
+      stripe_price_id: row.stripe_price_id,
+      amount: row.amount,
+      commission_amount: row.commission_amount,
+    });
+
+    if (error) {
+      console.log(
+        "[stripe.webhook] affiliate conversion insert error:",
+        error.message || error
+      );
+      return { ok: false, error };
+    }
+
+    return { ok: true };
+  } catch (err: any) {
+    console.log(
+      "[stripe.webhook] affiliate conversion insert exception:",
+      err?.message || err
+    );
+    return { ok: false, error: err };
+  }
+}
+
 export async function POST(req: Request) {
   const secretKey = mustEnv("STRIPE_SECRET_KEY");
   const webhookSecret = mustEnv("STRIPE_WEBHOOK_SECRET");
@@ -208,7 +276,9 @@ export async function POST(req: Request) {
 
   try {
     const sig = req.headers.get("stripe-signature");
-    if (!sig) return json(400, { ok: false, error: "missing_stripe_signature" });
+    if (!sig) {
+      return json(400, { ok: false, error: "missing_stripe_signature" });
+    }
 
     const rawBody = await req.text();
     const event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
@@ -229,6 +299,8 @@ export async function POST(req: Request) {
     let email: string | null = null;
     let customerId: string | null = null;
     let subscriptionId: string | null = null;
+    let clientReferenceId: string | null = null;
+    let checkoutAmountTotal: number | null = null;
 
     if (type === "checkout.session.completed") {
       const s = event.data.object as Stripe.Checkout.Session;
@@ -238,11 +310,13 @@ export async function POST(req: Request) {
         null;
       customerId = (s.customer as any) || null;
       subscriptionId = (s.subscription as any) || null;
+      clientReferenceId = (s.client_reference_id as any) || null;
+      checkoutAmountTotal =
+        typeof s.amount_total === "number" ? s.amount_total / 100 : null;
     } else if (type.startsWith("customer.subscription.")) {
       const sub = event.data.object as Stripe.Subscription;
       customerId = (sub.customer as any) || null;
       subscriptionId = sub.id || null;
-      // subscription.* often has no email; we'll resolve by customerId
     } else if (type.startsWith("invoice.")) {
       const inv = event.data.object as Stripe.Invoice;
       customerId = (inv.customer as any) || null;
@@ -251,29 +325,38 @@ export async function POST(req: Request) {
     }
 
     if (!subscriptionId) {
-      return json(200, { ok: true, mapped: false, reason: "no_subscription_id", type });
+      return json(200, {
+        ok: true,
+        mapped: false,
+        reason: "no_subscription_id",
+        type,
+      });
     }
 
-    // Determine priceId (from subscription items)
     const priceId = await getSubscriptionPriceId(stripe, subscriptionId);
     if (!priceId) {
-      return json(200, { ok: true, mapped: false, reason: "no_price_id", type, subscriptionId });
+      return json(200, {
+        ok: true,
+        mapped: false,
+        reason: "no_price_id",
+        type,
+        subscriptionId,
+      });
     }
 
-    // If canceled, entitlements should be OFF regardless of plan
     const isCanceled = type === "customer.subscription.deleted";
-    const ent = isCanceled ? { pulse: false, recon: false, atlas: false } : entitlementsFromPrice(priceId);
+    const ent = isCanceled
+      ? { pulse: false, recon: false, atlas: false }
+      : entitlementsFromPrice(priceId);
 
-    // Resolve userId
     let userId: string | null = null;
 
-    // 1) Email match if we have it
     if (email) userId = await resolveUserIdByEmail(supabaseAdmin, email);
 
-    // 2) If still no user and we have customerId, resolve via subscriptions table
-    if (!userId && customerId) userId = await resolveUserIdByCustomerId(supabaseAdmin, customerId);
+    if (!userId && customerId) {
+      userId = await resolveUserIdByCustomerId(supabaseAdmin, customerId);
+    }
 
-    // 3) If still no user and we have customerId, ask Stripe for customer email, then match
     if (!userId && customerId) {
       try {
         const c = await stripe.customers.retrieve(customerId);
@@ -301,14 +384,15 @@ export async function POST(req: Request) {
       });
     }
 
-    // Write entitlements idempotently (no duplicates)
     const entWrite = await setEntitlements(supabaseAdmin, userId, ent);
     if (!entWrite.ok) {
-      console.log("[stripe.webhook] entitlements write error:", entWrite.error);
+      console.log(
+        "[stripe.webhook] entitlements write error:",
+        entWrite.error
+      );
       return json(500, { ok: false, error: "entitlements_write_failed" });
     }
 
-    // Track subscription row (for future customerId->user resolution)
     await upsertSubscriptionRow(supabaseAdmin, {
       user_id: userId,
       stripe_customer_id: customerId,
@@ -321,6 +405,47 @@ export async function POST(req: Request) {
         : "active",
     });
 
+    // Log affiliate conversion on completed checkout
+    if (type === "checkout.session.completed" && clientReferenceId) {
+      const affiliateCode = extractAffiliateCode(clientReferenceId);
+
+      if (affiliateCode) {
+        const affiliate = await findAffiliateByCode(
+          supabaseAdmin,
+          affiliateCode
+        );
+
+        if (affiliate) {
+          const commissionRate =
+            typeof affiliate.commission_rate === "number"
+              ? affiliate.commission_rate
+              : Number(affiliate.commission_rate || 0);
+
+          const amount = checkoutAmountTotal;
+          const commissionAmount =
+            typeof amount === "number"
+              ? Number(((amount * commissionRate) / 100).toFixed(2))
+              : null;
+
+          await insertAffiliateConversion(supabaseAdmin, {
+            affiliate_code: affiliateCode,
+            affiliate_id: affiliate.id || null,
+            customer_email: email,
+            stripe_customer_id: customerId,
+            stripe_subscription_id: subscriptionId,
+            stripe_price_id: priceId,
+            amount,
+            commission_amount: commissionAmount,
+          });
+        } else {
+          console.log(
+            "[stripe.webhook] affiliate code not found:",
+            affiliateCode
+          );
+        }
+      }
+    }
+
     return json(200, {
       ok: true,
       mapped: true,
@@ -332,12 +457,16 @@ export async function POST(req: Request) {
       entitlements: ent,
       type,
       ent_write: entWrite.mode,
+      affiliate_logged:
+        type === "checkout.session.completed" && !!clientReferenceId,
     });
   } catch (err: any) {
     console.log("[stripe.webhook] ERROR:", err?.message || err);
     return json(400, {
       ok: false,
-      error: `Webhook signature verification failed: ${err?.message || "unknown"}`,
+      error: `Webhook signature verification failed: ${
+        err?.message || "unknown"
+      }`,
     });
   }
 }
