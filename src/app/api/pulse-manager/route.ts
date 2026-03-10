@@ -579,7 +579,11 @@ function confidenceTier(confidence: number | null) {
   const normalConf = num(process.env.RECON_NORMAL_CONF, 0.74);
   const fullConf = num(process.env.RECON_FULL_CONF, 0.82);
 
-  if (confidence === null || !Number.isFinite(confidence) || confidence < scoutConf) {
+  if (
+    confidence === null ||
+    !Number.isFinite(confidence) ||
+    confidence < scoutConf
+  ) {
     return { tier: "none" as const, multiplier: 0 };
   }
   if (confidence >= fullConf) {
@@ -629,6 +633,10 @@ function buildEntryPlan(params: {
     process.env.TREND_OVERRIDE_ENABLED,
     true
   );
+  const rangingNeutralProbeEnabled = truthyDefault(
+    process.env.RANGING_NEUTRAL_PROBE_ENABLED,
+    true
+  );
 
   const confidence =
     Number.isFinite(Number(reconStatus.confidence)) &&
@@ -638,23 +646,39 @@ function buildEntryPlan(params: {
 
   const tier = confidenceTier(confidence);
   const regimeMultiplier = regimeEntryMultiplier(currentRegime, reconStatus);
+  const probeConf = num(process.env.RECON_PROBE_CONF, 0.68);
 
   let effectiveSide: "BUY" | "SELL" | null = reconStatus.side;
   let trendOverride = false;
 
   const trendStrong =
     currentRegime === "TRENDING" || currentRegime === "VOLATILE";
+  const rangingNeutralProbe =
+    currentRegime === "RANGING" && !reconStatus.isChop;
 
   if (
     !effectiveSide &&
     trendOverrideEnabled &&
     trendStrong &&
     confidence !== null &&
-    confidence >= num(process.env.RECON_PROBE_CONF, 0.68)
+    confidence >= probeConf
   ) {
     effectiveSide = "BUY";
     trendOverride = true;
     notes.push("trend_override_buy");
+  }
+
+  if (
+    !effectiveSide &&
+    rangingNeutralProbeEnabled &&
+    rangingNeutralProbe &&
+    confidence !== null &&
+    confidence >= probeConf &&
+    reconStatus.side !== "SELL"
+  ) {
+    effectiveSide = "BUY";
+    trendOverride = true;
+    notes.push("neutral_ranging_probe_buy");
   }
 
   if (reconStatus.source === "error") {
@@ -1732,7 +1756,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     const plannedEntryUsd = Math.max(
       0.01,
-      Math.min(finalEntryUsdPrePlan * entryPlan.sizeMultiplier, entMaxUsd, hardMaxUsd)
+      Math.min(
+        finalEntryUsdPrePlan * entryPlan.sizeMultiplier,
+        entMaxUsd,
+        hardMaxUsd
+      )
     );
     const entryQuoteUsd = fmtQuoteSizeUsd(plannedEntryUsd);
 
