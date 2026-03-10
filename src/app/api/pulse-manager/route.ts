@@ -411,6 +411,7 @@ type EntryPlan = {
   sizeMultiplier: number;
   tierMultiplier: number;
   regimeMultiplier: number;
+  defenseMultiplier: number;
   trendOverride: boolean;
   defenseApplied: boolean;
   notes: string[];
@@ -574,10 +575,10 @@ async function fetchReconDecision(): Promise<ReconDecision> {
 }
 
 function confidenceTier(confidence: number | null) {
-  const scoutConf = num(process.env.RECON_SCOUT_CONF, 0.6);
-  const probeConf = num(process.env.RECON_PROBE_CONF, 0.68);
-  const normalConf = num(process.env.RECON_NORMAL_CONF, 0.74);
-  const fullConf = num(process.env.RECON_FULL_CONF, 0.82);
+  const scoutConf = num(process.env.RECON_SCOUT_CONF, 0.68);
+  const probeConf = num(process.env.RECON_PROBE_CONF, 0.72);
+  const normalConf = num(process.env.RECON_NORMAL_CONF, 0.76);
+  const fullConf = num(process.env.RECON_FULL_CONF, 0.83);
 
   if (
     confidence === null ||
@@ -596,6 +597,58 @@ function confidenceTier(confidence: number | null) {
     return { tier: "probe" as const, multiplier: 0.25 };
   }
   return { tier: "scout" as const, multiplier: 0.1 };
+}
+
+function defenseTierMultiplier(confidence: number | null) {
+  const hardMin = num(process.env.DEFENSE_HARD_MIN_CONF, 0.68);
+  const scoutConf = num(process.env.DEFENSE_SCOUT_CONF, 0.68);
+  const probeConf = num(process.env.DEFENSE_PROBE_CONF, 0.72);
+  const normalConf = num(process.env.DEFENSE_NORMAL_CONF, 0.76);
+  const fullConf = num(process.env.DEFENSE_FULL_CONF, 0.83);
+
+  const scoutMult = clamp(num(process.env.DEFENSE_SCOUT_MULTIPLIER, 1.0), 0, 1);
+  const probeMult = clamp(num(process.env.DEFENSE_PROBE_MULTIPLIER, 0.85), 0, 1);
+  const normalMult = clamp(
+    num(process.env.DEFENSE_NORMAL_MULTIPLIER, 0.7),
+    0,
+    1
+  );
+  const fullMult = clamp(num(process.env.DEFENSE_FULL_MULTIPLIER, 0.5), 0, 1);
+
+  if (
+    confidence === null ||
+    !Number.isFinite(confidence) ||
+    confidence < hardMin
+  ) {
+    return {
+      allow: false,
+      multiplier: 0,
+      reason: `entry_blocked_defense_conf_${confidence?.toFixed(2) ?? "na"}_min_${hardMin.toFixed(2)}`,
+    };
+  }
+
+  if (confidence >= fullConf) {
+    return { allow: true, multiplier: fullMult, reason: "defense_full_size" };
+  }
+  if (confidence >= normalConf) {
+    return {
+      allow: true,
+      multiplier: normalMult,
+      reason: "defense_standard_size",
+    };
+  }
+  if (confidence >= probeConf) {
+    return { allow: true, multiplier: probeMult, reason: "defense_probe_size" };
+  }
+  if (confidence >= scoutConf) {
+    return { allow: true, multiplier: scoutMult, reason: "defense_scout_size" };
+  }
+
+  return {
+    allow: false,
+    multiplier: 0,
+    reason: `entry_blocked_defense_conf_${confidence?.toFixed(2) ?? "na"}_min_${hardMin.toFixed(2)}`,
+  };
 }
 
 function regimeEntryMultiplier(
@@ -626,7 +679,7 @@ function buildEntryPlan(params: {
   gov: EquityGov;
   defenseConf: number;
 }): EntryPlan {
-  const { reconStatus, currentRegime, gov, defenseConf } = params;
+  const { reconStatus, currentRegime, gov } = params;
   const notes: string[] = [];
 
   const trendOverrideEnabled = truthyDefault(
@@ -646,10 +699,11 @@ function buildEntryPlan(params: {
 
   const tier = confidenceTier(confidence);
   const regimeMultiplier = regimeEntryMultiplier(currentRegime, reconStatus);
-  const probeConf = num(process.env.RECON_PROBE_CONF, 0.68);
+  const probeConf = num(process.env.RECON_PROBE_CONF, 0.72);
 
   let effectiveSide: "BUY" | "SELL" | null = reconStatus.side;
   let trendOverride = false;
+  let defenseMultiplier = 1.0;
 
   const trendStrong =
     currentRegime === "TRENDING" || currentRegime === "VOLATILE";
@@ -701,6 +755,7 @@ function buildEntryPlan(params: {
       sizeMultiplier: 0,
       tierMultiplier: 0,
       regimeMultiplier,
+      defenseMultiplier: 1,
       trendOverride,
       defenseApplied: false,
       notes,
@@ -717,6 +772,7 @@ function buildEntryPlan(params: {
       sizeMultiplier: 0,
       tierMultiplier: 0,
       regimeMultiplier,
+      defenseMultiplier: 1,
       trendOverride,
       defenseApplied: false,
       notes,
@@ -733,6 +789,7 @@ function buildEntryPlan(params: {
       sizeMultiplier: 0,
       tierMultiplier: 0,
       regimeMultiplier,
+      defenseMultiplier: 1,
       trendOverride,
       defenseApplied: false,
       notes,
@@ -749,6 +806,7 @@ function buildEntryPlan(params: {
       sizeMultiplier: 0,
       tierMultiplier: 0,
       regimeMultiplier,
+      defenseMultiplier: 1,
       trendOverride,
       defenseApplied: false,
       notes,
@@ -756,25 +814,33 @@ function buildEntryPlan(params: {
   }
 
   if (gov.defense) {
-    if (confidence === null || confidence < defenseConf) {
+    const defense = defenseTierMultiplier(confidence);
+    if (!defense.allow) {
       return {
         allowEntry: false,
-        reason: `entry_blocked_defense_conf_${confidence?.toFixed(2) ?? "na"}_min_${defenseConf.toFixed(2)}`,
+        reason: defense.reason,
         effectiveSide,
         confidence,
         tier: "none",
         sizeMultiplier: 0,
-        tierMultiplier: 0,
+        tierMultiplier: tier.multiplier,
         regimeMultiplier,
+        defenseMultiplier: 0,
         trendOverride,
         defenseApplied: true,
-        notes,
+        notes: [...notes, "defense_hard_block"],
       };
     }
+    defenseMultiplier = defense.multiplier;
     notes.push("defense_mode_active");
+    notes.push(defense.reason);
   }
 
-  const sizeMultiplier = clamp(tier.multiplier * regimeMultiplier, 0, 1);
+  const sizeMultiplier = clamp(
+    tier.multiplier * regimeMultiplier * defenseMultiplier,
+    0,
+    1
+  );
 
   if (sizeMultiplier <= 0) {
     return {
@@ -786,6 +852,7 @@ function buildEntryPlan(params: {
       sizeMultiplier: 0,
       tierMultiplier: tier.multiplier,
       regimeMultiplier,
+      defenseMultiplier,
       trendOverride,
       defenseApplied: gov.defense,
       notes,
@@ -794,13 +861,20 @@ function buildEntryPlan(params: {
 
   return {
     allowEntry: true,
-    reason: trendOverride ? "entry_allowed_trend_override" : "entry_allowed",
+    reason: trendOverride
+      ? gov.defense
+        ? "entry_allowed_trend_override_defense_scaled"
+        : "entry_allowed_trend_override"
+      : gov.defense
+      ? "entry_allowed_defense_scaled"
+      : "entry_allowed",
     effectiveSide,
     confidence,
     tier: tier.tier,
     sizeMultiplier,
     tierMultiplier: tier.multiplier,
     regimeMultiplier,
+    defenseMultiplier,
     trendOverride,
     defenseApplied: gov.defense,
     notes,
