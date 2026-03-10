@@ -32,6 +32,9 @@ function num(v: any, fallback: number) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
 function requireEnv(name: string) {
   const v = process.env[name];
   if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
@@ -42,7 +45,7 @@ function optEnv(name: string) {
   return v && v.trim() ? v.trim() : null;
 }
 function cleanString(v: any) {
-  return (typeof v === "string" ? v : "").trim();
+  return typeof v === "string" ? v.trim() : "";
 }
 function normalizePem(pem: string) {
   let p = (pem || "").trim();
@@ -396,6 +399,21 @@ type ReconDecision = {
   confidence: number | null;
   entryAllowed: boolean;
   reason: string;
+  isChop: boolean;
+};
+
+type EntryPlan = {
+  allowEntry: boolean;
+  reason: string;
+  effectiveSide: "BUY" | "SELL" | null;
+  confidence: number | null;
+  tier: "none" | "scout" | "probe" | "standard" | "full";
+  sizeMultiplier: number;
+  tierMultiplier: number;
+  regimeMultiplier: number;
+  trendOverride: boolean;
+  defenseApplied: boolean;
+  notes: string[];
 };
 
 function parseBool(v: any, def = false) {
@@ -416,8 +434,8 @@ function looksChoppy(regime: string) {
 async function fetchReconDecision(): Promise<ReconDecision> {
   const enabled = parseBool(process.env.RECON_ENABLED, false);
   const mode = (process.env.RECON_MODE || "OFF").trim();
-  const chopBlock = parseBool(process.env.RECON_CHOP_BLOCK, false);
-  const minConf = num(process.env.RECON_MIN_CONF, 0.65);
+  const chopBlock = parseBool(process.env.RECON_CHOP_HARD_BLOCK, false);
+  const minConf = num(process.env.RECON_ABS_MIN_CONF, 0.6);
   const url = (process.env.RECON_SIGNAL_URL || "").trim();
   const timeoutMs = num(process.env.RECON_TIMEOUT_MS, 2500);
 
@@ -435,6 +453,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       confidence: null,
       entryAllowed: true,
       reason: "recon_disabled_or_mode_off",
+      isChop: false,
     };
   }
 
@@ -452,6 +471,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       confidence: null,
       entryAllowed: true,
       reason: "missing_RECON_SIGNAL_URL",
+      isChop: false,
     };
   }
 
@@ -483,6 +503,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
         confidence: null,
         entryAllowed: true,
         reason: `recon_bad_response_status_${res.status}`,
+        isChop: false,
       };
     }
 
@@ -498,24 +519,21 @@ async function fetchReconDecision(): Promise<ReconDecision> {
     const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
 
     const isChop = regimeRaw ? looksChoppy(regimeRaw) : false;
+    const belowHardMinConf = confidence === null || confidence < minConf;
+    const explicitSell = side === "SELL";
+    const hardBlockOnChop = chopBlock && isChop;
 
-    const belowMinConf = confidence === null || confidence < minConf;
-    const notBuy = side !== "BUY";
-    const blocksOnChop = chopBlock && isChop;
-
-    const entryAllowed = !(belowMinConf || notBuy || blocksOnChop);
+    const entryAllowed = !(belowHardMinConf || explicitSell || hardBlockOnChop);
 
     let why = "recon_allows_entries";
 
     if (!entryAllowed) {
-      if (blocksOnChop) {
-        why = `recon_blocks_entries_chop_${regimeRaw}_conf_${confidence?.toFixed(2) ?? "na"}`;
-      } else if (belowMinConf) {
-        why = `recon_blocks_entries_low_conf_${confidence?.toFixed(2) ?? "na"}_min_${minConf.toFixed(2)}`;
-      } else if (side === "SELL") {
-        why = `recon_blocks_entries_side_sell_conf_${confidence?.toFixed(2) ?? "na"}`;
-      } else {
-        why = `recon_blocks_entries_side_${side ?? "null"}_conf_${confidence?.toFixed(2) ?? "na"}`;
+      if (hardBlockOnChop) {
+        why = `recon_hard_blocks_chop_${regimeRaw}_conf_${confidence?.toFixed(2) ?? "na"}`;
+      } else if (belowHardMinConf) {
+        why = `recon_hard_blocks_low_conf_${confidence?.toFixed(2) ?? "na"}_min_${minConf.toFixed(2)}`;
+      } else if (explicitSell) {
+        why = `recon_hard_blocks_side_sell_conf_${confidence?.toFixed(2) ?? "na"}`;
       }
     }
 
@@ -532,6 +550,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       confidence,
       entryAllowed,
       reason: why,
+      isChop,
     };
   } catch (e: any) {
     return {
@@ -547,10 +566,221 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       confidence: null,
       entryAllowed: true,
       reason: `recon_fetch_error_${String(e?.name || "unknown")}`,
+      isChop: false,
     };
   } finally {
     clearTimeout(t);
   }
+}
+
+function confidenceTier(confidence: number | null) {
+  const scoutConf = num(process.env.RECON_SCOUT_CONF, 0.6);
+  const probeConf = num(process.env.RECON_PROBE_CONF, 0.68);
+  const normalConf = num(process.env.RECON_NORMAL_CONF, 0.74);
+  const fullConf = num(process.env.RECON_FULL_CONF, 0.82);
+
+  if (confidence === null || !Number.isFinite(confidence) || confidence < scoutConf) {
+    return { tier: "none" as const, multiplier: 0 };
+  }
+  if (confidence >= fullConf) {
+    return { tier: "full" as const, multiplier: 1.0 };
+  }
+  if (confidence >= normalConf) {
+    return { tier: "standard" as const, multiplier: 0.5 };
+  }
+  if (confidence >= probeConf) {
+    return { tier: "probe" as const, multiplier: 0.25 };
+  }
+  return { tier: "scout" as const, multiplier: 0.1 };
+}
+
+function regimeEntryMultiplier(
+  currentRegime: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE",
+  reconStatus: ReconDecision
+) {
+  let mult =
+    currentRegime === "TRENDING"
+      ? 1.0
+      : currentRegime === "VOLATILE"
+      ? 0.75
+      : currentRegime === "RANGING"
+      ? 0.5
+      : 0;
+
+  const chopReduction = clamp(num(process.env.CHOP_SIZE_REDUCTION, 0.5), 0, 1);
+
+  if (reconStatus.isChop) {
+    mult *= chopReduction;
+  }
+
+  return clamp(mult, 0, 1);
+}
+
+function buildEntryPlan(params: {
+  reconStatus: ReconDecision;
+  currentRegime: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE";
+  gov: EquityGov;
+  defenseConf: number;
+}): EntryPlan {
+  const { reconStatus, currentRegime, gov, defenseConf } = params;
+  const notes: string[] = [];
+
+  const trendOverrideEnabled = truthyDefault(
+    process.env.TREND_OVERRIDE_ENABLED,
+    true
+  );
+
+  const confidence =
+    Number.isFinite(Number(reconStatus.confidence)) &&
+    reconStatus.confidence !== null
+      ? Number(reconStatus.confidence)
+      : null;
+
+  const tier = confidenceTier(confidence);
+  const regimeMultiplier = regimeEntryMultiplier(currentRegime, reconStatus);
+
+  let effectiveSide: "BUY" | "SELL" | null = reconStatus.side;
+  let trendOverride = false;
+
+  const trendStrong =
+    currentRegime === "TRENDING" || currentRegime === "VOLATILE";
+
+  if (
+    !effectiveSide &&
+    trendOverrideEnabled &&
+    trendStrong &&
+    confidence !== null &&
+    confidence >= num(process.env.RECON_PROBE_CONF, 0.68)
+  ) {
+    effectiveSide = "BUY";
+    trendOverride = true;
+    notes.push("trend_override_buy");
+  }
+
+  if (reconStatus.source === "error") {
+    notes.push("recon_source_error_fail_open_metadata_only");
+  }
+  if (reconStatus.isChop) {
+    notes.push("chop_size_reduction");
+  }
+  if (currentRegime === "RANGING") {
+    notes.push("ranging_size_reduction");
+  }
+
+  if (!reconStatus.entryAllowed) {
+    return {
+      allowEntry: false,
+      reason: reconStatus.reason,
+      effectiveSide,
+      confidence,
+      tier: "none",
+      sizeMultiplier: 0,
+      tierMultiplier: 0,
+      regimeMultiplier,
+      trendOverride,
+      defenseApplied: false,
+      notes,
+    };
+  }
+
+  if (effectiveSide === "SELL") {
+    return {
+      allowEntry: false,
+      reason: "entry_blocked_recon_sell_bias",
+      effectiveSide,
+      confidence,
+      tier: "none",
+      sizeMultiplier: 0,
+      tierMultiplier: 0,
+      regimeMultiplier,
+      trendOverride,
+      defenseApplied: false,
+      notes,
+    };
+  }
+
+  if (effectiveSide !== "BUY") {
+    return {
+      allowEntry: false,
+      reason: "entry_blocked_no_buy_bias",
+      effectiveSide,
+      confidence,
+      tier: "none",
+      sizeMultiplier: 0,
+      tierMultiplier: 0,
+      regimeMultiplier,
+      trendOverride,
+      defenseApplied: false,
+      notes,
+    };
+  }
+
+  if (tier.multiplier <= 0) {
+    return {
+      allowEntry: false,
+      reason: "entry_blocked_below_scout_conf",
+      effectiveSide,
+      confidence,
+      tier: "none",
+      sizeMultiplier: 0,
+      tierMultiplier: 0,
+      regimeMultiplier,
+      trendOverride,
+      defenseApplied: false,
+      notes,
+    };
+  }
+
+  if (gov.defense) {
+    if (confidence === null || confidence < defenseConf) {
+      return {
+        allowEntry: false,
+        reason: `entry_blocked_defense_conf_${confidence?.toFixed(2) ?? "na"}_min_${defenseConf.toFixed(2)}`,
+        effectiveSide,
+        confidence,
+        tier: "none",
+        sizeMultiplier: 0,
+        tierMultiplier: 0,
+        regimeMultiplier,
+        trendOverride,
+        defenseApplied: true,
+        notes,
+      };
+    }
+    notes.push("defense_mode_active");
+  }
+
+  const sizeMultiplier = clamp(tier.multiplier * regimeMultiplier, 0, 1);
+
+  if (sizeMultiplier <= 0) {
+    return {
+      allowEntry: false,
+      reason: "entry_blocked_zero_sized_after_regime_filters",
+      effectiveSide,
+      confidence,
+      tier: "none",
+      sizeMultiplier: 0,
+      tierMultiplier: tier.multiplier,
+      regimeMultiplier,
+      trendOverride,
+      defenseApplied: gov.defense,
+      notes,
+    };
+  }
+
+  return {
+    allowEntry: true,
+    reason: trendOverride ? "entry_allowed_trend_override" : "entry_allowed",
+    effectiveSide,
+    confidence,
+    tier: tier.tier,
+    sizeMultiplier,
+    tierMultiplier: tier.multiplier,
+    regimeMultiplier,
+    trendOverride,
+    defenseApplied: gov.defense,
+    notes,
+  };
 }
 
 // ---------- price helpers ----------
@@ -776,12 +1006,12 @@ async function computeEquityGovernor(
   }
 }
 
-// ---------- fills + execution enrichment (THE FIX) ----------
+// ---------- fills + execution enrichment ----------
 type ExecFill = {
   side: "BUY" | "SELL";
   price: number;
-  size: number; // base
-  quote: number; // quote
+  size: number;
+  quote: number;
   time?: string;
   raw?: any;
 };
@@ -962,7 +1192,7 @@ async function fetchExecutionSummary(
   for (let i = 0; i < 6; i++) {
     const s = await fetchOrderStatus(ctx, orderId);
     st = s;
-    raw.orderStatus = s.ok ? s.raw : s.raw;
+    raw.orderStatus = s.raw;
     if (s.ok) {
       status = s.status || null;
       done = !!s.done;
@@ -977,7 +1207,6 @@ async function fetchExecutionSummary(
   raw.fillsText = fr.text;
 
   const fills = fr.ok ? fr.fills : [];
-
   const fromFills = summarizeFills(orderId, fills);
 
   const filledBase =
@@ -1237,14 +1466,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     50
   );
 
-  // Anti-churn trailing guards
   const trailMinHoldMin = num(process.env.TRAIL_MIN_HOLD_MIN, 15);
   const trailMinHoldMs = trailMinHoldMin > 0 ? trailMinHoldMin * 60_000 : 0;
 
-  // Volatility floor (bps)
   const trailVolFloorBps = num(process.env.TRAIL_VOL_FLOOR_BPS, 100);
 
-  // Hard stop (default ON)
   const hardStopEnabled = truthyDefault(
     process.env.PULSE_HARD_STOP_ENABLED,
     true
@@ -1264,11 +1490,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   );
   const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
-  // caps
   const hardMaxUsd = num(process.env.YC_HARD_MAX_TRADE_USD, 10);
   const envEntryUsd = num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0);
 
-  // Maker split: entries maker-first, exits IOC by default
   const makerEntries = truthyDefault(process.env.MAKER_ENTRIES, true);
   const makerExits = truthyDefault(process.env.MAKER_EXITS, false);
 
@@ -1295,15 +1519,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     LIVE_ALLOWED: botEnabled && tradingEnabled && armed,
   };
 
-  // Recon status: ALWAYS fetch once so we can show it even while holding.
   const reconStatus = await fetchReconDecision();
 
-  // Spot price (used for maker ref and for equity governor)
   const spot = await fetchSpotPrice(ctx);
   let refPrice = spot.ok ? spot.price : 0;
   if (!Number.isFinite(refPrice) || refPrice <= 0) refPrice = 0;
 
-  // Equity governor (entry sizing throttle + defense flag). FAIL OPEN.
   const gov: EquityGov =
     refPrice > 0
       ? await computeEquityGovernor(ctx, refPrice)
@@ -1319,20 +1540,24 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           reason: "missing_ref_price_for_equity",
         };
 
-  // Entry USD: bounded by caps, then scaled by gov.multiplier, then bounded again
+  const defenseMinMultiplier = clamp(
+    num(process.env.DEFENSE_MIN_MULTIPLIER, 0.5),
+    0.01,
+    1
+  );
+  const effectiveGovMultiplier = gov.defense
+    ? Math.max(Number(gov.multiplier) || 1.0, defenseMinMultiplier)
+    : Number(gov.multiplier) || 1.0;
+
   const baseEntryUsd = Math.max(
     0.01,
     Math.min(envEntryUsd, entMaxUsd, hardMaxUsd)
   );
-  const scaledEntryUsd = Math.max(
-    0.01,
-    baseEntryUsd * (Number(gov.multiplier) || 1.0)
-  );
-  const finalEntryUsd = Math.max(
+  const scaledEntryUsd = Math.max(0.01, baseEntryUsd * effectiveGovMultiplier);
+  const finalEntryUsdPrePlan = Math.max(
     0.01,
     Math.min(scaledEntryUsd, entMaxUsd, hardMaxUsd)
   );
-  const entryQuoteUsd = fmtQuoteSizeUsd(finalEntryUsd);
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
   const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 12);
@@ -1344,14 +1569,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     key: shortKeyName(ctx.api_key_name),
     alg: algFor(ctx),
     gates,
-    entryQuoteUsd,
+    baseEntryUsd,
+    scaledEntryUsd,
+    finalEntryUsdPrePlan,
     caps: {
       hardMaxUsd,
       entMaxUsd,
       envEntryUsd,
-      baseEntryUsd,
-      scaledEntryUsd,
-      finalEntryUsd,
+      effectiveGovMultiplier,
+      defenseMinMultiplier,
     },
     equityGov: gov,
     maker: {
@@ -1405,7 +1631,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
   }
 
-  // cooldown + re-entry guard (post-exit anti-churn)
   const lastBuy = await fetchLastBuyFill(ctx);
   const lastFill = await fetchLastFillAny(ctx);
 
@@ -1418,7 +1643,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const cooldownOk = sinceMs >= cooldownMs;
 
-  // block re-entry after a SELL for N minutes
   const reentryCooldownMs = num(process.env.REENTRY_COOLDOWN_MS, 10 * 60_000);
   const reentryBlocked =
     lastFill.ok && lastFill.side === "SELL" && sinceMs < reentryCooldownMs;
@@ -1499,51 +1723,36 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       };
     }
 
-    // Equity defense mode: only allow entry if Recon confidence >= DEFENSE_CONF AND recon allows entry
-    if (gov.defense) {
-      const conf = Number(reconStatus.confidence ?? 0);
-      const okDefense =
-        Number.isFinite(conf) &&
-        conf >= defenseConf &&
-        reconStatus.entryAllowed;
-      if (!okDefense) {
-        log(runId, "DEFENSE_BLOCK_ENTRY", {
-          ddPct: gov.ddPct,
-          reqConf: defenseConf,
-          reconStatus,
-          currentRegime,
-        });
-        return {
-          ok: true,
-          mode: "NO_POSITION_DEFENSE_BLOCK",
-          gates,
-          position,
-          cooldown,
-          reconStatus,
-          equityGov: gov,
-          regime: currentRegime,
-        };
-      }
-    }
+    const entryPlan = buildEntryPlan({
+      reconStatus,
+      currentRegime,
+      gov,
+      defenseConf,
+    });
 
-    // Recon gate (ENTRY ONLY) — already fail-open when errors occur
-    if (!reconStatus.entryAllowed) {
-      log(runId, "RECON_BLOCK_ENTRY", {
-        reason: reconStatus.reason,
-        regime: reconStatus.regime,
-        conf: reconStatus.confidence,
-        side: reconStatus.side,
+    const plannedEntryUsd = Math.max(
+      0.01,
+      Math.min(finalEntryUsdPrePlan * entryPlan.sizeMultiplier, entMaxUsd, hardMaxUsd)
+    );
+    const entryQuoteUsd = fmtQuoteSizeUsd(plannedEntryUsd);
+
+    if (!entryPlan.allowEntry) {
+      log(runId, "ENTRY_PLAN_BLOCK", {
+        reason: entryPlan.reason,
+        entryPlan,
         currentRegime,
+        reconStatus,
       });
       return {
         ok: true,
-        mode: "NO_POSITION_RECON_BLOCK",
+        mode: "NO_POSITION_ENTRY_PLAN_BLOCK",
         gates,
         position,
         cooldown,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
+        entryPlan,
       };
     }
 
@@ -1557,11 +1766,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
+        entryPlan,
         would_buy_quote_usd: entryQuoteUsd,
       };
     }
 
-    // If maker entries disabled or no ref price: BUY IOC
     if (!makerEntries || !refPrice) {
       const path = "/api/v3/brokerage/orders";
       const reqPayload = {
@@ -1575,7 +1784,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       const buy = await cbPost(ctx, path, reqPayload);
       const orderId = extractOrderId(buy.json);
-
       const exec = orderId
         ? await fetchExecutionSummary(ctx, orderId, "BUY")
         : null;
@@ -1586,19 +1794,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         symbol: PRODUCT_ID,
         side: "BUY",
         order_id: orderId,
-
         base_size: exec?.filledBase ?? null,
         quote_size: exec?.filledQuote ?? Number(entryQuoteUsd),
         price: exec?.avgPrice ?? (refPrice || null),
-
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_IOC",
-        reason: "entry",
-        decision: { regime: currentRegime },
+        reason: entryPlan.reason,
+        decision: { regime: currentRegime, entryPlan },
         recon_status: reconStatus,
         equity_gov: gov,
-
         ok: buy.ok,
         status: buy.status,
         raw: mkRawWrapper({
@@ -1612,6 +1817,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             submit: buy.json ?? buy.text,
             order_id: orderId,
             execution: exec,
+            entry_plan: entryPlan,
           },
         }),
       });
@@ -1625,17 +1831,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
+        entryPlan,
         buy,
       };
     }
 
-    // Maker-first buy
     const attempt = await makerFirstBuy(ctx, entryQuoteUsd, refPrice);
     const makerOk = attempt.maker.ok;
     const makerJson = attempt.maker.json ?? null;
     const makerOrderId = extractOrderId(makerJson);
 
-    // If maker submit fails: fallback IOC if allowed
     if (!makerOk || !makerOrderId) {
       if (!mAllowIoc) {
         return {
@@ -1647,6 +1852,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           reconStatus,
           equityGov: gov,
           regime: currentRegime,
+          entryPlan,
           error: "maker_order_failed",
         };
       }
@@ -1662,7 +1868,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       };
       const buy = await cbPost(ctx, path, reqPayload);
       const orderId = extractOrderId(buy.json);
-
       const exec = orderId
         ? await fetchExecutionSummary(ctx, orderId, "BUY")
         : null;
@@ -1673,17 +1878,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         symbol: PRODUCT_ID,
         side: "BUY",
         order_id: orderId,
-
         base_size: exec?.filledBase ?? null,
         quote_size: exec?.filledQuote ?? Number(entryQuoteUsd),
         price: exec?.avgPrice ?? (refPrice || null),
-
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_IOC_FALLBACK",
         reason: "maker_failed_fallback_ioc",
         decision: {
           regime: currentRegime,
+          entryPlan,
           makerAttempt: {
             baseSize: attempt.baseSize,
             limitPrice: attempt.limitPrice,
@@ -1692,7 +1896,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         },
         recon_status: reconStatus,
         equity_gov: gov,
-
         ok: buy.ok,
         status: buy.status,
         raw: mkRawWrapper({
@@ -1708,6 +1911,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             submit: buy.json ?? buy.text,
             order_id: orderId,
             execution: exec,
+            entry_plan: entryPlan,
           },
         }),
       });
@@ -1721,11 +1925,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
+        entryPlan,
         buy,
       };
     }
 
-    // poll maker order for up to makerTimeoutMs
     const deadline = Date.now() + mTimeout;
     let lastSt: any = null;
     while (Date.now() < deadline) {
@@ -1735,10 +1939,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       await sleep(1200);
     }
 
-    // Regardless of status, always attempt fills fetch (authoritative)
     const exec = await fetchExecutionSummary(ctx, makerOrderId, "BUY");
-
-    // If maker actually filled (or even partially filled), log it
     const makerFilled = (exec.filledBase ?? 0) > 0 || exec.done;
 
     if (makerFilled) {
@@ -1748,19 +1949,18 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         symbol: PRODUCT_ID,
         side: "BUY",
         order_id: makerOrderId,
-
         base_size: exec.filledBase ?? null,
         quote_size: exec.filledQuote ?? Number(entryQuoteUsd),
         price:
           exec.avgPrice ??
           (attempt.limitPrice ? Number(attempt.limitPrice) : refPrice || null),
-
         user_id: ctx.user_id,
         run_id: runId,
         mode: "ENTRY_BUY_MAKER",
         reason: "maker_filled_or_done",
         decision: {
           regime: currentRegime,
+          entryPlan,
           maker_order_id: makerOrderId,
           status: lastSt,
           makerAttempt: {
@@ -1770,7 +1970,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         },
         recon_status: reconStatus,
         equity_gov: gov,
-
         ok: true,
         status: 200,
         raw: mkRawWrapper({
@@ -1795,6 +1994,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_id: makerOrderId,
             order_status: lastSt?.raw ?? null,
             execution: exec,
+            entry_plan: entryPlan,
           },
         }),
       });
@@ -1808,11 +2008,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
+        entryPlan,
         maker_order_id: makerOrderId,
       };
     }
 
-    // maker timed out (no fill). fallback IOC if allowed
     if (!mAllowIoc) {
       return {
         ok: true,
@@ -1823,6 +2023,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
+        entryPlan,
         maker_order_id: makerOrderId,
       };
     }
@@ -1836,7 +2037,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
     const buy = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(buy.json);
-
     const exec2 = orderId
       ? await fetchExecutionSummary(ctx, orderId, "BUY")
       : null;
@@ -1847,23 +2047,21 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       symbol: PRODUCT_ID,
       side: "BUY",
       order_id: orderId,
-
       base_size: exec2?.filledBase ?? null,
       quote_size: exec2?.filledQuote ?? Number(entryQuoteUsd),
       price: exec2?.avgPrice ?? (refPrice || null),
-
       user_id: ctx.user_id,
       run_id: runId,
       mode: "ENTRY_BUY_IOC_AFTER_TIMEOUT",
       reason: "maker_timeout_fallback_ioc",
       decision: {
         regime: currentRegime,
+        entryPlan,
         maker_order_id: makerOrderId,
         status: lastSt,
       },
       recon_status: reconStatus,
       equity_gov: gov,
-
       ok: buy.ok,
       status: buy.status,
       raw: mkRawWrapper({
@@ -1879,6 +2077,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           submit: buy.json ?? buy.text,
           order_id: orderId,
           execution: exec2,
+          entry_plan: entryPlan,
         },
       }),
     });
@@ -1892,6 +2091,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       reconStatus,
       equityGov: gov,
       regime: currentRegime,
+      entryPlan,
       buy,
     };
   }
@@ -2071,7 +2271,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
   }
 
-  // Exits default IOC for reliability
   if (!makerExits) {
     const path = "/api/v3/brokerage/orders";
     const reqPayload = {
@@ -2083,7 +2282,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     const sell = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(sell.json);
-
     const exec = orderId
       ? await fetchExecutionSummary(ctx, orderId, "SELL")
       : null;
@@ -2094,11 +2292,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       symbol: PRODUCT_ID,
       side: "SELL",
       order_id: orderId,
-
       base_size: exec?.filledBase ?? Number(baseSize),
       quote_size: exec?.filledQuote ?? null,
       price: exec?.avgPrice ?? (current || null),
-
       user_id: ctx.user_id,
       run_id: runId,
       mode: "EXIT_SELL_IOC",
@@ -2106,7 +2302,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       decision,
       recon_status: reconStatus,
       equity_gov: gov,
-
       ok: sell.ok,
       status: sell.status,
       raw: mkRawWrapper({
@@ -2138,7 +2333,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
   }
 
-  // Maker exit path if explicitly enabled
   const exitRef = current;
   if (!Number.isFinite(exitRef) || exitRef <= 0) {
     if (!makerAllowIocFallback()) {
@@ -2165,7 +2359,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     const sell = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(sell.json);
-
     const exec = orderId
       ? await fetchExecutionSummary(ctx, orderId, "SELL")
       : null;
@@ -2176,11 +2369,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       symbol: PRODUCT_ID,
       side: "SELL",
       order_id: orderId,
-
       base_size: exec?.filledBase ?? Number(baseSize),
       quote_size: exec?.filledQuote ?? null,
       price: exec?.avgPrice ?? null,
-
       user_id: ctx.user_id,
       run_id: runId,
       mode: "EXIT_SELL_IOC_FALLBACK_NO_REF",
@@ -2188,7 +2379,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       decision,
       recon_status: reconStatus,
       equity_gov: gov,
-
       ok: sell.ok,
       status: sell.status,
       raw: mkRawWrapper({
@@ -2251,7 +2441,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     const sell = await cbPost(ctx, path, reqPayload);
     const orderId = extractOrderId(sell.json);
-
     const exec = orderId
       ? await fetchExecutionSummary(ctx, orderId, "SELL")
       : null;
@@ -2262,11 +2451,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       symbol: PRODUCT_ID,
       side: "SELL",
       order_id: orderId,
-
       base_size: exec?.filledBase ?? Number(baseSize),
       quote_size: exec?.filledQuote ?? null,
       price: exec?.avgPrice ?? (exitRef || null),
-
       user_id: ctx.user_id,
       run_id: runId,
       mode: "EXIT_SELL_IOC_FALLBACK",
@@ -2281,7 +2468,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       },
       recon_status: reconStatus,
       equity_gov: gov,
-
       ok: sell.ok,
       status: sell.status,
       raw: mkRawWrapper({
@@ -2335,13 +2521,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       symbol: PRODUCT_ID,
       side: "SELL",
       order_id: makerOrderId,
-
       base_size: exec.filledBase ?? Number(baseSize),
       quote_size: exec.filledQuote ?? null,
       price:
         exec.avgPrice ??
         (attempt.limitPrice ? Number(attempt.limitPrice) : exitRef || null),
-
       user_id: ctx.user_id,
       run_id: runId,
       mode: "EXIT_SELL_MAKER",
@@ -2349,7 +2533,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       decision: { ...decision, maker_order_id: makerOrderId, status: lastSt },
       recon_status: reconStatus,
       equity_gov: gov,
-
       ok: true,
       status: 200,
       raw: mkRawWrapper({
@@ -2416,7 +2599,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const sell = await cbPost(ctx, path, reqPayload);
   const orderId = extractOrderId(sell.json);
-
   const exec2 = orderId
     ? await fetchExecutionSummary(ctx, orderId, "SELL")
     : null;
@@ -2427,11 +2609,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     symbol: PRODUCT_ID,
     side: "SELL",
     order_id: orderId,
-
     base_size: exec2?.filledBase ?? Number(baseSize),
     quote_size: exec2?.filledQuote ?? null,
     price: exec2?.avgPrice ?? (exitRef || null),
-
     user_id: ctx.user_id,
     run_id: runId,
     mode: "EXIT_SELL_IOC_AFTER_TIMEOUT",
@@ -2439,7 +2619,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     decision: { ...decision, maker_order_id: makerOrderId, status: lastSt },
     recon_status: reconStatus,
     equity_gov: gov,
-
     ok: sell.ok,
     status: sell.status,
     raw: mkRawWrapper({
@@ -2529,6 +2708,7 @@ async function runForAllUsers(masterRunId: string) {
         position: (out as any)?.position,
         cooldown: (out as any)?.cooldown,
         decision: (out as any)?.decision,
+        entryPlan: (out as any)?.entryPlan,
         equityGov: (out as any)?.equityGov,
         reconStatus: (out as any)?.reconStatus,
         reason: (out as any)?.reason,
