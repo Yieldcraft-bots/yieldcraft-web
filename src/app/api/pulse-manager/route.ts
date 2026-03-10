@@ -189,6 +189,69 @@ async function writeTradeLog(row: Record<string, any>) {
   );
 }
 
+async function writeStrategyDecision(row: Record<string, any>) {
+  const client = sb();
+
+  const payload: Record<string, any> = {
+    created_at: row.created_at || nowIso(),
+    meta: row.meta ?? {},
+    ...row,
+  };
+  delete payload.t;
+
+  let attempt = 0;
+  let lastErr: any = null;
+
+  while (attempt < 8) {
+    attempt++;
+    const { error } = await client.from("strategy_decisions").insert([payload]);
+    if (!error) {
+      console.log(
+        "[pulse-manager]",
+        JSON.stringify({ t: nowIso(), event: "STRATEGY_DECISION_WRITE_OK" })
+      );
+      return;
+    }
+
+    lastErr = error;
+    const msg = String((error as any)?.message || error);
+
+    console.log(
+      "[pulse-manager]",
+      JSON.stringify({
+        t: nowIso(),
+        event: "STRATEGY_DECISION_WRITE_ERR",
+        attempt,
+        data: msg,
+      })
+    );
+
+    const m = msg.match(
+      /column\s+"([^"]+)"\s+of\s+relation\s+"strategy_decisions"\s+does\s+not\s+exist/i
+    );
+    if (m && m[1]) {
+      delete payload[m[1]];
+      continue;
+    }
+    const m2 = msg.match(/column\s+"([^"]+)"\s+does\s+not\s+exist/i);
+    if (m2 && m2[1]) {
+      delete payload[m2[1]];
+      continue;
+    }
+
+    break;
+  }
+
+  console.log(
+    "[pulse-manager]",
+    JSON.stringify({
+      t: nowIso(),
+      event: "STRATEGY_DECISION_WRITE_GAVE_UP",
+      data: String((lastErr as any)?.message || lastErr),
+    })
+  );
+}
+
 // ---------- auth ----------
 function okAuth(req: Request) {
   const secret = (
@@ -607,7 +670,11 @@ function defenseTierMultiplier(confidence: number | null) {
   const fullConf = num(process.env.DEFENSE_FULL_CONF, 0.83);
 
   const scoutMult = clamp(num(process.env.DEFENSE_SCOUT_MULTIPLIER, 1.0), 0, 1);
-  const probeMult = clamp(num(process.env.DEFENSE_PROBE_MULTIPLIER, 0.85), 0, 1);
+  const probeMult = clamp(
+    num(process.env.DEFENSE_PROBE_MULTIPLIER, 0.85),
+    0,
+    1
+  );
   const normalMult = clamp(
     num(process.env.DEFENSE_NORMAL_MULTIPLIER, 0.7),
     0,
@@ -1838,6 +1905,55 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     );
     const entryQuoteUsd = fmtQuoteSizeUsd(plannedEntryUsd);
 
+    await writeStrategyDecision({
+      created_at: nowIso(),
+      user_id: ctx.user_id,
+      bot: BOT_NAME,
+      symbol: PRODUCT_ID,
+      run_id: runId,
+
+      has_position: false,
+      action_phase: "ENTRY",
+      decision_mode: entryPlan.allowEntry ? "allowed" : "blocked",
+      decision_reason: entryPlan.reason,
+
+      recon_enabled: reconStatus.enabled,
+      recon_mode: reconStatus.mode,
+      recon_regime: reconStatus.regime,
+      recon_side: reconStatus.side,
+      recon_confidence: reconStatus.confidence,
+      recon_entry_allowed: reconStatus.entryAllowed,
+      recon_is_chop: reconStatus.isChop,
+
+      market_regime: currentRegime,
+      measured_vol_bps: measuredEntryVolBps,
+
+      equity_gov_enabled: gov.enabled,
+      equity_gov_defense: gov.defense,
+      equity_gov_dd_pct: gov.ddPct,
+      equity_gov_multiplier: gov.multiplier,
+
+      entry_allow: entryPlan.allowEntry,
+      entry_tier: entryPlan.tier,
+      entry_size_multiplier: entryPlan.sizeMultiplier,
+      entry_tier_multiplier: entryPlan.tierMultiplier,
+      entry_regime_multiplier: entryPlan.regimeMultiplier,
+      entry_defense_multiplier: entryPlan.defenseMultiplier,
+      trend_override: entryPlan.trendOverride,
+
+      planned_entry_usd: plannedEntryUsd,
+      base_entry_usd: finalEntryUsdPrePlan,
+      spot_price: refPrice || null,
+
+      meta: {
+        gates,
+        cooldown,
+        notes: entryPlan.notes,
+        defenseApplied: entryPlan.defenseApplied,
+        reconReason: reconStatus.reason,
+      },
+    });
+
     if (!entryPlan.allowEntry) {
       log(runId, "ENTRY_PLAN_BLOCK", {
         reason: entryPlan.reason,
@@ -2333,6 +2449,53 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     maxHoldMinutes,
     shouldTimeStop,
   };
+
+  await writeStrategyDecision({
+    created_at: nowIso(),
+    user_id: ctx.user_id,
+    bot: BOT_NAME,
+    symbol: PRODUCT_ID,
+    run_id: runId,
+
+    has_position: true,
+    action_phase: "EXIT",
+    decision_mode: anyExit ? "exit_signal" : "hold",
+    decision_reason: reason,
+
+    recon_enabled: reconStatus.enabled,
+    recon_mode: reconStatus.mode,
+    recon_regime: reconStatus.regime,
+    recon_side: reconStatus.side,
+    recon_confidence: reconStatus.confidence,
+    recon_entry_allowed: reconStatus.entryAllowed,
+    recon_is_chop: reconStatus.isChop,
+
+    market_regime: currentRegime,
+    measured_vol_bps: peak.volBps,
+
+    equity_gov_enabled: gov.enabled,
+    equity_gov_defense: gov.defense,
+    equity_gov_dd_pct: gov.ddPct,
+    equity_gov_multiplier: gov.multiplier,
+
+    entry_allow: null,
+    entry_tier: null,
+    entry_size_multiplier: null,
+    entry_tier_multiplier: null,
+    entry_regime_multiplier: null,
+    entry_defense_multiplier: null,
+    trend_override: null,
+
+    planned_entry_usd: null,
+    base_entry_usd: null,
+    spot_price: current,
+
+    meta: {
+      gates,
+      cooldown,
+      exitDecision: decision,
+    },
+  });
 
   log(runId, "EXIT_DECISION", {
     reason,
