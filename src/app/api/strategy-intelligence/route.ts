@@ -8,6 +8,23 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+type StrategyDecisionRow = {
+  id: string;
+  created_at: string;
+  action_phase: string | null;
+  decision_mode: string | null;
+  decision_reason: string | null;
+  market_regime: string | null;
+  recon_confidence: number | null;
+  outcome_status: string | null;
+  outcome_5m_bps: number | null;
+  outcome_15m_bps: number | null;
+  outcome_30m_bps: number | null;
+  outcome_60m_bps: number | null;
+  best_outcome_bps: number | null;
+  worst_outcome_bps: number | null;
+};
+
 function safe(n: any) {
   const v = Number(n);
   return Number.isFinite(v) ? v : 0;
@@ -52,7 +69,7 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: error.message });
     }
 
-    const rows = data || [];
+    const rows: StrategyDecisionRow[] = (data || []) as StrategyDecisionRow[];
 
     let entryAllowedCount = 0;
     let entryBlockedCount = 0;
@@ -117,8 +134,10 @@ export async function GET() {
           ? null
           : Number(reconConfidenceRaw);
 
-      const outcome30m = row.outcome_30m_bps === null ? null : safe(row.outcome_30m_bps);
-      const outcome60m = row.outcome_60m_bps === null ? null : safe(row.outcome_60m_bps);
+      const outcome30m =
+        row.outcome_30m_bps === null ? null : safe(row.outcome_30m_bps);
+      const outcome60m =
+        row.outcome_60m_bps === null ? null : safe(row.outcome_60m_bps);
 
       if (!regimeMap[regime]) {
         regimeMap[regime] = {
@@ -160,7 +179,6 @@ export async function GET() {
         confidenceBuckets[confidenceBucket].avg30mBpsCount += 1;
       }
 
-      // ENTRY intelligence
       if (actionPhase === "ENTRY") {
         if (decisionMode === "allowed") {
           entryAllowedCount += 1;
@@ -191,7 +209,6 @@ export async function GET() {
         }
       }
 
-      // EXIT intelligence
       if (actionPhase === "EXIT") {
         if (decisionMode === "hold") {
           exitHoldCount += 1;
