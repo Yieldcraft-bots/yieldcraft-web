@@ -25,7 +25,7 @@ type StrategyDecisionRow = {
   worst_outcome_bps: number | null;
 };
 
-function safe(n: any) {
+function safe(n: unknown) {
   const v = Number(n);
   return Number.isFinite(v) ? v : 0;
 }
@@ -38,6 +38,46 @@ function pct(part: number, total: number) {
 function avg(sum: number, count: number) {
   if (!count) return 0;
   return sum / count;
+}
+
+function toRow(raw: any): StrategyDecisionRow {
+  return {
+    id: String(raw?.id ?? ""),
+    created_at: String(raw?.created_at ?? ""),
+    action_phase: raw?.action_phase ?? null,
+    decision_mode: raw?.decision_mode ?? null,
+    decision_reason: raw?.decision_reason ?? null,
+    market_regime: raw?.market_regime ?? null,
+    recon_confidence:
+      raw?.recon_confidence === null || raw?.recon_confidence === undefined
+        ? null
+        : Number(raw.recon_confidence),
+    outcome_status: raw?.outcome_status ?? null,
+    outcome_5m_bps:
+      raw?.outcome_5m_bps === null || raw?.outcome_5m_bps === undefined
+        ? null
+        : Number(raw.outcome_5m_bps),
+    outcome_15m_bps:
+      raw?.outcome_15m_bps === null || raw?.outcome_15m_bps === undefined
+        ? null
+        : Number(raw.outcome_15m_bps),
+    outcome_30m_bps:
+      raw?.outcome_30m_bps === null || raw?.outcome_30m_bps === undefined
+        ? null
+        : Number(raw.outcome_30m_bps),
+    outcome_60m_bps:
+      raw?.outcome_60m_bps === null || raw?.outcome_60m_bps === undefined
+        ? null
+        : Number(raw.outcome_60m_bps),
+    best_outcome_bps:
+      raw?.best_outcome_bps === null || raw?.best_outcome_bps === undefined
+        ? null
+        : Number(raw.best_outcome_bps),
+    worst_outcome_bps:
+      raw?.worst_outcome_bps === null || raw?.worst_outcome_bps === undefined
+        ? null
+        : Number(raw.worst_outcome_bps),
+  };
 }
 
 export async function GET() {
@@ -69,7 +109,7 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: error.message });
     }
 
-    const rows: StrategyDecisionRow[] = (data || []) as StrategyDecisionRow[];
+    const rows = Array.isArray(data) ? data.map(toRow) : [];
 
     let entryAllowedCount = 0;
     let entryBlockedCount = 0;
@@ -128,16 +168,9 @@ export async function GET() {
       const outcomeStatus = String(row.outcome_status || "").toUpperCase();
       const regime = String(row.market_regime || "UNKNOWN").toUpperCase();
 
-      const reconConfidenceRaw = row.recon_confidence;
-      const reconConfidence =
-        reconConfidenceRaw === null || reconConfidenceRaw === undefined
-          ? null
-          : Number(reconConfidenceRaw);
-
-      const outcome30m =
-        row.outcome_30m_bps === null ? null : safe(row.outcome_30m_bps);
-      const outcome60m =
-        row.outcome_60m_bps === null ? null : safe(row.outcome_60m_bps);
+      const reconConfidence = row.recon_confidence;
+      const outcome30m = row.outcome_30m_bps === null ? null : safe(row.outcome_30m_bps);
+      const outcome60m = row.outcome_60m_bps === null ? null : safe(row.outcome_60m_bps);
 
       if (!regimeMap[regime]) {
         regimeMap[regime] = {
@@ -283,12 +316,10 @@ export async function GET() {
         blocked: entryBlockedCount,
         allowedPct: Number(pct(entryAllowedCount, entryTotal).toFixed(2)),
         blockedPct: Number(pct(entryBlockedCount, entryTotal).toFixed(2)),
-
         wins: entryWinCount,
         losses: entryLossCount,
         missedWins: entryMissedWinCount,
         goodBlocks: entryGoodBlockCount,
-
         winRatePct: Number(pct(entryWinCount, entryResolved).toFixed(2)),
         lossRatePct: Number(pct(entryLossCount, entryResolved).toFixed(2)),
       },
@@ -296,12 +327,10 @@ export async function GET() {
       exit: {
         holdCount: exitHoldCount,
         exitSignalCount: exitSignalCount,
-
         goodHolds: exitGoodHoldCount,
         badHolds: exitBadHoldCount,
         earlyExits: exitEarlyExitCount,
         goodExits: exitGoodExitCount,
-
         holdQualityPct: Number(pct(exitGoodHoldCount, exitResolvedHold).toFixed(2)),
         exitTimingQualityPct: Number(pct(exitGoodExitCount, exitResolvedSignal).toFixed(2)),
       },
