@@ -1,4 +1,3 @@
-// src/app/api/pulse-manager/route.ts
 import { NextResponse } from "next/server";
 import jwt, { type SignOptions } from "jsonwebtoken";
 import crypto from "crypto";
@@ -104,6 +103,9 @@ function uuid() {
   return typeof anyCrypto.randomUUID === "function"
     ? anyCrypto.randomUUID()
     : crypto.randomBytes(16).toString("hex");
+}
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
 }
 
 // ---------- logging ----------
@@ -977,20 +979,44 @@ async function fetchBtcPosition(ctx: Ctx) {
       ok: false as const,
       has_position: false,
       base_available: 0,
+      base_total: 0,
       status: r.status,
       coinbase: r.json ?? r.text,
     };
   }
 
-  const accounts = (r.json as any)?.accounts || [];
-  const btc = accounts.find((a: any) => a?.currency === "BTC");
-  const available = Number(btc?.available_balance?.value || 0);
+  const accounts = Array.isArray((r.json as any)?.accounts)
+    ? (r.json as any).accounts
+    : [];
+
+  const btcAccounts = accounts.filter((a: any) => a?.currency === "BTC");
+
+  let totalAvailable = 0;
+  let totalBalance = 0;
+
+  for (const a of btcAccounts) {
+    const available = Number(a?.available_balance?.value ?? 0);
+    const balance = Number(a?.balance?.value ?? 0);
+    const hold = Number(a?.hold?.value ?? 0);
+
+    const safeAvailable = Number.isFinite(available) ? available : 0;
+    const safeBalance = Number.isFinite(balance)
+      ? balance
+      : safeAvailable + (Number.isFinite(hold) ? hold : 0);
+
+    totalAvailable += safeAvailable;
+    totalBalance += safeBalance > 0 ? safeBalance : safeAvailable;
+  }
 
   const minPos = minPositionBaseBtc();
+  const baseAvailable = Number(totalAvailable.toFixed(8));
+  const baseTotal = Number(totalBalance.toFixed(8));
+
   return {
     ok: true as const,
-    has_position: Number.isFinite(available) && available >= minPos,
-    base_available: Number.isFinite(available) ? available : 0,
+    has_position: baseTotal >= minPos,
+    base_available: baseAvailable,
+    base_total: baseTotal,
     min_pos: minPos,
   };
 }
@@ -1017,10 +1043,15 @@ async function fetchUsdAndBtcBalances(ctx: Ctx): Promise<
 
   const accounts = (r.json as any)?.accounts || [];
   const usdAcct = accounts.find((a: any) => a?.currency === "USD");
-  const btcAcct = accounts.find((a: any) => a?.currency === "BTC");
+  const btcAcct = accounts.filter((a: any) => a?.currency === "BTC");
 
   const usd = Number(usdAcct?.available_balance?.value || 0);
-  const btc = Number(btcAcct?.available_balance?.value || 0);
+
+  let btc = 0;
+  for (const a of btcAcct) {
+    const bal = Number(a?.balance?.value ?? a?.available_balance?.value ?? 0);
+    btc += Number.isFinite(bal) ? bal : 0;
+  }
 
   return {
     ok: true,
@@ -1737,6 +1768,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     baseEntryUsd,
     scaledEntryUsd,
     finalEntryUsdPrePlan,
+    position,
     caps: {
       hardMaxUsd,
       entMaxUsd,
@@ -1857,6 +1889,80 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         equityGov: gov,
       };
 
+    // HARD ROLLOUT CAP: total BTC exposure per user
+    const maxPositionUsd = Math.max(0.01, Math.min(entMaxUsd, hardMaxUsd));
+    const currentBaseForCap = Number(
+      (position as any).base_total ?? (position as any).base_available ?? 0
+    );
+    const currentPositionUsd =
+      refPrice > 0 && Number.isFinite(currentBaseForCap)
+        ? round2(currentBaseForCap * refPrice)
+        : 0;
+
+    if (currentPositionUsd >= maxPositionUsd - 0.01) {
+      await writeStrategyDecision({
+        created_at: nowIso(),
+        user_id: ctx.user_id,
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
+        run_id: runId,
+
+        has_position: false,
+        action_phase: "ENTRY",
+        decision_mode: "blocked",
+        decision_reason: "entry_blocked_total_position_cap",
+
+        recon_enabled: reconStatus.enabled,
+        recon_mode: reconStatus.mode,
+        recon_regime: reconStatus.regime,
+        recon_side: reconStatus.side,
+        recon_confidence: reconStatus.confidence,
+        recon_entry_allowed: reconStatus.entryAllowed,
+        recon_is_chop: reconStatus.isChop,
+
+        market_regime: currentRegime,
+        measured_vol_bps: null,
+
+        equity_gov_enabled: gov.enabled,
+        equity_gov_defense: gov.defense,
+        equity_gov_dd_pct: gov.ddPct,
+        equity_gov_multiplier: gov.multiplier,
+
+        entry_allow: false,
+        entry_tier: null,
+        entry_size_multiplier: 0,
+        entry_tier_multiplier: null,
+        entry_regime_multiplier: null,
+        entry_defense_multiplier: null,
+        trend_override: null,
+
+        planned_entry_usd: 0,
+        base_entry_usd: finalEntryUsdPrePlan,
+        spot_price: refPrice || null,
+
+        meta: {
+          gates,
+          cooldown,
+          currentPositionUsd,
+          maxPositionUsd,
+          base_total: (position as any).base_total ?? null,
+          base_available: (position as any).base_available ?? null,
+        },
+      });
+
+      return {
+        ok: true,
+        mode: "NO_POSITION_CAP_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        currentPositionUsd,
+        maxPositionUsd,
+      };
+    }
+
     const entryPeak = await fetchPeakWindowWithVol(ctx);
     const measuredEntryVolBps =
       entryPeak.ok && Number.isFinite(entryPeak.volBps)
@@ -1895,12 +2001,15 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       defenseConf,
     });
 
+    const remainingUsdCap = Math.max(0, maxPositionUsd - currentPositionUsd);
+
     const plannedEntryUsd = Math.max(
       0.01,
       Math.min(
         finalEntryUsdPrePlan * entryPlan.sizeMultiplier,
         entMaxUsd,
-        hardMaxUsd
+        hardMaxUsd,
+        remainingUsdCap
       )
     );
     const entryQuoteUsd = fmtQuoteSizeUsd(plannedEntryUsd);
@@ -1951,6 +2060,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         notes: entryPlan.notes,
         defenseApplied: entryPlan.defenseApplied,
         reconReason: reconStatus.reason,
+        currentPositionUsd,
+        maxPositionUsd,
+        remainingUsdCap,
+        base_total: (position as any).base_total ?? null,
+        base_available: (position as any).base_available ?? null,
       },
     });
 
@@ -1974,6 +2088,21 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       };
     }
 
+    if (remainingUsdCap < 0.01 || plannedEntryUsd < 0.01) {
+      return {
+        ok: true,
+        mode: "NO_POSITION_CAP_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        currentPositionUsd,
+        maxPositionUsd,
+        remainingUsdCap,
+      };
+    }
+
     if (entriesDryRun) {
       return {
         ok: true,
@@ -1986,6 +2115,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         regime: currentRegime,
         entryPlan,
         would_buy_quote_usd: entryQuoteUsd,
+        currentPositionUsd,
+        maxPositionUsd,
+        remainingUsdCap,
       };
     }
 
@@ -2019,7 +2151,13 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         run_id: runId,
         mode: "ENTRY_BUY_IOC",
         reason: entryPlan.reason,
-        decision: { regime: currentRegime, entryPlan },
+        decision: {
+          regime: currentRegime,
+          entryPlan,
+          currentPositionUsd,
+          maxPositionUsd,
+          remainingUsdCap,
+        },
         recon_status: reconStatus,
         equity_gov: gov,
         ok: buy.ok,
@@ -2036,6 +2174,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_id: orderId,
             execution: exec,
             entry_plan: entryPlan,
+            currentPositionUsd,
+            maxPositionUsd,
+            remainingUsdCap,
           },
         }),
       });
@@ -2106,6 +2247,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         decision: {
           regime: currentRegime,
           entryPlan,
+          currentPositionUsd,
+          maxPositionUsd,
+          remainingUsdCap,
           makerAttempt: {
             baseSize: attempt.baseSize,
             limitPrice: attempt.limitPrice,
@@ -2130,6 +2274,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_id: orderId,
             execution: exec,
             entry_plan: entryPlan,
+            currentPositionUsd,
+            maxPositionUsd,
+            remainingUsdCap,
           },
         }),
       });
@@ -2179,6 +2326,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         decision: {
           regime: currentRegime,
           entryPlan,
+          currentPositionUsd,
+          maxPositionUsd,
+          remainingUsdCap,
           maker_order_id: makerOrderId,
           status: lastSt,
           makerAttempt: {
@@ -2213,6 +2363,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_status: lastSt?.raw ?? null,
             execution: exec,
             entry_plan: entryPlan,
+            currentPositionUsd,
+            maxPositionUsd,
+            remainingUsdCap,
           },
         }),
       });
@@ -2275,6 +2428,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       decision: {
         regime: currentRegime,
         entryPlan,
+        currentPositionUsd,
+        maxPositionUsd,
+        remainingUsdCap,
         maker_order_id: makerOrderId,
         status: lastSt,
       },
@@ -2296,6 +2452,9 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           order_id: orderId,
           execution: exec2,
           entry_plan: entryPlan,
+          currentPositionUsd,
+          maxPositionUsd,
+          remainingUsdCap,
         },
       }),
     });
@@ -2494,6 +2653,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       cooldown,
       exitDecision: decision,
+      base_total: (position as any).base_total ?? null,
+      base_available: (position as any).base_available ?? null,
     },
   });
 
@@ -2504,6 +2665,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     trailingActive: trailArmed,
     drawdownFromPeakBps,
     positionSize: (position as any).base_available,
+    positionTotal: (position as any).base_total,
     effectiveTrailOffsetBps: decision.effectiveTrailOffsetBps,
     minHoldOk,
   });
@@ -2979,6 +3141,8 @@ async function runForAllUsers(masterRunId: string) {
         reason: (out as any)?.reason,
         regime: (out as any)?.regime,
         error: (out as any)?.error,
+        currentPositionUsd: (out as any)?.currentPositionUsd,
+        maxPositionUsd: (out as any)?.maxPositionUsd,
       });
     } catch (e: any) {
       failCount++;
