@@ -10,14 +10,55 @@ const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
 type StrategyIntelResp =
   | {
       ok: true;
-      tradesAnalyzed: number;
-      wins: number;
-      losses: number;
-      avgWinBps: number;
-      avgLossBps: number;
-      edgePerTradeBps: number;
-      entryQualityPct: number;
-      exitEfficiencyPct: number;
+      decisionsAnalyzed: number;
+      averages: {
+        avgOutcome30mBps: number;
+        avgOutcome60mBps: number;
+      };
+      entry: {
+        total: number;
+        allowed: number;
+        blocked: number;
+        allowedPct: number;
+        blockedPct: number;
+        wins: number;
+        losses: number;
+        missedWins: number;
+        goodBlocks: number;
+        winRatePct: number;
+        lossRatePct: number;
+      };
+      exit: {
+        holdCount: number;
+        exitSignalCount: number;
+        goodHolds: number;
+        badHolds: number;
+        earlyExits: number;
+        goodExits: number;
+        holdQualityPct: number;
+        exitTimingQualityPct: number;
+      };
+      confidenceSummary?: Array<{
+        bucket: string;
+        total: number;
+        wins: number;
+        losses: number;
+        winRatePct: number;
+        avg30mBps: number;
+      }>;
+      regimeSummary?: Array<{
+        regime: string;
+        total: number;
+        wins: number;
+        losses: number;
+        missedWins: number;
+        goodBlocks: number;
+        goodHolds: number;
+        badHolds: number;
+        earlyExits: number;
+        goodExits: number;
+        entryWinRatePct: number;
+      }>;
     }
   | { ok: false; error?: string; [k: string]: any };
 
@@ -120,16 +161,16 @@ function edgeTone(v: any): Tone {
 function entryQualityTone(v: any): Tone {
   const n = Number(v);
   if (!Number.isFinite(n)) return "gray";
-  if (n > 0) return "green";
-  if (n >= -0.5) return "yellow";
+  if (n >= 70) return "green";
+  if (n >= 50) return "yellow";
   return "red";
 }
 
 function exitEfficiencyTone(v: any): Tone {
   const n = Number(v);
   if (!Number.isFinite(n)) return "gray";
-  if (n >= 85) return "green";
-  if (n >= 70) return "yellow";
+  if (n >= 70) return "green";
+  if (n >= 40) return "yellow";
   return "red";
 }
 
@@ -159,8 +200,8 @@ function avgWinTone(v: any): Tone {
 function avgLossTone(v: any): Tone {
   const n = Number(v);
   if (!Number.isFinite(n)) return "gray";
-  if (n <= 120) return "green";
-  if (n <= 170) return "yellow";
+  if (n <= 0) return "green";
+  if (n <= 25) return "yellow";
   return "red";
 }
 
@@ -309,10 +350,44 @@ export default function Admin() {
   const cfSnap = inst?.corefund?.snapshot;
 
   const netTone = pnlTone(pStats?.netPnL);
-  const topEdgeTone: Tone =
+
+  const strategyEdgeValue =
     strategyIntel && strategyIntel.ok
-      ? edgeTone(strategyIntel.edgePerTradeBps)
-      : "gray";
+      ? strategyIntel.averages.avgOutcome30mBps
+      : null;
+
+  const strategyTradesAnalyzed =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.decisionsAnalyzed
+      : null;
+
+  const strategyWins =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.wins : null;
+
+  const strategyLosses =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.losses : null;
+
+  const strategyEntryQuality =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.entry.winRatePct
+      : null;
+
+  const strategyExitEfficiency =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.exit.holdQualityPct
+      : null;
+
+  const strategyAvgWin =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.averages.avgOutcome60mBps
+      : null;
+
+  const strategyAvgLoss =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.entry.lossRatePct
+      : null;
+
+  const topEdgeTone: Tone = edgeTone(strategyEdgeValue);
 
   const winRatePct =
     pStats && pStats.winRate != null ? Number(pStats.winRate) * 100 : null;
@@ -320,30 +395,11 @@ export default function Admin() {
   const pulseWinRateTone = winRateTone(winRatePct);
   const coreFundDdTone = drawdownTone(cfSnap?.dd_pct_portfolio);
 
-  const strategyEdgeTone: Tone =
-    strategyIntel && strategyIntel.ok
-      ? edgeTone(strategyIntel.edgePerTradeBps)
-      : "gray";
-
-  const strategyEntryTone: Tone =
-    strategyIntel && strategyIntel.ok
-      ? entryQualityTone(strategyIntel.entryQualityPct)
-      : "gray";
-
-  const strategyExitTone: Tone =
-    strategyIntel && strategyIntel.ok
-      ? exitEfficiencyTone(strategyIntel.exitEfficiencyPct)
-      : "gray";
-
-  const strategyAvgWinTone: Tone =
-    strategyIntel && strategyIntel.ok
-      ? avgWinTone(strategyIntel.avgWinBps)
-      : "gray";
-
-  const strategyAvgLossTone: Tone =
-    strategyIntel && strategyIntel.ok
-      ? avgLossTone(strategyIntel.avgLossBps)
-      : "gray";
+  const strategyEdgeTone: Tone = edgeTone(strategyEdgeValue);
+  const strategyEntryTone: Tone = entryQualityTone(strategyEntryQuality);
+  const strategyExitTone: Tone = exitEfficiencyTone(strategyExitEfficiency);
+  const strategyAvgWinTone: Tone = avgWinTone(strategyAvgWin);
+  const strategyAvgLossTone: Tone = avgLossTone(strategyAvgLoss);
 
   const recommendedProfitTone: Tone =
     strategyAdjustments && strategyAdjustments.ok
@@ -397,7 +453,7 @@ export default function Admin() {
             <TonePill
               label={`EDGE ${
                 strategyIntel && strategyIntel.ok
-                  ? bps(strategyIntel.edgePerTradeBps)
+                  ? bps(strategyEdgeValue)
                   : "—"
               }`}
               tone={topEdgeTone}
@@ -512,7 +568,7 @@ export default function Admin() {
               label="Trades Analyzed"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? String(strategyIntel.tradesAnalyzed)
+                  ? String(strategyTradesAnalyzed)
                   : "—"
               }
             />
@@ -521,30 +577,45 @@ export default function Admin() {
               label="Edge / Trade"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? bps(strategyIntel.edgePerTradeBps)
+                  ? bps(strategyEdgeValue)
                   : "—"
               }
               tone={strategyEdgeTone}
+              sub={
+                strategyIntel && strategyIntel.ok
+                  ? `Avg 60m ${bps(strategyIntel.averages.avgOutcome60mBps)}`
+                  : undefined
+              }
             />
 
             <Stat
               label="Entry Quality"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? pct(strategyIntel.entryQualityPct)
+                  ? pct(strategyEntryQuality)
                   : "—"
               }
               tone={strategyEntryTone}
+              sub={
+                strategyIntel && strategyIntel.ok
+                  ? `${strategyIntel.entry.allowed} allowed / ${strategyIntel.entry.blocked} blocked`
+                  : undefined
+              }
             />
 
             <Stat
               label="Exit Efficiency"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? pct(strategyIntel.exitEfficiencyPct)
+                  ? pct(strategyExitEfficiency)
                   : "—"
               }
               tone={strategyExitTone}
+              sub={
+                strategyIntel && strategyIntel.ok
+                  ? `${strategyIntel.exit.goodHolds} good holds / ${strategyIntel.exit.badHolds} bad holds`
+                  : undefined
+              }
             />
           </div>
 
@@ -553,7 +624,7 @@ export default function Admin() {
               label="Wins"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? String(strategyIntel.wins)
+                  ? String(strategyWins)
                   : "—"
               }
             />
@@ -562,7 +633,7 @@ export default function Admin() {
               label="Losses"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? String(strategyIntel.losses)
+                  ? String(strategyLosses)
                   : "—"
               }
             />
@@ -571,20 +642,30 @@ export default function Admin() {
               label="Avg Win"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? bps(strategyIntel.avgWinBps)
+                  ? bps(strategyAvgWin)
                   : "—"
               }
               tone={strategyAvgWinTone}
+              sub={
+                strategyIntel && strategyIntel.ok
+                  ? "Using avg 60m outcome"
+                  : undefined
+              }
             />
 
             <Stat
               label="Avg Loss"
               value={
                 strategyIntel && strategyIntel.ok
-                  ? bps(strategyIntel.avgLossBps)
+                  ? pct(strategyAvgLoss)
                   : "—"
               }
               tone={strategyAvgLossTone}
+              sub={
+                strategyIntel && strategyIntel.ok
+                  ? "Entry loss rate"
+                  : undefined
+              }
             />
           </div>
         </section>
