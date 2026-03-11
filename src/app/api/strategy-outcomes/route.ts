@@ -6,17 +6,16 @@ export const runtime = "nodejs";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
-// We are keeping this locked to BTC-USD for now to stay stable.
+// Keep locked to BTC-USD for stability
 const PRODUCT_ID = "BTC-USD";
 
 // How many pending rows to process per run
 const BATCH_SIZE = 50;
 
-// We evaluate in 5m candle steps
+// Evaluate in 5m candle steps
 const WINDOWS_MIN = [5, 15, 30, 60] as const;
 
-// These are only used to classify "missed win" vs "good block"
-// Keep them conservative for now.
+// Conservative outcome classification thresholds
 const TARGET_BPS = 100; // +1.00%
 const STOP_BPS = -60;   // -0.60%
 
@@ -24,9 +23,8 @@ type DecisionRow = {
   id: string;
   created_at: string;
   outcome_status: string | null;
-  entry_allowed?: boolean | null;
-  decision?: string | null;
-  action?: string | null;
+  decision_mode?: string | null;
+  action_phase?: string | null;
 };
 
 type Candle = {
@@ -79,9 +77,7 @@ function classifyOutcome(params: {
     return "MIXED";
   }
 
-  // Blocked entry logic:
-  // If blocked and market ran anyway => MISSED_WIN
-  // If blocked and market fell / stayed weak => GOOD_BLOCK
+  // Blocked-entry logic
   if (bestBps != null && bestBps >= TARGET_BPS) return "MISSED_WIN";
   if (worstBps != null && worstBps <= STOP_BPS) return "GOOD_BLOCK";
   if (outcome30m != null && outcome30m > 0) return "MISSED_WIN_LIGHT";
@@ -143,14 +139,18 @@ export async function POST(_req: NextRequest) {
 
     const { data: rows, error } = await supabase
       .from("strategy_decisions")
-      .select("id, created_at, outcome_status, entry_allowed, decision, action")
+      .select("id, created_at, outcome_status, decision_mode, action_phase")
       .is("outcome_status", null)
       .gte("created_at", since)
       .order("created_at", { ascending: true })
       .limit(BATCH_SIZE);
 
     if (error) {
-      return json(500, { ok: false, stage: "select_pending_rows", error: error.message });
+      return json(500, {
+        ok: false,
+        stage: "select_pending_rows",
+        error: error.message,
+      });
     }
 
     if (!rows || rows.length === 0) {
@@ -162,7 +162,6 @@ export async function POST(_req: NextRequest) {
       });
     }
 
-    // Pull enough candles to cover the oldest row through +60m
     const firstTs = new Date(rows[0].created_at);
     const lastTs = new Date(rows[rows.length - 1].created_at);
 
@@ -178,7 +177,6 @@ export async function POST(_req: NextRequest) {
       const decisionTime = new Date(row.created_at);
       const decisionUnix = toUnixSeconds(decisionTime);
 
-      // Base price = first candle close at or after decision time
       const basePrice = getCloseAtOrAfter(candles, decisionUnix);
       if (!basePrice) {
         results.push({
@@ -196,7 +194,6 @@ export async function POST(_req: NextRequest) {
         outcomeMap[min] = px != null ? roundBps(bps(basePrice, px)) : null;
       }
 
-      // Best/worst from the observed windows
       const observed = Object.values(outcomeMap).filter(
         (v): v is number => typeof v === "number" && Number.isFinite(v)
       );
@@ -212,7 +209,7 @@ export async function POST(_req: NextRequest) {
       const stopHit30m = outcome30m != null ? outcome30m <= STOP_BPS : null;
       const stopHit60m = outcome60m != null ? outcome60m <= STOP_BPS : null;
 
-      const entryAllowed = Boolean(row.entry_allowed);
+      const entryAllowed = row.decision_mode === "ENTRY_ALLOWED";
       const outcomeStatus = classifyOutcome({
         entryAllowed,
         outcome30m,
@@ -251,6 +248,8 @@ export async function POST(_req: NextRequest) {
       results.push({
         id: row.id,
         ok: true,
+        decision_mode: row.decision_mode,
+        action_phase: row.action_phase,
         basePrice,
         outcome_5m_bps: outcomeMap[5],
         outcome_15m_bps: outcomeMap[15],
