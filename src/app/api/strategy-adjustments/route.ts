@@ -2,7 +2,7 @@
 // Read-only strategy recommendation engine for Pulse
 // No trading side effects — analysis only.
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -20,13 +20,17 @@ function n(x: any): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-function startOfTodayISO(): string {
+function daysAgoISO(days: number): string {
   const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString();
 }
 
-export async function GET() {
+function clamp(num: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, num));
+}
+
+export async function GET(req: NextRequest) {
   try {
     const url =
       process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
@@ -46,12 +50,18 @@ export async function GET() {
       auth: { persistSession: false },
     });
 
-    const since = startOfTodayISO();
+    const search = req.nextUrl.searchParams;
+    const lookbackDaysRaw = n(search.get("days"));
+    const lookbackDays =
+      lookbackDaysRaw > 0 ? clamp(Math.floor(lookbackDaysRaw), 1, 30) : 7;
+
+    const since = daysAgoISO(lookbackDays);
 
     const { data, error } = await supabase
       .from("trade_logs")
       .select("*")
-      .gte("created_at", since);
+      .gte("created_at", since)
+      .order("created_at", { ascending: false });
 
     if (error) {
       return json(200, {
@@ -65,31 +75,55 @@ export async function GET() {
 
     let wins = 0;
     let losses = 0;
-    let winBps = 0;
-    let lossBps = 0;
+    let totalClosedTrades = 0;
+    let winBpsSum = 0;
+    let lossBpsSum = 0;
+    let netBpsSum = 0;
+
+    let usableRows = 0;
+    let skippedRows = 0;
 
     for (const r of rows) {
-      const side = String(r.side || "").toUpperCase();
-      const decision = r.decision || {};
-      const pnlBps = n(decision.pnlBps);
+      const side = String(r?.side || "").toUpperCase();
+      const decision =
+        r?.decision && typeof r.decision === "object" ? r.decision : {};
 
-      if (side !== "SELL") continue;
+      // Strategy suggestions should be based on realized outcomes only.
+      // We use SELL rows as the current proxy for a completed trade outcome.
+      if (side !== "SELL") {
+        skippedRows++;
+        continue;
+      }
+
+      const pnlBps = n((decision as any).pnlBps);
+
+      // Skip rows that do not have a meaningful realized pnlBps.
+      if (!Number.isFinite(pnlBps) || pnlBps === 0) {
+        skippedRows++;
+        continue;
+      }
+
+      usableRows++;
+      totalClosedTrades++;
+      netBpsSum += pnlBps;
 
       if (pnlBps > 0) {
         wins++;
-        winBps += pnlBps;
+        winBpsSum += pnlBps;
       } else {
         losses++;
-        lossBps += Math.abs(pnlBps);
+        lossBpsSum += Math.abs(pnlBps);
       }
     }
 
-    const trades = wins + losses;
+    const trades = totalClosedTrades;
     const winRate = trades > 0 ? wins / trades : 0;
+    const avgWin = wins > 0 ? winBpsSum / wins : 0;
+    const avgLoss = losses > 0 ? lossBpsSum / losses : 0;
+    const edgePerTradeBps = trades > 0 ? netBpsSum / trades : 0;
 
-    const avgWin = wins > 0 ? winBps / wins : 0;
-    const avgLoss = losses > 0 ? lossBps / losses : 0;
-
+    // Current values are still static defaults for now.
+    // This route is advisory only and should not mutate execution config.
     const currentProfitTarget = 160;
     const currentTrailOffset = 80;
     const currentReconConf = 0.78;
@@ -98,29 +132,66 @@ export async function GET() {
     let recommendedTrailOffset = currentTrailOffset;
     let recommendedReconConf = currentReconConf;
 
-    if (avgWin < avgLoss) {
-      recommendedProfitTarget = Math.max(120, currentProfitTarget - 20);
-    }
+    // Confidence labeling for UI honesty
+    let confidence: "LOW_SAMPLE" | "MEDIUM_SAMPLE" | "HIGHER_CONFIDENCE" =
+      "LOW_SAMPLE";
 
-    if (winRate < 0.4) {
-      recommendedReconConf = Math.min(0.85, currentReconConf + 0.03);
-    }
+    if (trades >= 30) confidence = "MEDIUM_SAMPLE";
+    if (trades >= 75) confidence = "HIGHER_CONFIDENCE";
 
-    if (avgLoss > avgWin) {
-      recommendedTrailOffset = Math.max(60, currentTrailOffset - 10);
+    // Advisory rules:
+    // Only make suggestions when there is enough sample to justify them.
+    if (trades >= 10) {
+      // If losses are larger than wins, tighten target modestly.
+      if (avgLoss > avgWin && avgWin > 0) {
+        recommendedProfitTarget = Math.max(120, currentProfitTarget - 20);
+      }
+
+      // If win rate is poor, require slightly stronger confidence to enter.
+      if (winRate < 0.4) {
+        recommendedReconConf = Math.min(0.85, currentReconConf + 0.03);
+      }
+
+      // If average loss is meaningfully larger than average win, tighten trail.
+      if (avgLoss > avgWin && avgLoss > 0) {
+        recommendedTrailOffset = Math.max(60, currentTrailOffset - 10);
+      }
+
+      // If expectancy is solid and win rate healthy, allow slightly looser target.
+      if (edgePerTradeBps > 20 && winRate >= 0.55 && avgWin > avgLoss) {
+        recommendedProfitTarget = Math.min(220, currentProfitTarget + 10);
+      }
     }
 
     return json(200, {
       ok: true,
       status: "STRATEGY_ADJUSTMENTS_READY",
 
+      meta: {
+        advisoryOnly: true,
+        basis: "closed_trade_logs_with_realized_pnl_bps",
+        lookbackDays,
+        since,
+        rowsFetched: rows.length,
+        usableRows,
+        skippedRows,
+        sampleConfidence: confidence,
+        notes: [
+          "Recommendations are based on realized SELL-side closed trade outcomes only.",
+          "This panel is advisory and does not modify live trading parameters.",
+          "Low sample sizes should not be trusted for aggressive optimization.",
+        ],
+      },
+
       stats: {
         trades,
         wins,
         losses,
-        winRate,
+        winRate: Number((winRate * 100).toFixed(2)),
         avgWinBps: Number(avgWin.toFixed(2)),
         avgLossBps: Number(avgLoss.toFixed(2)),
+        edgePerTradeBps: Number(edgePerTradeBps.toFixed(2)),
+        netBps: Number(netBpsSum.toFixed(2)),
       },
 
       current: {
@@ -132,7 +203,7 @@ export async function GET() {
       recommended: {
         profitTargetBps: recommendedProfitTarget,
         trailOffsetBps: recommendedTrailOffset,
-        reconConfidence: recommendedReconConf,
+        reconConfidence: Number(recommendedReconConf.toFixed(2)),
       },
     });
   } catch (e: any) {
