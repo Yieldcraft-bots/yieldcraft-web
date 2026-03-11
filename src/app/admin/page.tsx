@@ -427,7 +427,7 @@ export default function Admin() {
 
   const adjustmentWinRateTone: Tone =
     strategyAdjustments && strategyAdjustments.ok
-      ? winRateTone(Number(strategyAdjustments.stats.winRate) * 100)
+      ? winRateTone(strategyAdjustments.stats.winRate)
       : "gray";
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
@@ -702,7 +702,7 @@ export default function Admin() {
               label="Win Rate"
               value={
                 strategyAdjustments && strategyAdjustments.ok
-                  ? pct(Number(strategyAdjustments.stats.winRate) * 100)
+                  ? pct(strategyAdjustments.stats.winRate)
                   : "—"
               }
               tone={adjustmentWinRateTone}
