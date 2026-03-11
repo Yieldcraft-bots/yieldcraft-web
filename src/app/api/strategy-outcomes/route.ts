@@ -15,7 +15,7 @@ const BATCH_SIZE = 50;
 // Evaluate in 5m candle steps
 const WINDOWS_MIN = [5, 15, 30, 60] as const;
 
-// Conservative outcome classification thresholds
+// Conservative thresholds
 const TARGET_BPS = 100; // +1.00%
 const STOP_BPS = -60;   // -0.60%
 
@@ -62,27 +62,94 @@ function bps(fromPrice: number, toPrice: number) {
   return ((toPrice - fromPrice) / fromPrice) * 10000;
 }
 
-function classifyOutcome(params: {
-  entryAllowed: boolean;
+function normalizeActionPhase(v?: string | null) {
+  return String(v || "").trim().toUpperCase();
+}
+
+function normalizeDecisionMode(v?: string | null) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function classifyEntryOutcome(params: {
+  decisionMode: string;
   outcome30m: number | null;
   bestBps: number | null;
   worstBps: number | null;
 }) {
-  const { entryAllowed, outcome30m, bestBps, worstBps } = params;
+  const { decisionMode, outcome30m, bestBps, worstBps } = params;
+
+  const entryAllowed = decisionMode === "allowed";
 
   if (entryAllowed) {
     if (outcome30m == null) return "PENDING";
     if (outcome30m >= TARGET_BPS) return "WIN";
     if (outcome30m <= STOP_BPS) return "LOSS";
-    return "MIXED";
+    return outcome30m > 0 ? "WIN_LIGHT" : "LOSS_LIGHT";
   }
 
-  // Blocked-entry logic
+  // blocked entry logic
   if (bestBps != null && bestBps >= TARGET_BPS) return "MISSED_WIN";
   if (worstBps != null && worstBps <= STOP_BPS) return "GOOD_BLOCK";
   if (outcome30m != null && outcome30m > 0) return "MISSED_WIN_LIGHT";
   if (outcome30m != null && outcome30m <= 0) return "GOOD_BLOCK_LIGHT";
   return "PENDING";
+}
+
+function classifyExitOutcome(params: {
+  decisionMode: string;
+  outcome30m: number | null;
+  bestBps: number | null;
+  worstBps: number | null;
+}) {
+  const { decisionMode, outcome30m, bestBps, worstBps } = params;
+
+  // For EXIT phase:
+  // hold       -> was holding good or bad?
+  // exit_signal -> was exit signal good or early?
+  if (decisionMode === "exit_signal") {
+    if (worstBps != null && worstBps <= STOP_BPS) return "GOOD_EXIT";
+    if (bestBps != null && bestBps >= TARGET_BPS) return "EARLY_EXIT";
+    if (outcome30m != null && outcome30m > 0) return "EARLY_EXIT_LIGHT";
+    if (outcome30m != null && outcome30m <= 0) return "GOOD_EXIT_LIGHT";
+    return "PENDING";
+  }
+
+  // default EXIT hold logic
+  if (bestBps != null && bestBps >= TARGET_BPS) return "GOOD_HOLD";
+  if (worstBps != null && worstBps <= STOP_BPS) return "BAD_HOLD";
+  if (outcome30m != null && outcome30m > 0) return "GOOD_HOLD_LIGHT";
+  if (outcome30m != null && outcome30m <= 0) return "BAD_HOLD_LIGHT";
+  return "PENDING";
+}
+
+function classifyOutcome(params: {
+  actionPhase: string;
+  decisionMode: string;
+  outcome30m: number | null;
+  bestBps: number | null;
+  worstBps: number | null;
+}) {
+  const { actionPhase, decisionMode, outcome30m, bestBps, worstBps } = params;
+
+  if (actionPhase === "ENTRY") {
+    return classifyEntryOutcome({
+      decisionMode,
+      outcome30m,
+      bestBps,
+      worstBps,
+    });
+  }
+
+  if (actionPhase === "EXIT") {
+    return classifyExitOutcome({
+      decisionMode,
+      outcome30m,
+      bestBps,
+      worstBps,
+    });
+  }
+
+  return "UNKNOWN_PHASE";
 }
 
 async function fetchPublicCandles(startUnix: number, endUnix: number): Promise<Candle[]> {
@@ -209,9 +276,12 @@ export async function POST(_req: NextRequest) {
       const stopHit30m = outcome30m != null ? outcome30m <= STOP_BPS : null;
       const stopHit60m = outcome60m != null ? outcome60m <= STOP_BPS : null;
 
-      const entryAllowed = row.decision_mode === "ENTRY_ALLOWED";
+      const actionPhase = normalizeActionPhase(row.action_phase);
+      const decisionMode = normalizeDecisionMode(row.decision_mode);
+
       const outcomeStatus = classifyOutcome({
-        entryAllowed,
+        actionPhase,
+        decisionMode,
         outcome30m,
         bestBps,
         worstBps,
