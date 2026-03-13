@@ -1,10 +1,14 @@
 // src/app/api/strategy-intelligence/route.ts
 // Read-only Strategy Intelligence powered by completed_trades truth layer
+// Filters out malformed / absurd rows so Mission Control stays honest.
 
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
+
+const MAX_REASONABLE_ABS_BPS = 2000; // 20.00%
+const MAX_REASONABLE_HOLD_MINUTES = 60 * 24 * 7; // 7 days
 
 function json(status: number, body: any) {
   return NextResponse.json(body, {
@@ -16,7 +20,79 @@ function json(status: number, body: any) {
 function n(x: any): number {
   const v =
     typeof x === "string" ? Number(x) : typeof x === "number" ? x : NaN;
-  return Number.isFinite(v) ? v : 0;
+  return Number.isFinite(v) ? v : NaN;
+}
+
+function isFiniteNumber(x: any): boolean {
+  return Number.isFinite(n(x));
+}
+
+type CompletedTradeRow = {
+  id?: string | number;
+  user_id?: string | null;
+  bot?: string | null;
+  symbol?: string | null;
+  entry_time?: string | null;
+  exit_time?: string | null;
+  entry_price?: number | string | null;
+  exit_price?: number | string | null;
+  pnl_usd?: number | string | null;
+  pnl_bps?: number | string | null;
+  hold_minutes?: number | string | null;
+  total_buy_size?: number | string | null;
+  total_sell_size?: number | string | null;
+  buy_notional?: number | string | null;
+  sell_notional?: number | string | null;
+};
+
+function isUsableTrade(row: CompletedTradeRow) {
+  const pnlUsd = n(row.pnl_usd);
+  const pnlBps = n(row.pnl_bps);
+  const holdMinutes = n(row.hold_minutes);
+  const entryPrice = n(row.entry_price);
+  const exitPrice = n(row.exit_price);
+
+  if (!isFiniteNumber(row.pnl_usd)) {
+    return { ok: false, reason: "missing_pnl_usd" };
+  }
+
+  if (!isFiniteNumber(row.pnl_bps)) {
+    return { ok: false, reason: "missing_pnl_bps" };
+  }
+
+  if (!isFiniteNumber(row.hold_minutes)) {
+    return { ok: false, reason: "missing_hold_minutes" };
+  }
+
+  if (!isFiniteNumber(row.entry_price) || entryPrice <= 0) {
+    return { ok: false, reason: "bad_entry_price" };
+  }
+
+  if (!isFiniteNumber(row.exit_price) || exitPrice <= 0) {
+    return { ok: false, reason: "bad_exit_price" };
+  }
+
+  if (!row.exit_time) {
+    return { ok: false, reason: "missing_exit_time" };
+  }
+
+  if (holdMinutes < 0 || holdMinutes > MAX_REASONABLE_HOLD_MINUTES) {
+    return { ok: false, reason: "bad_hold_minutes" };
+  }
+
+  // This is the key sanity gate.
+  // If a row says a BTC spot trade made +73% in one round trip,
+  // that row is almost certainly malformed lifecycle math.
+  if (Math.abs(pnlBps) > MAX_REASONABLE_ABS_BPS) {
+    return { ok: false, reason: "absurd_pnl_bps" };
+  }
+
+  return {
+    ok: true,
+    pnlUsd,
+    pnlBps,
+    holdMinutes,
+  };
 }
 
 export async function GET() {
@@ -53,9 +129,7 @@ export async function GET() {
       });
     }
 
-    const trades = Array.isArray(data) ? data : [];
-
-    const decisionsAnalyzed = trades.length;
+    const fetchedTrades: CompletedTradeRow[] = Array.isArray(data) ? data : [];
 
     let wins = 0;
     let losses = 0;
@@ -68,10 +142,26 @@ export async function GET() {
     let profitableHolds = 0;
     let unprofitableHolds = 0;
 
-    for (const t of trades) {
-      const pnlUsd = n((t as any).pnl_usd);
-      const pnlBps = n((t as any).pnl_bps);
-      const holdMinutes = n((t as any).hold_minutes);
+    let rowsUsed = 0;
+    let rowsExcluded = 0;
+
+    const exclusionReasons: Record<string, number> = {};
+
+    for (const trade of fetchedTrades) {
+      const usable = isUsableTrade(trade);
+
+      if (!usable.ok) {
+        rowsExcluded++;
+        exclusionReasons[usable.reason] =
+          (exclusionReasons[usable.reason] || 0) + 1;
+        continue;
+      }
+
+      rowsUsed++;
+
+      const pnlUsd = usable.pnlUsd;
+      const pnlBps = usable.pnlBps;
+      const holdMinutes = usable.holdMinutes;
 
       totalBps += pnlBps;
       totalHoldMinutes += holdMinutes;
@@ -87,11 +177,12 @@ export async function GET() {
       }
     }
 
+    const decisionsAnalyzed = rowsUsed;
+
     const avgOutcome30mBps =
       decisionsAnalyzed > 0 ? totalBps / decisionsAnalyzed : 0;
 
-    const avgOutcome60mBps =
-      wins > 0 ? totalWinBps / wins : 0;
+    const avgOutcome60mBps = wins > 0 ? totalWinBps / wins : 0;
 
     const winRatePct =
       decisionsAnalyzed > 0 ? (wins / decisionsAnalyzed) * 100 : 0;
@@ -102,10 +193,10 @@ export async function GET() {
     const holdQualityPct =
       decisionsAnalyzed > 0 ? (profitableHolds / decisionsAnalyzed) * 100 : 0;
 
-    const exitTimingQualityPct = holdQualityPct;
+    const exitTimingQualityPct =
+      decisionsAnalyzed > 0 ? (profitableHolds / decisionsAnalyzed) * 100 : 0;
 
-    const avgLossBps =
-      losses > 0 ? totalLossBpsAbs / losses : 0;
+    const avgLossBps = losses > 0 ? totalLossBpsAbs / losses : 0;
 
     const avgHoldMinutes =
       decisionsAnalyzed > 0 ? totalHoldMinutes / decisionsAnalyzed : 0;
@@ -113,8 +204,7 @@ export async function GET() {
     return json(200, {
       ok: true,
       status: "STRATEGY_INTELLIGENCE_READY",
-      source: "completed_trades",
-
+      source: "completed_trades_sane_rows",
       decisionsAnalyzed,
 
       averages: {
@@ -150,7 +240,12 @@ export async function GET() {
       meta: {
         avgLossBps: Number(avgLossBps.toFixed(2)),
         avgHoldMinutes: Number(avgHoldMinutes.toFixed(2)),
-        note: "Strategy Intelligence is now aligned to completed round-trip trades.",
+        rowsFetched: fetchedTrades.length,
+        rowsUsed,
+        rowsExcluded,
+        exclusionReasons,
+        maxReasonableAbsBps: MAX_REASONABLE_ABS_BPS,
+        note: "Strategy Intelligence is aligned to completed round-trip trades with sanity filtering.",
       },
     });
   } catch (e: any) {
