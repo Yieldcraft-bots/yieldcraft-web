@@ -12,6 +12,19 @@ const BOT_NAME = "pulse";
 // If set, we ONLY run for this user_id (core fund safety gate)
 const ONLY_USER_ID = (process.env.PULSE_ONLY_USER_ID || "").trim() || null;
 
+type MarketRegime = "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE";
+
+type ExitProfile = {
+  name: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE";
+  profitTargetBps: number;
+  trailArmBps: number;
+  trailOffsetBpsBase: number;
+  trailVolFloorBps: number;
+  trailMinHoldMin: number;
+  timeStopEnabled: boolean;
+  maxHoldMinutes: number;
+};
+
 // ---------- helpers ----------
 function json(status: number, body: any) {
   return NextResponse.json(body, {
@@ -106,6 +119,153 @@ function uuid() {
 }
 function round2(n: number) {
   return Math.round(n * 100) / 100;
+}
+
+function buildExitProfile(base: {
+  profitTargetBps: number;
+  trailArmBps: number;
+  trailOffsetBpsBase: number;
+  trailVolFloorBps: number;
+  trailMinHoldMin: number;
+  timeStopEnabled: boolean;
+  maxHoldMinutes: number;
+}, regime: MarketRegime): ExitProfile {
+  const rangeProfitTargetBps = num(
+    process.env.PULSE_RANGE_PROFIT_TARGET_BPS,
+    Math.min(base.profitTargetBps, 90)
+  );
+  const rangeTrailArmBps = num(
+    process.env.PULSE_RANGE_TRAIL_ARM_BPS,
+    Math.min(base.trailArmBps, 60)
+  );
+  const rangeTrailOffsetBpsBase = num(
+    process.env.PULSE_RANGE_TRAIL_OFFSET_BPS,
+    Math.min(base.trailOffsetBpsBase, 45)
+  );
+  const rangeTrailVolFloorBps = num(
+    process.env.PULSE_RANGE_TRAIL_VOL_FLOOR_BPS,
+    Math.min(base.trailVolFloorBps, 45)
+  );
+  const rangeTrailMinHoldMin = num(
+    process.env.PULSE_RANGE_TRAIL_MIN_HOLD_MIN,
+    Math.min(base.trailMinHoldMin, 5)
+  );
+  const rangeTimeStopEnabled = truthyDefault(
+    process.env.PULSE_RANGE_TIME_STOP_ENABLED,
+    base.timeStopEnabled
+  );
+  const rangeMaxHoldMinutes = num(
+    process.env.PULSE_RANGE_MAX_HOLD_MINUTES,
+    base.maxHoldMinutes > 0 ? Math.min(base.maxHoldMinutes, 120) : 120
+  );
+
+  const volatileProfitTargetBps = num(
+    process.env.PULSE_VOLATILE_PROFIT_TARGET_BPS,
+    Math.min(base.profitTargetBps, 160)
+  );
+  const volatileTrailArmBps = num(
+    process.env.PULSE_VOLATILE_TRAIL_ARM_BPS,
+    Math.min(base.trailArmBps, 90)
+  );
+  const volatileTrailOffsetBpsBase = num(
+    process.env.PULSE_VOLATILE_TRAIL_OFFSET_BPS,
+    Math.max(base.trailOffsetBpsBase, 60)
+  );
+  const volatileTrailVolFloorBps = num(
+    process.env.PULSE_VOLATILE_TRAIL_VOL_FLOOR_BPS,
+    Math.max(base.trailVolFloorBps, 80)
+  );
+  const volatileTrailMinHoldMin = num(
+    process.env.PULSE_VOLATILE_TRAIL_MIN_HOLD_MIN,
+    base.trailMinHoldMin
+  );
+  const volatileTimeStopEnabled = truthyDefault(
+    process.env.PULSE_VOLATILE_TIME_STOP_ENABLED,
+    base.timeStopEnabled
+  );
+  const volatileMaxHoldMinutes = num(
+    process.env.PULSE_VOLATILE_MAX_HOLD_MINUTES,
+    base.maxHoldMinutes > 0 ? Math.min(base.maxHoldMinutes, 240) : 240
+  );
+
+  const lowLiqProfitTargetBps = num(
+    process.env.PULSE_LOW_LIQUIDITY_PROFIT_TARGET_BPS,
+    Math.min(base.profitTargetBps, 80)
+  );
+  const lowLiqTrailArmBps = num(
+    process.env.PULSE_LOW_LIQUIDITY_TRAIL_ARM_BPS,
+    Math.min(base.trailArmBps, 50)
+  );
+  const lowLiqTrailOffsetBpsBase = num(
+    process.env.PULSE_LOW_LIQUIDITY_TRAIL_OFFSET_BPS,
+    Math.min(base.trailOffsetBpsBase, 40)
+  );
+  const lowLiqTrailVolFloorBps = num(
+    process.env.PULSE_LOW_LIQUIDITY_TRAIL_VOL_FLOOR_BPS,
+    Math.min(base.trailVolFloorBps, 40)
+  );
+  const lowLiqTrailMinHoldMin = num(
+    process.env.PULSE_LOW_LIQUIDITY_TRAIL_MIN_HOLD_MIN,
+    Math.min(base.trailMinHoldMin, 5)
+  );
+  const lowLiqTimeStopEnabled = truthyDefault(
+    process.env.PULSE_LOW_LIQUIDITY_TIME_STOP_ENABLED,
+    base.timeStopEnabled
+  );
+  const lowLiqMaxHoldMinutes = num(
+    process.env.PULSE_LOW_LIQUIDITY_MAX_HOLD_MINUTES,
+    base.maxHoldMinutes > 0 ? Math.min(base.maxHoldMinutes, 90) : 90
+  );
+
+  if (regime === "RANGING") {
+    return {
+      name: "RANGING",
+      profitTargetBps: rangeProfitTargetBps,
+      trailArmBps: rangeTrailArmBps,
+      trailOffsetBpsBase: rangeTrailOffsetBpsBase,
+      trailVolFloorBps: rangeTrailVolFloorBps,
+      trailMinHoldMin: rangeTrailMinHoldMin,
+      timeStopEnabled: rangeTimeStopEnabled,
+      maxHoldMinutes: rangeMaxHoldMinutes,
+    };
+  }
+
+  if (regime === "VOLATILE") {
+    return {
+      name: "VOLATILE",
+      profitTargetBps: volatileProfitTargetBps,
+      trailArmBps: volatileTrailArmBps,
+      trailOffsetBpsBase: volatileTrailOffsetBpsBase,
+      trailVolFloorBps: volatileTrailVolFloorBps,
+      trailMinHoldMin: volatileTrailMinHoldMin,
+      timeStopEnabled: volatileTimeStopEnabled,
+      maxHoldMinutes: volatileMaxHoldMinutes,
+    };
+  }
+
+  if (regime === "LOW_LIQUIDITY") {
+    return {
+      name: "LOW_LIQUIDITY",
+      profitTargetBps: lowLiqProfitTargetBps,
+      trailArmBps: lowLiqTrailArmBps,
+      trailOffsetBpsBase: lowLiqTrailOffsetBpsBase,
+      trailVolFloorBps: lowLiqTrailVolFloorBps,
+      trailMinHoldMin: lowLiqTrailMinHoldMin,
+      timeStopEnabled: lowLiqTimeStopEnabled,
+      maxHoldMinutes: lowLiqMaxHoldMinutes,
+    };
+  }
+
+  return {
+    name: "TRENDING",
+    profitTargetBps: base.profitTargetBps,
+    trailArmBps: base.trailArmBps,
+    trailOffsetBpsBase: base.trailOffsetBpsBase,
+    trailVolFloorBps: base.trailVolFloorBps,
+    trailMinHoldMin: base.trailMinHoldMin,
+    timeStopEnabled: base.timeStopEnabled,
+    maxHoldMinutes: base.maxHoldMinutes,
+  };
 }
 
 // ---------- logging ----------
@@ -721,7 +881,7 @@ function defenseTierMultiplier(confidence: number | null) {
 }
 
 function regimeEntryMultiplier(
-  currentRegime: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE",
+  currentRegime: MarketRegime,
   reconStatus: ReconDecision
 ) {
   let mult =
@@ -744,7 +904,7 @@ function regimeEntryMultiplier(
 
 function buildEntryPlan(params: {
   reconStatus: ReconDecision;
-  currentRegime: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE";
+  currentRegime: MarketRegime;
   gov: EquityGov;
   defenseConf: number;
 }): EntryPlan {
@@ -1649,23 +1809,21 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
 
-  const profitTargetBps = num(
+  const baseProfitTargetBps = num(
     process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
     120
   );
-  const trailArmBps = num(
+  const baseTrailArmBps = num(
     process.env.YC_TRAIL_ARM_BPS ?? process.env.TRAIL_ARM_BPS,
     150
   );
-  const trailOffsetBpsBase = num(
+  const baseTrailOffsetBpsBase = num(
     process.env.YC_TRAIL_OFFSET_BPS ?? process.env.TRAIL_OFFSET_BPS,
     50
   );
 
-  const trailMinHoldMin = num(process.env.TRAIL_MIN_HOLD_MIN, 15);
-  const trailMinHoldMs = trailMinHoldMin > 0 ? trailMinHoldMin * 60_000 : 0;
-
-  const trailVolFloorBps = num(process.env.TRAIL_VOL_FLOOR_BPS, 100);
+  const baseTrailMinHoldMin = num(process.env.TRAIL_MIN_HOLD_MIN, 15);
+  const baseTrailVolFloorBps = num(process.env.TRAIL_VOL_FLOOR_BPS, 100);
 
   const hardStopEnabled = truthyDefault(
     process.env.PULSE_HARD_STOP_ENABLED,
@@ -1676,15 +1834,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     num(process.env.YC_DEFAULT_HARD_STOP_BPS, 120)
   );
 
-  const timeStopEnabled = truthyDefault(
+  const baseTimeStopEnabled = truthyDefault(
     process.env.PULSE_TIME_STOP_ENABLED,
     false
   );
-  const maxHoldMinutes = num(
+  const baseMaxHoldMinutes = num(
     process.env.PULSE_MAX_HOLD_MINUTES,
     num(process.env.YC_DEFAULT_TIME_STOP_MIN, 0)
   );
-  const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
   const hardMaxUsd = num(process.env.YC_HARD_MAX_TRADE_USD, 10);
   const envEntryUsd = num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0);
@@ -1757,8 +1914,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
   const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 12);
-  let currentRegime: "LOW_LIQUIDITY" | "RANGING" | "TRENDING" | "VOLATILE" =
-    "LOW_LIQUIDITY";
+  let currentRegime: MarketRegime = "LOW_LIQUIDITY";
 
   log(runId, "START", {
     user_id: ctx.user_id,
@@ -1784,12 +1940,14 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       makerTimeoutMs: mTimeout,
       makerAllowIocFallback: mAllowIoc,
     },
-    trail: {
-      trailMinHoldMin,
-      trailVolFloorBps,
-      trailOffsetBpsBase,
-      trailArmBps,
-      profitTargetBps,
+    trailBase: {
+      baseProfitTargetBps,
+      baseTrailArmBps,
+      baseTrailOffsetBpsBase,
+      baseTrailVolFloorBps,
+      baseTrailMinHoldMin,
+      baseTimeStopEnabled,
+      baseMaxHoldMinutes,
     },
     hardStop: { hardStopEnabled, hardStopLossBps },
     reconStatus,
@@ -1970,7 +2128,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         : null;
 
     if (measuredEntryVolBps !== null) {
-      currentRegime = detectMarketRegime(measuredEntryVolBps);
+      currentRegime = detectMarketRegime(measuredEntryVolBps) as MarketRegime;
     }
 
     if (
@@ -2524,6 +2682,21 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
   }
 
+  currentRegime = detectMarketRegime(peak.volBps) as MarketRegime;
+
+  const exitProfile = buildExitProfile(
+    {
+      profitTargetBps: baseProfitTargetBps,
+      trailArmBps: baseTrailArmBps,
+      trailOffsetBpsBase: baseTrailOffsetBpsBase,
+      trailVolFloorBps: baseTrailVolFloorBps,
+      trailMinHoldMin: baseTrailMinHoldMin,
+      timeStopEnabled: baseTimeStopEnabled,
+      maxHoldMinutes: baseMaxHoldMinutes,
+    },
+    currentRegime
+  );
+
   const entryPrice = lastBuy.entryPrice;
   const current = peak.last;
   const peakPrice = peak.peak;
@@ -2535,6 +2708,16 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const drawdownFromPeakBps = Number(drawdownFromPeakBpsRaw.toFixed(2));
 
   const heldMs = msSince(lastBuy.entryTime);
+
+  const profitTargetBps = exitProfile.profitTargetBps;
+  const trailArmBps = exitProfile.trailArmBps;
+  const trailOffsetBpsBase = exitProfile.trailOffsetBpsBase;
+  const trailVolFloorBps = exitProfile.trailVolFloorBps;
+  const trailMinHoldMin = exitProfile.trailMinHoldMin;
+  const trailMinHoldMs = trailMinHoldMin > 0 ? trailMinHoldMin * 60_000 : 0;
+  const timeStopEnabled = exitProfile.timeStopEnabled;
+  const maxHoldMinutes = exitProfile.maxHoldMinutes;
+  const maxHoldMs = maxHoldMinutes > 0 ? maxHoldMinutes * 60_000 : 0;
 
   const shouldTakeProfit = pnlBps >= profitTargetBps;
   const trailArmed = pnlBps >= trailArmBps;
@@ -2577,8 +2760,6 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     ? "trail_stop"
     : "hold";
 
-  currentRegime = detectMarketRegime(peak.volBps);
-
   const decision = {
     entryPrice,
     entryTime: lastBuy.entryTime,
@@ -2589,6 +2770,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     peakPrice,
     pnlBps,
     regime: currentRegime,
+    exitProfile: exitProfile.name,
     trailingActive: trailArmed,
     drawdownFromPeakBps,
     profitTargetBps,
@@ -2662,6 +2844,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     reason,
     pnlBps,
     regime: currentRegime,
+    exitProfile: exitProfile.name,
     trailingActive: trailArmed,
     drawdownFromPeakBps,
     positionSize: (position as any).base_available,
