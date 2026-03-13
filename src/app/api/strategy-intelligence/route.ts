@@ -45,7 +45,19 @@ type CompletedTradeRow = {
   sell_notional?: number | string | null;
 };
 
-function isUsableTrade(row: CompletedTradeRow) {
+type UsableTradeOk = {
+  ok: true;
+  pnlUsd: number;
+  pnlBps: number;
+  holdMinutes: number;
+};
+
+type UsableTradeBad = {
+  ok: false;
+  reason: string;
+};
+
+function isUsableTrade(row: CompletedTradeRow): UsableTradeOk | UsableTradeBad {
   const pnlUsd = n(row.pnl_usd);
   const pnlBps = n(row.pnl_bps);
   const holdMinutes = n(row.hold_minutes);
@@ -80,9 +92,6 @@ function isUsableTrade(row: CompletedTradeRow) {
     return { ok: false, reason: "bad_hold_minutes" };
   }
 
-  // This is the key sanity gate.
-  // If a row says a BTC spot trade made +73% in one round trip,
-  // that row is almost certainly malformed lifecycle math.
   if (Math.abs(pnlBps) > MAX_REASONABLE_ABS_BPS) {
     return { ok: false, reason: "absurd_pnl_bps" };
   }
@@ -152,8 +161,8 @@ export async function GET() {
 
       if (!usable.ok) {
         rowsExcluded++;
-        exclusionReasons[usable.reason] =
-          (exclusionReasons[usable.reason] || 0) + 1;
+        const reason = usable.reason;
+        exclusionReasons[reason] = (exclusionReasons[reason] || 0) + 1;
         continue;
       }
 
