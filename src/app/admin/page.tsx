@@ -10,11 +10,6 @@ const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
 type StrategyIntelResp =
   | {
       ok: true;
-      status?: string;
-      source?: {
-        coreFund?: string;
-        network?: string;
-      };
       decisionsAnalyzed: number;
       averages: {
         avgOutcome30mBps: number;
@@ -68,10 +63,6 @@ type StrategyIntelResp =
         avgLossBps?: number;
         avgHoldMinutes?: number;
         note?: string;
-        rowsFetched?: number;
-        rowsUsed?: number;
-        rowsExcluded?: number;
-        exclusionReasons?: Record<string, number>;
       };
       corefund?: {
         symbol?: string;
@@ -94,6 +85,10 @@ type StrategyIntelResp =
         avgLossBps?: number;
         avgHoldMinutes?: number;
         winRatePct?: number;
+      };
+      source?: {
+        coreFund?: string;
+        network?: string;
       };
     }
   | { ok: false; error?: string; [k: string]: any };
@@ -158,6 +153,29 @@ type DecisionRow = {
   recon_confidence: number | null;
   spot_price: number | null;
   meta?: any;
+};
+
+type ConfidenceBucket = {
+  bucket: string;
+  total: number;
+  wins: number;
+  losses: number;
+  winRatePct: number;
+  avg30mBps: number;
+};
+
+type RegimeBucket = {
+  regime: string;
+  total: number;
+  wins: number;
+  losses: number;
+  missedWins: number;
+  goodBlocks: number;
+  goodHolds: number;
+  badHolds: number;
+  earlyExits: number;
+  goodExits: number;
+  entryWinRatePct: number;
 };
 
 type Tone = "green" | "yellow" | "red" | "gray";
@@ -290,7 +308,7 @@ function suggestionTone(current: any, recommended: any): Tone {
 
 function regimeTone(regime: string | null | undefined): Tone {
   const r = String(regime || "").toLowerCase();
-  if (!r || r === "—") return "gray";
+  if (!r) return "gray";
   if (r.includes("trend")) return "green";
   if (r.includes("volatile")) return "yellow";
   if (r.includes("range") || r.includes("chop")) return "yellow";
@@ -312,17 +330,10 @@ function entryGateTone(allowed: boolean | null): Tone {
   return allowed ? "green" : "red";
 }
 
-function confidenceTone(v: number | null): Tone {
+function confidenceTone(v: number | null | undefined): Tone {
   if (v == null || !Number.isFinite(v)) return "gray";
   if (v >= 0.72) return "green";
   if (v >= 0.68) return "yellow";
-  return "red";
-}
-
-function volTone(v: number | null): Tone {
-  if (v == null || !Number.isFinite(v)) return "gray";
-  if (v >= 20) return "green";
-  if (v >= 12) return "yellow";
   return "red";
 }
 
@@ -371,15 +382,6 @@ function compactDate(iso?: string | null) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-function confidenceBucketLabel(v: number | null) {
-  if (v == null || !Number.isFinite(v)) return "—";
-  if (v < 0.50) return "< 0.50";
-  if (v < 0.60) return "0.50 - 0.59";
-  if (v < 0.70) return "0.60 - 0.69";
-  if (v < 0.80) return "0.70 - 0.79";
-  return "0.80+";
 }
 
 export default function Admin() {
@@ -500,54 +502,38 @@ export default function Admin() {
 
   const netTone = pnlTone(pStats?.netPnL);
 
-  const corefundSummary =
-    strategyIntel && strategyIntel.ok ? strategyIntel.corefund : null;
-  const networkSummary =
-    strategyIntel && strategyIntel.ok ? strategyIntel.network : null;
+  const strategyEdgeValue =
+    strategyIntel && strategyIntel.ok
+      ? strategyIntel.averages.avgOutcome30mBps
+      : null;
 
   const strategyTradesAnalyzed =
     strategyIntel && strategyIntel.ok
-      ? Number(corefundSummary?.trades ?? strategyIntel.decisionsAnalyzed ?? 0)
+      ? strategyIntel.decisionsAnalyzed
       : null;
 
   const strategyWins =
-    strategyIntel && strategyIntel.ok
-      ? Number(corefundSummary?.wins ?? strategyIntel.entry.wins ?? 0)
-      : null;
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.wins : null;
 
   const strategyLosses =
-    strategyIntel && strategyIntel.ok
-      ? Number(corefundSummary?.losses ?? strategyIntel.entry.losses ?? 0)
-      : null;
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.losses : null;
 
-  const strategyEdgeValue =
+  const strategyEntryQuality =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.winRatePct : null;
+
+  const strategyExitEfficiency =
     strategyIntel && strategyIntel.ok
-      ? Number(corefundSummary?.avgEdgeBps ?? strategyIntel.averages.avgOutcome30mBps ?? 0)
+      ? strategyIntel.exit.holdQualityPct
       : null;
 
   const strategyAvgWin =
     strategyIntel && strategyIntel.ok
-      ? Number(corefundSummary?.avgWinBps ?? strategyIntel.averages.avgOutcome60mBps ?? 0)
+      ? strategyIntel.averages.avgOutcome60mBps
       : null;
 
   const strategyAvgLoss =
-    strategyIntel && strategyIntel.ok
-      ? Number(
-          corefundSummary?.avgLossBps ??
-            (strategyIntel.meta?.avgLossBps != null
-              ? -Math.abs(Number(strategyIntel.meta.avgLossBps))
-              : 0)
-        )
-      : null;
-
-  const strategyEntryQuality =
-    strategyIntel && strategyIntel.ok
-      ? Number(corefundSummary?.winRatePct ?? strategyIntel.entry.winRatePct ?? 0)
-      : null;
-
-  const strategyExitEfficiency =
-    strategyIntel && strategyIntel.ok
-      ? Number(strategyIntel.exit.holdQualityPct ?? 0)
+    strategyIntel && strategyIntel.ok && strategyIntel.meta?.avgLossBps != null
+      ? -Math.abs(Number(strategyIntel.meta.avgLossBps))
       : null;
 
   const topEdgeTone: Tone =
@@ -637,82 +623,15 @@ export default function Admin() {
   const edgeAvgWinToneValue: Tone = avgWinTone(edgeAvgWin);
   const edgeAvgLossToneValue: Tone = avgLossTone(edgeAvgLoss);
 
-  const confidenceSummary =
+  const confidenceSummary: ConfidenceBucket[] =
     strategyIntel && strategyIntel.ok && Array.isArray(strategyIntel.confidenceSummary)
       ? strategyIntel.confidenceSummary
       : [];
 
-  const regimeSummary =
+  const regimeSummary: RegimeBucket[] =
     strategyIntel && strategyIntel.ok && Array.isArray(strategyIntel.regimeSummary)
       ? strategyIntel.regimeSummary
       : [];
-
-  const latestDecision = decisionStream.length ? decisionStream[0] : null;
-  const latestExitDecision =
-    decisionStream.find((row) => String(row.action_phase || "").toUpperCase() === "EXIT") || null;
-  const latestEntryDecision =
-    decisionStream.find((row) => String(row.action_phase || "").toUpperCase() === "ENTRY") || null;
-
-  const latestExitMeta = latestExitDecision?.meta?.exitDecision || null;
-  const latestEntryMeta = latestEntryDecision?.meta || {};
-
-  const currentMarketRegime =
-    latestExitDecision?.market_regime ||
-    latestEntryDecision?.market_regime ||
-    mostCommonRegimeFallback(regimeSummary, decisionStream) ||
-    "—";
-
-  const currentReconConfidence =
-    latestDecision?.recon_confidence != null
-      ? Number(latestDecision.recon_confidence)
-      : null;
-
-  const currentEntryAllowed =
-    latestEntryMeta?.entry_allow ??
-    latestEntryMeta?.entryPlan?.allowEntry ??
-    null;
-
-  const latestEntryReason =
-    latestEntryDecision?.decision_reason ||
-    latestEntryMeta?.reconReason ||
-    "No recent ENTRY row";
-
-  const currentMeasuredVol =
-    latestExitMeta?.measuredVolBps ??
-    latestEntryMeta?.measured_vol_bps ??
-    null;
-
-  const currentExitProfile =
-    latestExitMeta?.exitProfile ||
-    latestExitMeta?.regime ||
-    "—";
-
-  const blockedSignals =
-    strategyIntel && strategyIntel.ok ? strategyIntel.entry.blocked : null;
-  const allowedSignals =
-    strategyIntel && strategyIntel.ok ? strategyIntel.entry.allowed : null;
-
-  const signalHealthTone: Tone =
-    blockedSignals != null &&
-    allowedSignals != null &&
-    blockedSignals > allowedSignals
-      ? "yellow"
-      : "green";
-
-  const avgHoldMinutes =
-    strategyIntel &&
-    strategyIntel.ok &&
-    corefundSummary?.avgHoldMinutes != null
-      ? Number(corefundSummary.avgHoldMinutes)
-      : strategyAdjustments &&
-        strategyAdjustments.ok &&
-        strategyAdjustments.meta?.avgHoldMinutes != null
-      ? Number(strategyAdjustments.meta.avgHoldMinutes)
-      : strategyIntel &&
-        strategyIntel.ok &&
-        strategyIntel.meta?.avgHoldMinutes != null
-      ? Number(strategyIntel.meta.avgHoldMinutes)
-      : null;
 
   const bestConfidenceBucket =
     confidenceSummary.length > 0
@@ -731,8 +650,75 @@ export default function Admin() {
         )[0]
       : null;
 
+  const blockedSignals =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.blocked : null;
+  const allowedSignals =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.allowed : null;
+
+  const signalHealthTone: Tone =
+    blockedSignals != null &&
+    allowedSignals != null &&
+    blockedSignals > allowedSignals
+      ? "yellow"
+      : "green";
+
+  const avgHoldMinutes =
+    strategyAdjustments &&
+    strategyAdjustments.ok &&
+    strategyAdjustments.meta?.avgHoldMinutes != null
+      ? Number(strategyAdjustments.meta.avgHoldMinutes)
+      : strategyIntel &&
+        strategyIntel.ok &&
+        strategyIntel.meta?.avgHoldMinutes != null
+      ? Number(strategyIntel.meta.avgHoldMinutes)
+      : null;
+
+  const latestDecision = decisionStream.length ? decisionStream[0] : null;
+  const latestMeta = latestDecision?.meta || {};
+  const latestExitDecision = latestMeta?.exitDecision || null;
+  const latestReconReason =
+    latestMeta?.reconReason ||
+    latestDecision?.decision_reason ||
+    "—";
+
+  const currentMarketRegime =
+    latestDecision?.market_regime ||
+    latestExitDecision?.regime ||
+    mostCommonRegime?.regime ||
+    "—";
+
+  const currentReconConfidence =
+    latestDecision?.recon_confidence != null
+      ? Number(latestDecision.recon_confidence)
+      : null;
+
+  const currentEntryAllowed =
+    latestMeta?.entry_allow ??
+    latestMeta?.entryPlan?.allowEntry ??
+    null;
+
+  const currentMeasuredVol =
+    latestMeta?.measured_vol_bps ??
+    latestExitDecision?.measuredVolBps ??
+    null;
+
+  const currentExitProfile =
+    latestExitDecision?.exitProfile ||
+    latestExitDecision?.regime ||
+    "—";
+
   const fallbackBucket =
-    bestConfidenceBucket ? null : confidenceBucketLabel(currentReconConfidence);
+    currentReconConfidence != null
+      ? currentReconConfidence >= 0.83
+        ? "0.83+"
+        : currentReconConfidence >= 0.76
+        ? "0.76-0.82"
+        : currentReconConfidence >= 0.72
+        ? "0.72-0.75"
+        : currentReconConfidence >= 0.68
+        ? "0.68-0.71"
+        : "<0.68"
+      : "—";
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
 
@@ -901,7 +887,7 @@ export default function Admin() {
                   : "BLOCKED"
               }
               tone={entryGateTone(currentEntryAllowed)}
-              sub={String(latestEntryReason || "—")}
+              sub={String(latestReconReason || "—")}
             />
           </div>
 
@@ -913,7 +899,15 @@ export default function Admin() {
                   ? bps(currentMeasuredVol)
                   : "—"
               }
-              tone={volTone(currentMeasuredVol != null ? Number(currentMeasuredVol) : null)}
+              tone={
+                currentMeasuredVol == null
+                  ? "gray"
+                  : Number(currentMeasuredVol) >= 20
+                  ? "green"
+                  : Number(currentMeasuredVol) >= 12
+                  ? "yellow"
+                  : "red"
+              }
               sub="Compared against entry vol gate"
             />
 
@@ -1017,19 +1011,19 @@ export default function Admin() {
               <Stat
                 label="Signals Allowed"
                 value={allowedSignals != null ? String(allowedSignals) : "—"}
-                sub="Core Fund completed trades"
+                sub="From Strategy Intelligence"
               />
               <Stat
                 label="Signals Blocked"
                 value={blockedSignals != null ? String(blockedSignals) : "—"}
-                sub="Core Fund completed trades"
+                sub="From Strategy Intelligence"
               />
               <Stat
                 label="Best Confidence Bucket"
                 value={
-                  bestConfidenceBucket
-                    ? bestConfidenceBucket.bucket
-                    : fallbackBucket
+                  bestConfidenceBucket?.bucket ??
+                  fallbackBucket ??
+                  "—"
                 }
                 tone={
                   bestConfidenceBucket
@@ -1051,33 +1045,29 @@ export default function Admin() {
                     ? `${avgHoldMinutes.toFixed(0)} min`
                     : "—"
                 }
-                sub="Core Fund completed trades"
+                sub="Recent completed trades"
               />
             </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-2">
               <Stat
                 label="Most Common Regime"
-                value={
-                  mostCommonRegime
-                    ? mostCommonRegime.regime
-                    : currentMarketRegime
-                }
-                tone={regimeTone(mostCommonRegime?.regime || currentMarketRegime)}
+                value={mostCommonRegime?.regime ?? "—"}
+                tone={regimeTone(mostCommonRegime?.regime)}
                 sub={
                   mostCommonRegime
                     ? `${mostCommonRegime.total} observations`
-                    : "From recent decision stream"
+                    : undefined
                 }
               />
               <Stat
                 label="Best Regime"
-                value={bestRegime ? bestRegime.regime : "—"}
+                value={bestRegime?.regime ?? "—"}
                 tone={regimeTone(bestRegime?.regime)}
                 sub={
                   bestRegime
                     ? `${pct(bestRegime.entryWinRatePct)} entry win rate`
-                    : "Needs regime summary data"
+                    : undefined
                 }
               />
             </div>
@@ -1166,15 +1156,8 @@ export default function Admin() {
                 }
                 tone={strategyIntel && strategyIntel.ok ? "green" : "gray"}
               />
-              <TonePill
-                label="CORE FUND · COMPLETED TRADES"
-                tone="gray"
-              />
+              <TonePill label="NETWORK · COMPLETED TRADES" tone="gray" />
             </div>
-          </div>
-
-          <div className="mt-3 text-sm text-white/60">
-            Core Fund truth layer. These numbers should match completed round-trip trades for the internal account, not the whole network.
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -1197,7 +1180,7 @@ export default function Admin() {
               tone={strategyEdgeToneValue}
               sub={
                 strategyIntel && strategyIntel.ok
-                  ? `Avg win ${bps(strategyAvgWin)}`
+                  ? `Avg win ${bps(strategyIntel.averages.avgOutcome60mBps)}`
                   : undefined
               }
             />
@@ -1212,7 +1195,7 @@ export default function Admin() {
               tone={strategyEntryTone}
               sub={
                 strategyIntel && strategyIntel.ok
-                  ? `${strategyWins} wins / ${strategyLosses} losses`
+                  ? `${strategyIntel.entry.allowed} allowed / ${strategyIntel.entry.blocked} blocked`
                   : undefined
               }
             />
@@ -1375,58 +1358,8 @@ export default function Admin() {
               tone={recommendedReconTone}
             />
           </div>
-
-          {strategyIntel && strategyIntel.ok && networkSummary ? (
-            <div className="mt-6 rounded-2xl bg-white/5 p-5 ring-1 ring-white/10">
-              <div className="text-sm text-white/60">Network context</div>
-              <div className="mt-3 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Stat
-                  label="Network Trades"
-                  value={String(networkSummary.trades ?? "—")}
-                />
-                <Stat
-                  label="Network Win Rate"
-                  value={pct(networkSummary.winRatePct)}
-                  tone={winRateTone(networkSummary.winRatePct)}
-                />
-                <Stat
-                  label="Network Edge"
-                  value={bps(networkSummary.avgEdgeBps)}
-                  tone={edgeTone(networkSummary.avgEdgeBps)}
-                />
-                <Stat
-                  label="Network Avg Hold"
-                  value={
-                    networkSummary.avgHoldMinutes != null
-                      ? `${Number(networkSummary.avgHoldMinutes).toFixed(0)} min`
-                      : "—"
-                  }
-                />
-              </div>
-            </div>
-          ) : null}
         </section>
       </div>
     </main>
   );
-}
-
-function mostCommonRegimeFallback(
-  regimeSummary: Array<{ regime: string; total: number }> | undefined,
-  decisionStream: DecisionRow[]
-): string | null {
-  if (regimeSummary && regimeSummary.length) {
-    const best = [...regimeSummary].sort((a, b) => b.total - a.total)[0];
-    return best?.regime || null;
-  }
-
-  const counts: Record<string, number> = {};
-  for (const row of decisionStream) {
-    const key = String(row.market_regime || "").trim();
-    if (!key) continue;
-    counts[key] = (counts[key] || 0) + 1;
-  }
-
-  const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  return sorted.length ? sorted[0][0] : null;
 }
