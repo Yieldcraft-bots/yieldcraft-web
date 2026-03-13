@@ -59,6 +59,11 @@ type StrategyIntelResp =
         goodExits: number;
         entryWinRatePct: number;
       }>;
+      meta?: {
+        avgLossBps?: number;
+        avgHoldMinutes?: number;
+        note?: string;
+      };
     }
   | { ok: false; error?: string; [k: string]: any };
 
@@ -85,6 +90,15 @@ type StrategyAdjustmentsResp =
         trailOffsetBps: number;
         reconConfidence: number;
       };
+      meta?: {
+        advisoryOnly?: boolean;
+        basis?: string;
+        lookbackDays?: number;
+        since?: string;
+        sampleConfidence?: string;
+        avgHoldMinutes?: number;
+        notes?: string[];
+      };
     }
   | { ok: false; error?: string; [k: string]: any };
 
@@ -102,6 +116,18 @@ type EdgeTestResp =
       totalPnL: number;
     }
   | { ok: false; error?: string; [k: string]: any };
+
+type DecisionRow = {
+  id: string;
+  created_at: string;
+  action_phase: string | null;
+  decision_mode: string | null;
+  decision_reason: string | null;
+  market_regime: string | null;
+  recon_confidence: number | null;
+  spot_price: number | null;
+  meta?: any;
+};
 
 type Tone = "green" | "yellow" | "red" | "gray";
 
@@ -231,6 +257,25 @@ function suggestionTone(current: any, recommended: any): Tone {
   return "green";
 }
 
+function regimeTone(regime: string | null | undefined): Tone {
+  const r = String(regime || "").toLowerCase();
+  if (!r) return "gray";
+  if (r.includes("trend")) return "green";
+  if (r.includes("volatile")) return "yellow";
+  if (r.includes("range") || r.includes("chop")) return "yellow";
+  if (r.includes("low")) return "red";
+  return "gray";
+}
+
+function decisionTone(mode: string | null | undefined): Tone {
+  const m = String(mode || "").toLowerCase();
+  if (!m) return "gray";
+  if (m.includes("allowed") || m.includes("hold")) return "green";
+  if (m.includes("blocked")) return "yellow";
+  if (m.includes("exit")) return "red";
+  return "gray";
+}
+
 function TonePill({
   label,
   tone,
@@ -271,6 +316,13 @@ function Stat({
   );
 }
 
+function compactDate(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 export default function Admin() {
   const router = useRouter();
 
@@ -280,6 +332,7 @@ export default function Admin() {
   const [strategyAdjustments, setStrategyAdjustments] =
     useState<StrategyAdjustmentsResp | null>(null);
   const [edgeTest, setEdgeTest] = useState<EdgeTestResp | null>(null);
+  const [decisionStream, setDecisionStream] = useState<DecisionRow[]>([]);
   const [ts, setTs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -359,6 +412,20 @@ export default function Admin() {
       // ignore
     }
 
+    try {
+      const { data } = await supabase
+        .from("strategy_decisions")
+        .select(
+          "id, created_at, action_phase, decision_mode, decision_reason, market_regime, recon_confidence, spot_price, meta"
+        )
+        .order("created_at", { ascending: false })
+        .limit(12);
+
+      setDecisionStream(Array.isArray(data) ? (data as DecisionRow[]) : []);
+    } catch {
+      setDecisionStream([]);
+    }
+
     setTs(Date.now());
   }
 
@@ -404,10 +471,14 @@ export default function Admin() {
       : null;
 
   const strategyAvgLoss =
-    strategyIntel && strategyIntel.ok ? strategyIntel.entry.lossRatePct : null;
+    strategyIntel && strategyIntel.ok && strategyIntel.meta?.avgLossBps != null
+      ? -Math.abs(Number(strategyIntel.meta.avgLossBps))
+      : null;
 
   const topEdgeTone: Tone =
-    edgeTest && edgeTest.ok ? edgeTone(edgeTest.edgePerTradeBps) : edgeTone(strategyEdgeValue);
+    edgeTest && edgeTest.ok
+      ? edgeTone(edgeTest.edgePerTradeBps)
+      : edgeTone(strategyEdgeValue);
 
   const winRatePct =
     pStats && pStats.winRate != null ? Number(pStats.winRate) * 100 : null;
@@ -477,13 +548,69 @@ export default function Admin() {
     edgeTest && edgeTest.ok ? edgeTest.totalPnL : null;
 
   const edgeSampleTone: Tone =
-    edgeSample == null ? "gray" : edgeSample >= 30 ? "green" : edgeSample >= 10 ? "yellow" : "red";
+    edgeSample == null
+      ? "gray"
+      : edgeSample >= 30
+      ? "green"
+      : edgeSample >= 10
+      ? "yellow"
+      : "red";
 
   const edgeWinRateToneValue: Tone = winRateTone(edgeWinRate);
   const edgePerTradeToneValue: Tone = edgeTone(edgePerTrade);
   const edgeTotalPnlToneValue: Tone = pnlTone(edgeTotalPnl);
   const edgeAvgWinToneValue: Tone = avgWinTone(edgeAvgWin);
   const edgeAvgLossToneValue: Tone = avgLossTone(edgeAvgLoss);
+
+  const confidenceSummary =
+    strategyIntel && strategyIntel.ok && Array.isArray(strategyIntel.confidenceSummary)
+      ? strategyIntel.confidenceSummary
+      : [];
+
+  const regimeSummary =
+    strategyIntel && strategyIntel.ok && Array.isArray(strategyIntel.regimeSummary)
+      ? strategyIntel.regimeSummary
+      : [];
+
+  const bestConfidenceBucket =
+    confidenceSummary.length > 0
+      ? [...confidenceSummary].sort((a, b) => b.avg30mBps - a.avg30mBps)[0]
+      : null;
+
+  const mostCommonRegime =
+    regimeSummary.length > 0
+      ? [...regimeSummary].sort((a, b) => b.total - a.total)[0]
+      : null;
+
+  const bestRegime =
+    regimeSummary.length > 0
+      ? [...regimeSummary].sort(
+          (a, b) => (b.entryWinRatePct || 0) - (a.entryWinRatePct || 0)
+        )[0]
+      : null;
+
+  const blockedSignals =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.blocked : null;
+  const allowedSignals =
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.allowed : null;
+
+  const signalHealthTone: Tone =
+    blockedSignals != null &&
+    allowedSignals != null &&
+    blockedSignals > allowedSignals
+      ? "yellow"
+      : "green";
+
+  const avgHoldMinutes =
+    strategyAdjustments &&
+    strategyAdjustments.ok &&
+    strategyAdjustments.meta?.avgHoldMinutes != null
+      ? Number(strategyAdjustments.meta.avgHoldMinutes)
+      : strategyIntel &&
+        strategyIntel.ok &&
+        strategyIntel.meta?.avgHoldMinutes != null
+      ? Number(strategyIntel.meta.avgHoldMinutes)
+      : null;
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
 
@@ -502,12 +629,16 @@ export default function Admin() {
           <div className="flex flex-wrap items-center gap-2">
             <TonePill label="LIVE EXECUTION" tone="green" />
             <TonePill
-              label={`NET PNL ${pStats ? money(pStats.netPnL) : "—"}`}
+              label={`CORE FUND TODAY ${pStats ? money(pStats.netPnL) : "—"}`}
               tone={netTone}
             />
             <TonePill
               label={`EDGE ${
-                edgeTest && edgeTest.ok ? bps(edgePerTrade) : strategyIntel && strategyIntel.ok ? bps(strategyEdgeValue) : "—"
+                edgeTest && edgeTest.ok
+                  ? bps(edgePerTrade)
+                  : strategyIntel && strategyIntel.ok
+                  ? bps(strategyEdgeValue)
+                  : "—"
               }`}
               tone={topEdgeTone}
             />
@@ -537,7 +668,10 @@ export default function Admin() {
 
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
           <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
-            <h2 className="text-lg font-semibold">Pulse</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Pulse</h2>
+              <TonePill label="CORE FUND · TODAY" tone="gray" />
+            </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
               <Stat label="Trades" value={pStats ? String(pStats.trades) : "—"} />
@@ -561,7 +695,10 @@ export default function Admin() {
           </section>
 
           <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
-            <h2 className="text-lg font-semibold">Platform</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Platform</h2>
+              <TonePill label="NETWORK · 30D SNAPSHOT" tone="gray" />
+            </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
               <Stat
@@ -618,7 +755,7 @@ export default function Admin() {
           </div>
 
           <div className="mt-3 text-sm text-white/60">
-            Completed-trade truth layer for real edge detection. This is the panel that tells us whether the system is improving.
+            Core Fund completed-trade truth layer. This is the direct measure of whether your internal account is improving.
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -626,7 +763,7 @@ export default function Admin() {
               label="Sample Size"
               value={edgeTest && edgeTest.ok ? String(edgeSample) : "—"}
               tone={edgeSampleTone}
-              sub="Completed round-trip trades"
+              sub="Core Fund completed trades"
             />
 
             <Stat
@@ -670,17 +807,158 @@ export default function Admin() {
           </div>
         </section>
 
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Signal Health</h2>
+              <TonePill label="NETWORK LEARNING VIEW" tone={signalHealthTone} />
+            </div>
+
+            <div className="mt-3 text-sm text-white/60">
+              Snapshot of how the strategy is behaving across completed trades and recent decision telemetry.
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <Stat
+                label="Signals Allowed"
+                value={allowedSignals != null ? String(allowedSignals) : "—"}
+                sub="From Strategy Intelligence"
+              />
+              <Stat
+                label="Signals Blocked"
+                value={blockedSignals != null ? String(blockedSignals) : "—"}
+                sub="From Strategy Intelligence"
+              />
+              <Stat
+                label="Best Confidence Bucket"
+                value={bestConfidenceBucket ? bestConfidenceBucket.bucket : "—"}
+                tone={bestConfidenceBucket ? edgeTone(bestConfidenceBucket.avg30mBps) : "gray"}
+                sub={
+                  bestConfidenceBucket
+                    ? `Avg ${bps(bestConfidenceBucket.avg30mBps)}`
+                    : undefined
+                }
+              />
+              <Stat
+                label="Avg Hold"
+                value={
+                  avgHoldMinutes != null && Number.isFinite(avgHoldMinutes)
+                    ? `${avgHoldMinutes.toFixed(0)} min`
+                    : "—"
+                }
+                sub="Recent completed trades"
+              />
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-2">
+              <Stat
+                label="Most Common Regime"
+                value={mostCommonRegime ? mostCommonRegime.regime : "—"}
+                tone={regimeTone(mostCommonRegime?.regime)}
+                sub={
+                  mostCommonRegime
+                    ? `${mostCommonRegime.total} observations`
+                    : undefined
+                }
+              />
+              <Stat
+                label="Best Regime"
+                value={bestRegime ? bestRegime.regime : "—"}
+                tone={regimeTone(bestRegime?.regime)}
+                sub={
+                  bestRegime
+                    ? `${pct(bestRegime.entryWinRatePct)} entry win rate`
+                    : undefined
+                }
+              />
+            </div>
+          </section>
+
+          <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Decision Stream</h2>
+              <TonePill
+                label={decisionStream.length ? "LIVE TELEMETRY" : "STREAM OFFLINE"}
+                tone={decisionStream.length ? "green" : "gray"}
+              />
+            </div>
+
+            <div className="mt-3 text-sm text-white/60">
+              Latest strategy decisions so one screenshot shows what the system is seeing, allowing, blocking, and exiting.
+            </div>
+
+            <div className="mt-5 overflow-hidden rounded-2xl ring-1 ring-white/10">
+              <div className="grid grid-cols-5 gap-3 border-b border-white/10 bg-white/5 px-4 py-3 text-xs text-white/50">
+                <div>Time</div>
+                <div>Phase</div>
+                <div>Mode</div>
+                <div>Regime</div>
+                <div>Confidence</div>
+              </div>
+
+              {decisionStream.length ? (
+                <div className="divide-y divide-white/10">
+                  {decisionStream.map((row) => (
+                    <div
+                      key={row.id}
+                      className="grid grid-cols-5 gap-3 px-4 py-3 text-sm"
+                    >
+                      <div className="text-white/80">{compactDate(row.created_at)}</div>
+                      <div className="text-white/80">
+                        {row.action_phase || "—"}
+                        <div className="mt-1 text-[11px] text-white/45">
+                          {row.decision_reason || "—"}
+                        </div>
+                      </div>
+                      <div>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-[11px] ${
+                            toneClasses(decisionTone(row.decision_mode)).pill
+                          }`}
+                        >
+                          {row.decision_mode || "—"}
+                        </span>
+                      </div>
+                      <div>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-[11px] ${
+                            toneClasses(regimeTone(row.market_regime)).pill
+                          }`}
+                        >
+                          {row.market_regime || "—"}
+                        </span>
+                      </div>
+                      <div className="text-white/80">
+                        {row.recon_confidence != null
+                          ? Number(row.recon_confidence).toFixed(2)
+                          : "—"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="px-4 py-6 text-sm text-white/45">
+                  No recent decision rows available.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
         <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg font-semibold">Strategy Intelligence</h2>
-            <TonePill
-              label={
-                strategyIntel && strategyIntel.ok
-                  ? "LEARNING ACTIVE"
-                  : "INTEL OFFLINE"
-              }
-              tone={strategyIntel && strategyIntel.ok ? "green" : "gray"}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <TonePill
+                label={
+                  strategyIntel && strategyIntel.ok
+                    ? "LEARNING ACTIVE"
+                    : "INTEL OFFLINE"
+                }
+                tone={strategyIntel && strategyIntel.ok ? "green" : "gray"}
+              />
+              <TonePill label="NETWORK · COMPLETED TRADES" tone="gray" />
+            </div>
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -703,7 +981,7 @@ export default function Admin() {
               tone={strategyEdgeToneValue}
               sub={
                 strategyIntel && strategyIntel.ok
-                  ? `Avg 60m ${bps(strategyIntel.averages.avgOutcome60mBps)}`
+                  ? `Avg win ${bps(strategyIntel.averages.avgOutcome60mBps)}`
                   : undefined
               }
             />
@@ -754,18 +1032,14 @@ export default function Admin() {
               label="Avg Win"
               value={strategyIntel && strategyIntel.ok ? bps(strategyAvgWin) : "—"}
               tone={strategyAvgWinToneValue}
-              sub={
-                strategyIntel && strategyIntel.ok ? "Using avg 60m outcome" : undefined
-              }
+              sub="Completed trades"
             />
 
             <Stat
               label="Avg Loss"
-              value={strategyIntel && strategyIntel.ok ? pct(strategyAvgLoss) : "—"}
+              value={strategyIntel && strategyIntel.ok ? bps(strategyAvgLoss) : "—"}
               tone={strategyAvgLossToneValue}
-              sub={
-                strategyIntel && strategyIntel.ok ? "Entry loss rate" : undefined
-              }
+              sub="Completed trades"
             />
           </div>
         </section>
@@ -773,18 +1047,21 @@ export default function Admin() {
         <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg font-semibold">Strategy Suggestions</h2>
-            <TonePill
-              label={
-                strategyAdjustments && strategyAdjustments.ok
-                  ? "ADVISORY ONLY"
-                  : "SUGGESTIONS OFFLINE"
-              }
-              tone={strategyAdjustments && strategyAdjustments.ok ? "yellow" : "gray"}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <TonePill
+                label={
+                  strategyAdjustments && strategyAdjustments.ok
+                    ? "ADVISORY ONLY"
+                    : "SUGGESTIONS OFFLINE"
+                }
+                tone={strategyAdjustments && strategyAdjustments.ok ? "yellow" : "gray"}
+              />
+              <TonePill label="NETWORK · COMPLETED TRADES · 7D" tone="gray" />
+            </div>
           </div>
 
           <div className="mt-3 text-sm text-white/60">
-            Daily read-only recommendations based on recent trade behavior. Nothing changes automatically.
+            Read-only recommendations based on recent completed trades. Nothing changes automatically.
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -825,7 +1102,7 @@ export default function Admin() {
               label="Avg Loss"
               value={
                 strategyAdjustments && strategyAdjustments.ok
-                  ? bps(strategyAdjustments.stats.avgLossBps)
+                  ? bps(-Math.abs(strategyAdjustments.stats.avgLossBps))
                   : "—"
               }
               tone={
