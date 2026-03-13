@@ -276,6 +276,11 @@ function decisionTone(mode: string | null | undefined): Tone {
   return "gray";
 }
 
+function entryGateTone(allowed: boolean | null): Tone {
+  if (allowed === null) return "gray";
+  return allowed ? "green" : "red";
+}
+
 function TonePill({
   label,
   tone,
@@ -612,6 +617,39 @@ export default function Admin() {
       ? Number(strategyIntel.meta.avgHoldMinutes)
       : null;
 
+  // Market State values from freshest decision row
+  const latestDecision = decisionStream.length ? decisionStream[0] : null;
+  const latestMeta = latestDecision?.meta || {};
+  const latestExitDecision = latestMeta?.exitDecision || null;
+  const latestReconReason =
+    latestMeta?.reconReason ||
+    latestDecision?.decision_reason ||
+    "—";
+
+  const currentMarketRegime =
+    latestDecision?.market_regime ||
+    latestExitDecision?.regime ||
+    mostCommonRegime?.regime ||
+    "—";
+
+  const currentReconConfidence =
+    latestDecision?.recon_confidence != null
+      ? Number(latestDecision.recon_confidence)
+      : null;
+
+  const currentEntryAllowed =
+    latestMeta?.entry_allow ??
+    latestMeta?.entryPlan?.allowEntry ??
+    null;
+
+  const currentMeasuredVol =
+    latestDecision?.meta?.measured_vol_bps ??
+    latestExitDecision?.measuredVolBps ??
+    null;
+
+  const currentExitProfile =
+    latestExitDecision?.exitProfile || "—";
+
   const lastRefresh = new Date(ts).toLocaleTimeString();
 
   return (
@@ -736,6 +774,95 @@ export default function Admin() {
             </div>
           </section>
         </div>
+
+        <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Market State</h2>
+            <TonePill
+              label="LIVE DECISION STATE"
+              tone={regimeTone(currentMarketRegime)}
+            />
+          </div>
+
+          <div className="mt-3 text-sm text-white/60">
+            Real-time read of why the system is trading, waiting, or blocking. This is the quickest way to see whether the engine is being smart or something is off.
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Stat
+              label="Regime"
+              value={String(currentMarketRegime || "—")}
+              tone={regimeTone(currentMarketRegime)}
+              sub="From latest decision telemetry"
+            />
+
+            <Stat
+              label="Recon Confidence"
+              value={
+                currentReconConfidence != null
+                  ? currentReconConfidence.toFixed(2)
+                  : "—"
+              }
+              tone={
+                currentReconConfidence == null
+                  ? "gray"
+                  : currentReconConfidence >= 0.72
+                  ? "green"
+                  : currentReconConfidence >= 0.68
+                  ? "yellow"
+                  : "red"
+              }
+              sub="Current signal confidence"
+            />
+
+            <Stat
+              label="Entry Gate"
+              value={
+                currentEntryAllowed == null
+                  ? "—"
+                  : currentEntryAllowed
+                  ? "ALLOWED"
+                  : "BLOCKED"
+              }
+              tone={entryGateTone(currentEntryAllowed)}
+              sub={String(latestReconReason || "—")}
+            />
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Stat
+              label="Measured Volatility"
+              value={
+                currentMeasuredVol != null && Number.isFinite(Number(currentMeasuredVol))
+                  ? bps(currentMeasuredVol)
+                  : "—"
+              }
+              tone={
+                currentMeasuredVol == null
+                  ? "gray"
+                  : Number(currentMeasuredVol) >= 20
+                  ? "green"
+                  : Number(currentMeasuredVol) >= 12
+                  ? "yellow"
+                  : "red"
+              }
+              sub="Compared against entry vol gate"
+            />
+
+            <Stat
+              label="Exit Profile"
+              value={String(currentExitProfile || "—")}
+              tone={regimeTone(currentExitProfile)}
+              sub="Active profile on latest exit logic"
+            />
+
+            <Stat
+              label="Decision Time"
+              value={latestDecision ? compactDate(latestDecision.created_at) : "—"}
+              sub="Latest strategy_decisions row"
+            />
+          </div>
+        </section>
 
         <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
           <div className="flex items-center justify-between gap-3">
