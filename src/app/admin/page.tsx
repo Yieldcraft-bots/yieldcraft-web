@@ -1000,11 +1000,11 @@ export default function Admin() {
           <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">Signal Health</h2>
-              <TonePill label="NETWORK LEARNING VIEW" tone={signalHealthTone} />
+              <TonePill label="CORE FUND + DECISION TELEMETRY" tone={signalHealthTone} />
             </div>
 
             <div className="mt-3 text-sm text-white/60">
-              Snapshot of how the strategy is behaving across completed trades and recent decision telemetry.
+              Snapshot of how the strategy is behaving across Core Fund completed trades and recent decision telemetry.
             </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -1156,8 +1156,12 @@ export default function Admin() {
                 }
                 tone={strategyIntel && strategyIntel.ok ? "green" : "gray"}
               />
-              <TonePill label="NETWORK · COMPLETED TRADES" tone="gray" />
+              <TonePill label="CORE FUND · COMPLETED TRADES" tone="gray" />
             </div>
+          </div>
+
+          <div className="mt-3 text-sm text-white/60">
+            Core Fund completed-trade intelligence layer. These numbers should align with the Edge Tracker truth layer, not with the today-only Pulse card.
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
