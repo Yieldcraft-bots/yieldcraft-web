@@ -73,6 +73,7 @@ type StrategyAdjustmentsResp =
         winRate: number;
         avgWinBps: number;
         avgLossBps: number;
+        edgePerTradeBps?: number;
       };
       current: {
         profitTargetBps: number;
@@ -84,6 +85,21 @@ type StrategyAdjustmentsResp =
         trailOffsetBps: number;
         reconConfidence: number;
       };
+    }
+  | { ok: false; error?: string; [k: string]: any };
+
+type EdgeTestResp =
+  | {
+      ok: true;
+      status: string;
+      sampleSize: number;
+      wins: number;
+      losses: number;
+      winRate: number | null;
+      avgWinBps: number;
+      avgLossBps: number;
+      edgePerTradeBps: number;
+      totalPnL: number;
     }
   | { ok: false; error?: string; [k: string]: any };
 
@@ -153,8 +169,9 @@ function pnlTone(v: any): Tone {
 function edgeTone(v: any): Tone {
   const n = Number(v);
   if (!Number.isFinite(n)) return "gray";
-  if (n > 0) return "green";
-  if (n >= -10) return "yellow";
+  if (n > 15) return "green";
+  if (n > 5) return "yellow";
+  if (n > 0) return "yellow";
   return "red";
 }
 
@@ -200,9 +217,9 @@ function avgWinTone(v: any): Tone {
 function avgLossTone(v: any): Tone {
   const n = Number(v);
   if (!Number.isFinite(n)) return "gray";
-  if (n <= 0) return "green";
-  if (n <= 25) return "yellow";
-  return "red";
+  if (n < 0) return "red";
+  if (n === 0) return "gray";
+  return "yellow";
 }
 
 function suggestionTone(current: any, recommended: any): Tone {
@@ -224,9 +241,7 @@ function TonePill({
   const cls = useMemo(() => toneClasses(tone).pill, [tone]);
 
   return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}
-    >
+    <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs ${cls}`}>
       {label}
     </span>
   );
@@ -261,11 +276,10 @@ export default function Admin() {
 
   const [pulse, setPulse] = useState<any>(null);
   const [inst, setInst] = useState<any>(null);
-  const [strategyIntel, setStrategyIntel] = useState<StrategyIntelResp | null>(
-    null
-  );
+  const [strategyIntel, setStrategyIntel] = useState<StrategyIntelResp | null>(null);
   const [strategyAdjustments, setStrategyAdjustments] =
     useState<StrategyAdjustmentsResp | null>(null);
+  const [edgeTest, setEdgeTest] = useState<EdgeTestResp | null>(null);
   const [ts, setTs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -335,6 +349,16 @@ export default function Admin() {
       // ignore
     }
 
+    try {
+      const edgeRes = await fetch("/api/edge-test", {
+        cache: "no-store",
+      });
+      const edgeJson = await edgeRes.json();
+      setEdgeTest(edgeJson);
+    } catch {
+      // ignore
+    }
+
     setTs(Date.now());
   }
 
@@ -342,7 +366,6 @@ export default function Admin() {
     refreshAll();
     const id = setInterval(refreshAll, 30_000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pStats = pulse?.stats;
@@ -368,9 +391,7 @@ export default function Admin() {
     strategyIntel && strategyIntel.ok ? strategyIntel.entry.losses : null;
 
   const strategyEntryQuality =
-    strategyIntel && strategyIntel.ok
-      ? strategyIntel.entry.winRatePct
-      : null;
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.winRatePct : null;
 
   const strategyExitEfficiency =
     strategyIntel && strategyIntel.ok
@@ -383,11 +404,10 @@ export default function Admin() {
       : null;
 
   const strategyAvgLoss =
-    strategyIntel && strategyIntel.ok
-      ? strategyIntel.entry.lossRatePct
-      : null;
+    strategyIntel && strategyIntel.ok ? strategyIntel.entry.lossRatePct : null;
 
-  const topEdgeTone: Tone = edgeTone(strategyEdgeValue);
+  const topEdgeTone: Tone =
+    edgeTest && edgeTest.ok ? edgeTone(edgeTest.edgePerTradeBps) : edgeTone(strategyEdgeValue);
 
   const winRatePct =
     pStats && pStats.winRate != null ? Number(pStats.winRate) * 100 : null;
@@ -395,11 +415,11 @@ export default function Admin() {
   const pulseWinRateTone = winRateTone(winRatePct);
   const coreFundDdTone = drawdownTone(cfSnap?.dd_pct_portfolio);
 
-  const strategyEdgeTone: Tone = edgeTone(strategyEdgeValue);
+  const strategyEdgeToneValue: Tone = edgeTone(strategyEdgeValue);
   const strategyEntryTone: Tone = entryQualityTone(strategyEntryQuality);
   const strategyExitTone: Tone = exitEfficiencyTone(strategyExitEfficiency);
-  const strategyAvgWinTone: Tone = avgWinTone(strategyAvgWin);
-  const strategyAvgLossTone: Tone = avgLossTone(strategyAvgLoss);
+  const strategyAvgWinToneValue: Tone = avgWinTone(strategyAvgWin);
+  const strategyAvgLossToneValue: Tone = avgLossTone(strategyAvgLoss);
 
   const recommendedProfitTone: Tone =
     strategyAdjustments && strategyAdjustments.ok
@@ -430,6 +450,41 @@ export default function Admin() {
       ? winRateTone(strategyAdjustments.stats.winRate)
       : "gray";
 
+  const edgeSample =
+    edgeTest && edgeTest.ok ? edgeTest.sampleSize : null;
+
+  const edgeWins =
+    edgeTest && edgeTest.ok ? edgeTest.wins : null;
+
+  const edgeLosses =
+    edgeTest && edgeTest.ok ? edgeTest.losses : null;
+
+  const edgeWinRate =
+    edgeTest && edgeTest.ok && edgeTest.winRate != null
+      ? Number(edgeTest.winRate) * 100
+      : null;
+
+  const edgeAvgWin =
+    edgeTest && edgeTest.ok ? edgeTest.avgWinBps : null;
+
+  const edgeAvgLoss =
+    edgeTest && edgeTest.ok ? edgeTest.avgLossBps : null;
+
+  const edgePerTrade =
+    edgeTest && edgeTest.ok ? edgeTest.edgePerTradeBps : null;
+
+  const edgeTotalPnl =
+    edgeTest && edgeTest.ok ? edgeTest.totalPnL : null;
+
+  const edgeSampleTone: Tone =
+    edgeSample == null ? "gray" : edgeSample >= 30 ? "green" : edgeSample >= 10 ? "yellow" : "red";
+
+  const edgeWinRateToneValue: Tone = winRateTone(edgeWinRate);
+  const edgePerTradeToneValue: Tone = edgeTone(edgePerTrade);
+  const edgeTotalPnlToneValue: Tone = pnlTone(edgeTotalPnl);
+  const edgeAvgWinToneValue: Tone = avgWinTone(edgeAvgWin);
+  const edgeAvgLossToneValue: Tone = avgLossTone(edgeAvgLoss);
+
   const lastRefresh = new Date(ts).toLocaleTimeString();
 
   return (
@@ -452,9 +507,7 @@ export default function Admin() {
             />
             <TonePill
               label={`EDGE ${
-                strategyIntel && strategyIntel.ok
-                  ? bps(strategyEdgeValue)
-                  : "—"
+                edgeTest && edgeTest.ok ? bps(edgePerTrade) : strategyIntel && strategyIntel.ok ? bps(strategyEdgeValue) : "—"
               }`}
               tone={topEdgeTone}
             />
@@ -487,10 +540,7 @@ export default function Admin() {
             <h2 className="text-lg font-semibold">Pulse</h2>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-3">
-              <Stat
-                label="Trades"
-                value={pStats ? String(pStats.trades) : "—"}
-              />
+              <Stat label="Trades" value={pStats ? String(pStats.trades) : "—"} />
 
               <Stat
                 label="Win Rate"
@@ -552,6 +602,76 @@ export default function Admin() {
 
         <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
           <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Edge Tracker</h2>
+            <TonePill
+              label={
+                edgeTest && edgeTest.ok
+                  ? edgeSample != null && edgeSample >= 30
+                    ? "STATISTICALLY USEFUL"
+                    : edgeSample != null && edgeSample >= 10
+                    ? "EARLY SIGNAL"
+                    : "LOW SAMPLE"
+                  : "EDGE OFFLINE"
+              }
+              tone={edgeTest && edgeTest.ok ? edgeSampleTone : "gray"}
+            />
+          </div>
+
+          <div className="mt-3 text-sm text-white/60">
+            Completed-trade truth layer for real edge detection. This is the panel that tells us whether the system is improving.
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Stat
+              label="Sample Size"
+              value={edgeTest && edgeTest.ok ? String(edgeSample) : "—"}
+              tone={edgeSampleTone}
+              sub="Completed round-trip trades"
+            />
+
+            <Stat
+              label="Edge / Trade"
+              value={edgeTest && edgeTest.ok ? bps(edgePerTrade) : "—"}
+              tone={edgePerTradeToneValue}
+              sub="Primary profitability metric"
+            />
+
+            <Stat
+              label="Win Rate"
+              value={edgeTest && edgeTest.ok ? pct(edgeWinRate) : "—"}
+              tone={edgeWinRateToneValue}
+              sub={
+                edgeTest && edgeTest.ok
+                  ? `${edgeWins} wins / ${edgeLosses} losses`
+                  : undefined
+              }
+            />
+
+            <Stat
+              label="Total PNL"
+              value={edgeTest && edgeTest.ok ? money(edgeTotalPnl) : "—"}
+              tone={edgeTotalPnlToneValue}
+              sub="Completed trades only"
+            />
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-2">
+            <Stat
+              label="Avg Win"
+              value={edgeTest && edgeTest.ok ? bps(edgeAvgWin) : "—"}
+              tone={edgeAvgWinToneValue}
+            />
+
+            <Stat
+              label="Avg Loss"
+              value={edgeTest && edgeTest.ok ? bps(edgeAvgLoss) : "—"}
+              tone={edgeAvgLossToneValue}
+            />
+          </div>
+        </section>
+
+        <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
             <h2 className="text-lg font-semibold">Strategy Intelligence</h2>
             <TonePill
               label={
@@ -580,7 +700,7 @@ export default function Admin() {
                   ? bps(strategyEdgeValue)
                   : "—"
               }
-              tone={strategyEdgeTone}
+              tone={strategyEdgeToneValue}
               sub={
                 strategyIntel && strategyIntel.ok
                   ? `Avg 60m ${bps(strategyIntel.averages.avgOutcome60mBps)}`
@@ -622,49 +742,29 @@ export default function Admin() {
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Stat
               label="Wins"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? String(strategyWins)
-                  : "—"
-              }
+              value={strategyIntel && strategyIntel.ok ? String(strategyWins) : "—"}
             />
 
             <Stat
               label="Losses"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? String(strategyLosses)
-                  : "—"
-              }
+              value={strategyIntel && strategyIntel.ok ? String(strategyLosses) : "—"}
             />
 
             <Stat
               label="Avg Win"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? bps(strategyAvgWin)
-                  : "—"
-              }
-              tone={strategyAvgWinTone}
+              value={strategyIntel && strategyIntel.ok ? bps(strategyAvgWin) : "—"}
+              tone={strategyAvgWinToneValue}
               sub={
-                strategyIntel && strategyIntel.ok
-                  ? "Using avg 60m outcome"
-                  : undefined
+                strategyIntel && strategyIntel.ok ? "Using avg 60m outcome" : undefined
               }
             />
 
             <Stat
               label="Avg Loss"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? pct(strategyAvgLoss)
-                  : "—"
-              }
-              tone={strategyAvgLossTone}
+              value={strategyIntel && strategyIntel.ok ? pct(strategyAvgLoss) : "—"}
+              tone={strategyAvgLossToneValue}
               sub={
-                strategyIntel && strategyIntel.ok
-                  ? "Entry loss rate"
-                  : undefined
+                strategyIntel && strategyIntel.ok ? "Entry loss rate" : undefined
               }
             />
           </div>
@@ -684,8 +784,7 @@ export default function Admin() {
           </div>
 
           <div className="mt-3 text-sm text-white/60">
-            Daily read-only recommendations based on recent trade behavior. Nothing
-            changes automatically.
+            Daily read-only recommendations based on recent trade behavior. Nothing changes automatically.
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -731,7 +830,7 @@ export default function Admin() {
               }
               tone={
                 strategyAdjustments && strategyAdjustments.ok
-                  ? avgLossTone(strategyAdjustments.stats.avgLossBps)
+                  ? avgLossTone(-Math.abs(strategyAdjustments.stats.avgLossBps))
                   : "gray"
               }
             />
