@@ -74,7 +74,10 @@ function emptySummary(symbol = DEFAULT_SYMBOL): BuiltSummary {
   };
 }
 
-function buildFromSummaryRow(row?: SummaryRow | null, symbol = DEFAULT_SYMBOL): BuiltSummary {
+function buildFromSummaryRow(
+  row?: SummaryRow | null,
+  symbol = DEFAULT_SYMBOL
+): BuiltSummary {
   if (!row) return emptySummary(symbol);
 
   const trades = Math.max(0, Math.trunc(n(row.trades)));
@@ -103,7 +106,10 @@ function buildFromSummaryRow(row?: SummaryRow | null, symbol = DEFAULT_SYMBOL): 
   };
 }
 
-function buildFromCompletedTrades(rows: CompletedTradeRow[], symbol = DEFAULT_SYMBOL): BuiltSummary {
+function buildFromCompletedTrades(
+  rows: CompletedTradeRow[],
+  symbol = DEFAULT_SYMBOL
+): BuiltSummary {
   if (!Array.isArray(rows) || rows.length === 0) return emptySummary(symbol);
 
   let trades = 0;
@@ -153,8 +159,9 @@ function buildFromCompletedTrades(rows: CompletedTradeRow[], symbol = DEFAULT_SY
   };
 }
 
+// NOTE: supabase is intentionally typed as any here to avoid Next/Supabase generic build issues
 async function fetchSingleSummaryView(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   viewName: string,
   symbol = DEFAULT_SYMBOL
 ): Promise<{ ok: true; summary: BuiltSummary } | { ok: false; error: string }> {
@@ -168,11 +175,14 @@ async function fetchSingleSummaryView(
     return { ok: false, error: error.message || String(error) };
   }
 
-  return { ok: true, summary: buildFromSummaryRow((data as SummaryRow | null) ?? null, symbol) };
+  return {
+    ok: true,
+    summary: buildFromSummaryRow((data as SummaryRow | null) ?? null, symbol),
+  };
 }
 
 async function fetchCoreFundFallback(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   symbol = DEFAULT_SYMBOL
 ): Promise<{ ok: true; summary: BuiltSummary } | { ok: false; error: string }> {
   const { data, error } = await supabase
@@ -189,12 +199,15 @@ async function fetchCoreFundFallback(
 
   return {
     ok: true,
-    summary: buildFromCompletedTrades((Array.isArray(data) ? data : []) as CompletedTradeRow[], symbol),
+    summary: buildFromCompletedTrades(
+      (Array.isArray(data) ? data : []) as CompletedTradeRow[],
+      symbol
+    ),
   };
 }
 
 async function fetchNetworkFallback(
-  supabase: ReturnType<typeof createClient>,
+  supabase: any,
   symbol = DEFAULT_SYMBOL
 ): Promise<{ ok: true; summary: BuiltSummary } | { ok: false; error: string }> {
   const { data, error } = await supabase
@@ -209,7 +222,10 @@ async function fetchNetworkFallback(
 
   return {
     ok: true,
-    summary: buildFromCompletedTrades((Array.isArray(data) ? data : []) as CompletedTradeRow[], symbol),
+    summary: buildFromCompletedTrades(
+      (Array.isArray(data) ? data : []) as CompletedTradeRow[],
+      symbol
+    ),
   };
 }
 
@@ -234,7 +250,6 @@ export async function GET() {
       auth: { persistSession: false },
     });
 
-    // Core Fund summary
     let coreFundSource = "corefund_strategy_intelligence_summary";
     let coreFund = await fetchSingleSummaryView(
       supabase,
@@ -255,7 +270,6 @@ export async function GET() {
       });
     }
 
-    // Network summary
     let networkSource = "strategy_intelligence_summary";
     let network = await fetchSingleSummaryView(
       supabase,
@@ -287,7 +301,6 @@ export async function GET() {
         network: networkSource,
       },
 
-      // Keep top-level fields compatible with your current Mission Control UI.
       decisionsAnalyzed: core.trades,
 
       averages: {
@@ -326,7 +339,6 @@ export async function GET() {
         note: "Core Fund top-level values come from completed-trade truth. Network summary is included separately below.",
       },
 
-      // New explicit sections for clean Mission Control wiring
       coreFund: {
         symbol: core.symbol,
         trades: core.trades,
