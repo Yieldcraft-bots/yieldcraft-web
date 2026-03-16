@@ -121,15 +121,18 @@ function round2(n: number) {
   return Math.round(n * 100) / 100;
 }
 
-function buildExitProfile(base: {
-  profitTargetBps: number;
-  trailArmBps: number;
-  trailOffsetBpsBase: number;
-  trailVolFloorBps: number;
-  trailMinHoldMin: number;
-  timeStopEnabled: boolean;
-  maxHoldMinutes: number;
-}, regime: MarketRegime): ExitProfile {
+function buildExitProfile(
+  base: {
+    profitTargetBps: number;
+    trailArmBps: number;
+    trailOffsetBpsBase: number;
+    trailVolFloorBps: number;
+    trailMinHoldMin: number;
+    timeStopEnabled: boolean;
+    maxHoldMinutes: number;
+  },
+  regime: MarketRegime
+): ExitProfile {
   const rangeProfitTargetBps = num(
     process.env.PULSE_RANGE_PROFIT_TARGET_BPS,
     Math.min(base.profitTargetBps, 90)
@@ -1845,6 +1848,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
   const hardMaxUsd = num(process.env.YC_HARD_MAX_TRADE_USD, 10);
   const envEntryUsd = num(process.env.PULSE_ENTRY_QUOTE_USD, 2.0);
+  const minEntryUsdFloor = num(process.env.PULSE_MIN_ENTRY_USD_FLOOR, 5);
 
   const makerEntries = truthyDefault(process.env.MAKER_ENTRIES, true);
   const makerExits = truthyDefault(process.env.MAKER_EXITS, false);
@@ -1924,6 +1928,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     baseEntryUsd,
     scaledEntryUsd,
     finalEntryUsdPrePlan,
+    minEntryUsdFloor,
     position,
     caps: {
       hardMaxUsd,
@@ -2103,6 +2108,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           cooldown,
           currentPositionUsd,
           maxPositionUsd,
+          minEntryUsdFloor,
           base_total: (position as any).base_total ?? null,
           base_available: (position as any).base_available ?? null,
         },
@@ -2161,7 +2167,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
     const remainingUsdCap = Math.max(0, maxPositionUsd - currentPositionUsd);
 
-    const plannedEntryUsd = Math.max(
+    const rawPlannedEntryUsd = Math.max(
       0.01,
       Math.min(
         finalEntryUsdPrePlan * entryPlan.sizeMultiplier,
@@ -2170,6 +2176,186 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         remainingUsdCap
       )
     );
+
+    if (!entryPlan.allowEntry) {
+      await writeStrategyDecision({
+        created_at: nowIso(),
+        user_id: ctx.user_id,
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
+        run_id: runId,
+
+        has_position: false,
+        action_phase: "ENTRY",
+        decision_mode: "blocked",
+        decision_reason: entryPlan.reason,
+
+        recon_enabled: reconStatus.enabled,
+        recon_mode: reconStatus.mode,
+        recon_regime: reconStatus.regime,
+        recon_side: reconStatus.side,
+        recon_confidence: reconStatus.confidence,
+        recon_entry_allowed: reconStatus.entryAllowed,
+        recon_is_chop: reconStatus.isChop,
+
+        market_regime: currentRegime,
+        measured_vol_bps: measuredEntryVolBps,
+
+        equity_gov_enabled: gov.enabled,
+        equity_gov_defense: gov.defense,
+        equity_gov_dd_pct: gov.ddPct,
+        equity_gov_multiplier: gov.multiplier,
+
+        entry_allow: false,
+        entry_tier: entryPlan.tier,
+        entry_size_multiplier: entryPlan.sizeMultiplier,
+        entry_tier_multiplier: entryPlan.tierMultiplier,
+        entry_regime_multiplier: entryPlan.regimeMultiplier,
+        entry_defense_multiplier: entryPlan.defenseMultiplier,
+        trend_override: entryPlan.trendOverride,
+
+        planned_entry_usd: rawPlannedEntryUsd,
+        base_entry_usd: finalEntryUsdPrePlan,
+        spot_price: refPrice || null,
+
+        meta: {
+          gates,
+          cooldown,
+          notes: entryPlan.notes,
+          defenseApplied: entryPlan.defenseApplied,
+          reconReason: reconStatus.reason,
+          currentPositionUsd,
+          maxPositionUsd,
+          remainingUsdCap,
+          rawPlannedEntryUsd,
+          minEntryUsdFloor,
+          base_total: (position as any).base_total ?? null,
+          base_available: (position as any).base_available ?? null,
+        },
+      });
+
+      log(runId, "ENTRY_PLAN_BLOCK", {
+        reason: entryPlan.reason,
+        entryPlan,
+        currentRegime,
+        reconStatus,
+        rawPlannedEntryUsd,
+        minEntryUsdFloor,
+      });
+
+      return {
+        ok: true,
+        mode: "NO_POSITION_ENTRY_PLAN_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        regime: currentRegime,
+        entryPlan,
+        rawPlannedEntryUsd,
+        minEntryUsdFloor,
+      };
+    }
+
+    if (remainingUsdCap < 0.01 || rawPlannedEntryUsd < 0.01) {
+      return {
+        ok: true,
+        mode: "NO_POSITION_CAP_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        currentPositionUsd,
+        maxPositionUsd,
+        remainingUsdCap,
+      };
+    }
+
+    if (rawPlannedEntryUsd < minEntryUsdFloor) {
+      await writeStrategyDecision({
+        created_at: nowIso(),
+        user_id: ctx.user_id,
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
+        run_id: runId,
+
+        has_position: false,
+        action_phase: "ENTRY",
+        decision_mode: "blocked",
+        decision_reason: `entry_blocked_below_min_entry_floor_${minEntryUsdFloor}`,
+
+        recon_enabled: reconStatus.enabled,
+        recon_mode: reconStatus.mode,
+        recon_regime: reconStatus.regime,
+        recon_side: reconStatus.side,
+        recon_confidence: reconStatus.confidence,
+        recon_entry_allowed: reconStatus.entryAllowed,
+        recon_is_chop: reconStatus.isChop,
+
+        market_regime: currentRegime,
+        measured_vol_bps: measuredEntryVolBps,
+
+        equity_gov_enabled: gov.enabled,
+        equity_gov_defense: gov.defense,
+        equity_gov_dd_pct: gov.ddPct,
+        equity_gov_multiplier: gov.multiplier,
+
+        entry_allow: false,
+        entry_tier: entryPlan.tier,
+        entry_size_multiplier: entryPlan.sizeMultiplier,
+        entry_tier_multiplier: entryPlan.tierMultiplier,
+        entry_regime_multiplier: entryPlan.regimeMultiplier,
+        entry_defense_multiplier: entryPlan.defenseMultiplier,
+        trend_override: entryPlan.trendOverride,
+
+        planned_entry_usd: rawPlannedEntryUsd,
+        base_entry_usd: finalEntryUsdPrePlan,
+        spot_price: refPrice || null,
+
+        meta: {
+          gates,
+          cooldown,
+          notes: [...entryPlan.notes, "blocked_micro_fee_toxic_entry"],
+          defenseApplied: entryPlan.defenseApplied,
+          reconReason: reconStatus.reason,
+          currentPositionUsd,
+          maxPositionUsd,
+          remainingUsdCap,
+          rawPlannedEntryUsd,
+          minEntryUsdFloor,
+          base_total: (position as any).base_total ?? null,
+          base_available: (position as any).base_available ?? null,
+        },
+      });
+
+      log(runId, "MIN_ENTRY_FLOOR_BLOCK", {
+        rawPlannedEntryUsd,
+        minEntryUsdFloor,
+        currentRegime,
+        entryPlan,
+      });
+
+      return {
+        ok: true,
+        mode: "NO_POSITION_MIN_ENTRY_FLOOR_BLOCK",
+        gates,
+        position,
+        cooldown,
+        reconStatus,
+        equityGov: gov,
+        regime: currentRegime,
+        entryPlan,
+        rawPlannedEntryUsd,
+        minEntryUsdFloor,
+        currentPositionUsd,
+        maxPositionUsd,
+        remainingUsdCap,
+      };
+    }
+
+    const plannedEntryUsd = rawPlannedEntryUsd;
     const entryQuoteUsd = fmtQuoteSizeUsd(plannedEntryUsd);
 
     await writeStrategyDecision({
@@ -2181,7 +2367,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
 
       has_position: false,
       action_phase: "ENTRY",
-      decision_mode: entryPlan.allowEntry ? "allowed" : "blocked",
+      decision_mode: "allowed",
       decision_reason: entryPlan.reason,
 
       recon_enabled: reconStatus.enabled,
@@ -2200,7 +2386,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       equity_gov_dd_pct: gov.ddPct,
       equity_gov_multiplier: gov.multiplier,
 
-      entry_allow: entryPlan.allowEntry,
+      entry_allow: true,
       entry_tier: entryPlan.tier,
       entry_size_multiplier: entryPlan.sizeMultiplier,
       entry_tier_multiplier: entryPlan.tierMultiplier,
@@ -2221,45 +2407,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         currentPositionUsd,
         maxPositionUsd,
         remainingUsdCap,
+        rawPlannedEntryUsd,
+        minEntryUsdFloor,
         base_total: (position as any).base_total ?? null,
         base_available: (position as any).base_available ?? null,
       },
     });
-
-    if (!entryPlan.allowEntry) {
-      log(runId, "ENTRY_PLAN_BLOCK", {
-        reason: entryPlan.reason,
-        entryPlan,
-        currentRegime,
-        reconStatus,
-      });
-      return {
-        ok: true,
-        mode: "NO_POSITION_ENTRY_PLAN_BLOCK",
-        gates,
-        position,
-        cooldown,
-        reconStatus,
-        equityGov: gov,
-        regime: currentRegime,
-        entryPlan,
-      };
-    }
-
-    if (remainingUsdCap < 0.01 || plannedEntryUsd < 0.01) {
-      return {
-        ok: true,
-        mode: "NO_POSITION_CAP_BLOCK",
-        gates,
-        position,
-        cooldown,
-        reconStatus,
-        equityGov: gov,
-        currentPositionUsd,
-        maxPositionUsd,
-        remainingUsdCap,
-      };
-    }
 
     if (entriesDryRun) {
       return {
@@ -2315,6 +2468,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
+          rawPlannedEntryUsd,
+          minEntryUsdFloor,
         },
         recon_status: reconStatus,
         equity_gov: gov,
@@ -2335,6 +2490,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             currentPositionUsd,
             maxPositionUsd,
             remainingUsdCap,
+            rawPlannedEntryUsd,
+            minEntryUsdFloor,
           },
         }),
       });
@@ -2408,6 +2565,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
+          rawPlannedEntryUsd,
+          minEntryUsdFloor,
           makerAttempt: {
             baseSize: attempt.baseSize,
             limitPrice: attempt.limitPrice,
@@ -2435,6 +2594,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             currentPositionUsd,
             maxPositionUsd,
             remainingUsdCap,
+            rawPlannedEntryUsd,
+            minEntryUsdFloor,
           },
         }),
       });
@@ -2487,6 +2648,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
+          rawPlannedEntryUsd,
+          minEntryUsdFloor,
           maker_order_id: makerOrderId,
           status: lastSt,
           makerAttempt: {
@@ -2524,6 +2687,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             currentPositionUsd,
             maxPositionUsd,
             remainingUsdCap,
+            rawPlannedEntryUsd,
+            minEntryUsdFloor,
           },
         }),
       });
@@ -2589,6 +2754,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         currentPositionUsd,
         maxPositionUsd,
         remainingUsdCap,
+        rawPlannedEntryUsd,
+        minEntryUsdFloor,
         maker_order_id: makerOrderId,
         status: lastSt,
       },
@@ -2613,6 +2780,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
+          rawPlannedEntryUsd,
+          minEntryUsdFloor,
         },
       }),
     });
