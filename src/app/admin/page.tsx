@@ -178,6 +178,18 @@ type RegimeBucket = {
   entryWinRatePct: number;
 };
 
+type EdgeHeatmapRow = {
+  regime: string;
+  confidence_bucket: string;
+  trades: number;
+  avg_edge_bps: number;
+  win_rate_pct: number;
+};
+
+type EdgeHeatmapResp =
+  | { ok: true; data: EdgeHeatmapRow[] }
+  | { ok: false; error?: string; [k: string]: any };
+
 type Tone = "green" | "yellow" | "red" | "gray";
 
 function money(n: any) {
@@ -337,6 +349,35 @@ function confidenceTone(v: number | null | undefined): Tone {
   return "red";
 }
 
+function heatCellTone(row: EdgeHeatmapRow): Tone {
+  const trades = Number(row.trades);
+  const edge = Number(row.avg_edge_bps);
+
+  if (!Number.isFinite(edge)) return "gray";
+  if (trades < 2) return "gray";
+  if (edge > 10) return "green";
+  if (edge > 0) return "yellow";
+  return "red";
+}
+
+function confidenceOrder(bucket: string) {
+  if (bucket === "0.68-0.72") return 0;
+  if (bucket === "0.72-0.80") return 1;
+  if (bucket === "0.80+") return 2;
+  if (bucket === "unknown") return 3;
+  return 99;
+}
+
+function regimeOrder(regime: string) {
+  const r = String(regime || "").toUpperCase();
+  if (r === "TRENDING") return 0;
+  if (r === "RANGING") return 1;
+  if (r === "VOLATILE") return 2;
+  if (r === "LOW_LIQUIDITY") return 3;
+  if (r === "UNKNOWN") return 4;
+  return 99;
+}
+
 function TonePill({
   label,
   tone,
@@ -394,6 +435,7 @@ export default function Admin() {
     useState<StrategyAdjustmentsResp | null>(null);
   const [edgeTest, setEdgeTest] = useState<EdgeTestResp | null>(null);
   const [decisionStream, setDecisionStream] = useState<DecisionRow[]>([]);
+  const [edgeHeatmap, setEdgeHeatmap] = useState<EdgeHeatmapRow[]>([]);
   const [ts, setTs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -471,6 +513,20 @@ export default function Admin() {
       setEdgeTest(edgeJson);
     } catch {
       // ignore
+    }
+
+    try {
+      const heatmapRes = await fetch("/api/edge-heatmap", {
+        cache: "no-store",
+      });
+      const heatmapJson: EdgeHeatmapResp = await heatmapRes.json();
+      if (heatmapJson?.ok && Array.isArray(heatmapJson.data)) {
+        setEdgeHeatmap(heatmapJson.data);
+      } else {
+        setEdgeHeatmap([]);
+      }
+    } catch {
+      setEdgeHeatmap([]);
     }
 
     try {
@@ -721,6 +777,46 @@ export default function Admin() {
       : "—";
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
+
+  const heatmapBuckets = useMemo(() => {
+    const buckets = Array.from(
+      new Set(edgeHeatmap.map((r) => String(r.confidence_bucket || "unknown")))
+    );
+    return buckets.sort((a, b) => confidenceOrder(a) - confidenceOrder(b));
+  }, [edgeHeatmap]);
+
+  const heatmapRegimes = useMemo(() => {
+    const regimes = Array.from(
+      new Set(edgeHeatmap.map((r) => String(r.regime || "UNKNOWN")))
+    );
+    return regimes.sort((a, b) => regimeOrder(a) - regimeOrder(b));
+  }, [edgeHeatmap]);
+
+  const heatmapMap = useMemo(() => {
+    const map = new Map<string, EdgeHeatmapRow>();
+    edgeHeatmap.forEach((row) => {
+      map.set(`${row.regime}__${row.confidence_bucket}`, row);
+    });
+    return map;
+  }, [edgeHeatmap]);
+
+  const bestHeatmapRow = useMemo(() => {
+    if (!edgeHeatmap.length) return null;
+    return [...edgeHeatmap].sort((a, b) => {
+      const aScore = Number(a.avg_edge_bps) * Math.max(Number(a.trades), 1);
+      const bScore = Number(b.avg_edge_bps) * Math.max(Number(b.trades), 1);
+      return bScore - aScore;
+    })[0];
+  }, [edgeHeatmap]);
+
+  const worstHeatmapRow = useMemo(() => {
+    if (!edgeHeatmap.length) return null;
+    return [...edgeHeatmap].sort((a, b) => {
+      const aScore = Number(a.avg_edge_bps) * Math.max(Number(a.trades), 1);
+      const bScore = Number(b.avg_edge_bps) * Math.max(Number(b.trades), 1);
+      return aScore - bScore;
+    })[0];
+  }, [edgeHeatmap]);
 
   return (
     <main className="min-h-screen bg-black text-white">
@@ -993,6 +1089,185 @@ export default function Admin() {
               value={edgeTest && edgeTest.ok ? bps(edgeAvgLoss) : "—"}
               tone={edgeAvgLossToneValue}
             />
+          </div>
+        </section>
+
+        <section className="mt-6 overflow-hidden rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Edge Heatmap</h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <TonePill
+                label={edgeHeatmap.length ? "LIVE EDGE MAP" : "HEATMAP OFFLINE"}
+                tone={edgeHeatmap.length ? "green" : "gray"}
+              />
+              <TonePill label="REGIME × CONFIDENCE" tone="gray" />
+            </div>
+          </div>
+
+          <div className="mt-3 text-sm text-white/60">
+            This is the edge finder. It shows exactly where the system is working and where it is bleeding. Green cells are the pockets to protect and expand. Red cells are where not to trust the engine.
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <Stat
+              label="Best Pocket"
+              value={
+                bestHeatmapRow
+                  ? `${bestHeatmapRow.regime} · ${bestHeatmapRow.confidence_bucket}`
+                  : "—"
+              }
+              tone={bestHeatmapRow ? heatCellTone(bestHeatmapRow) : "gray"}
+              sub={
+                bestHeatmapRow
+                  ? `${bps(bestHeatmapRow.avg_edge_bps)} · ${bestHeatmapRow.trades} trades · ${pct(bestHeatmapRow.win_rate_pct)} win rate`
+                  : "No heatmap data yet"
+              }
+            />
+            <Stat
+              label="Worst Pocket"
+              value={
+                worstHeatmapRow
+                  ? `${worstHeatmapRow.regime} · ${worstHeatmapRow.confidence_bucket}`
+                  : "—"
+              }
+              tone={worstHeatmapRow ? heatCellTone(worstHeatmapRow) : "gray"}
+              sub={
+                worstHeatmapRow
+                  ? `${bps(worstHeatmapRow.avg_edge_bps)} · ${worstHeatmapRow.trades} trades · ${pct(worstHeatmapRow.win_rate_pct)} win rate`
+                  : "No heatmap data yet"
+              }
+            />
+            <Stat
+              label="Tracked Pockets"
+              value={edgeHeatmap.length ? String(edgeHeatmap.length) : "—"}
+              tone={edgeHeatmap.length >= 4 ? "green" : edgeHeatmap.length ? "yellow" : "gray"}
+              sub="Regime-confidence cells with completed-trade history"
+            />
+          </div>
+
+          <div className="mt-6 overflow-x-auto">
+            <div className="min-w-[780px]">
+              <div
+                className="grid gap-3"
+                style={{
+                  gridTemplateColumns: `180px repeat(${Math.max(heatmapBuckets.length, 1)}, minmax(160px, 1fr))`,
+                }}
+              >
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-xs uppercase tracking-wide text-white/40">
+                  Regime
+                </div>
+
+                {heatmapBuckets.length ? (
+                  heatmapBuckets.map((bucket) => (
+                    <div
+                      key={bucket}
+                      className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-center"
+                    >
+                      <div className="text-[11px] uppercase tracking-wide text-white/40">
+                        Confidence
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-white/85">{bucket}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-white/45">
+                    No buckets yet
+                  </div>
+                )}
+
+                {heatmapRegimes.length ? (
+                  heatmapRegimes.map((regime) => (
+                    <>
+                      <div
+                        key={`${regime}-label`}
+                        className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4"
+                      >
+                        <div className="text-[11px] uppercase tracking-wide text-white/40">
+                          Regime
+                        </div>
+                        <div className="mt-1 text-sm font-semibold text-white/90">{regime}</div>
+                      </div>
+
+                      {heatmapBuckets.map((bucket) => {
+                        const row = heatmapMap.get(`${regime}__${bucket}`);
+                        const tone = row ? heatCellTone(row) : "gray";
+                        const cls = toneClasses(tone);
+
+                        return (
+                          <div
+                            key={`${regime}-${bucket}`}
+                            className={`rounded-2xl border p-4 transition hover:scale-[1.01] ${
+                              row
+                                ? cls.card
+                                : "border-white/10 bg-white/[0.03] text-white/35 ring-1 ring-white/10"
+                            }`}
+                          >
+                            {row ? (
+                              <>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="text-[11px] uppercase tracking-wide text-white/45">
+                                    Avg Edge
+                                  </div>
+                                  <span className={`rounded-full px-2 py-1 text-[10px] ${cls.pill}`}>
+                                    {row.trades} trades
+                                  </span>
+                                </div>
+
+                                <div className={`mt-3 text-3xl font-semibold tracking-tight ${cls.value}`}>
+                                  {bps(row.avg_edge_bps)}
+                                </div>
+
+                                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                                  <div className="rounded-xl bg-black/20 px-3 py-2 ring-1 ring-white/5">
+                                    <div className="text-[11px] text-white/45">Win Rate</div>
+                                    <div className="mt-1 font-semibold text-white/90">
+                                      {pct(row.win_rate_pct)}
+                                    </div>
+                                  </div>
+                                  <div className="rounded-xl bg-black/20 px-3 py-2 ring-1 ring-white/5">
+                                    <div className="text-[11px] text-white/45">Sample</div>
+                                    <div className="mt-1 font-semibold text-white/90">
+                                      {row.trades}
+                                    </div>
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex h-full min-h-[140px] items-center justify-center text-center text-sm text-white/30">
+                                No completed-trade data
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
+                  ))
+                ) : (
+                  <div className="col-span-full rounded-2xl border border-white/10 bg-white/5 px-4 py-10 text-center text-sm text-white/45">
+                    Edge heatmap data not available yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center gap-3 text-xs text-white/45">
+            <span className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+              Positive pocket
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
+              Marginal / watch
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-rose-400" />
+              Negative pocket
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="h-2.5 w-2.5 rounded-full bg-white/35" />
+              Thin or missing sample
+            </span>
           </div>
         </section>
 
