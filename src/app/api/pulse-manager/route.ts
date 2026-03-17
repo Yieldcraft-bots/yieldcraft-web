@@ -923,6 +923,9 @@ function buildEntryPlan(params: {
     true
   );
 
+  const rangeMinConf = num(process.env.PULSE_RANGE_MIN_RECON_CONF, 0.72);
+  const rangeMaxConf = num(process.env.PULSE_RANGE_MAX_RECON_CONF, 0.8);
+
   const confidence =
     Number.isFinite(Number(reconStatus.confidence)) &&
     reconStatus.confidence !== null
@@ -1026,6 +1029,59 @@ function buildEntryPlan(params: {
       defenseApplied: false,
       notes,
     };
+  }
+
+  if (currentRegime === "RANGING") {
+    if (confidence === null || !Number.isFinite(confidence)) {
+      return {
+        allowEntry: false,
+        reason: "entry_blocked_ranging_missing_confidence",
+        effectiveSide,
+        confidence,
+        tier: "none",
+        sizeMultiplier: 0,
+        tierMultiplier: 0,
+        regimeMultiplier,
+        defenseMultiplier: 1,
+        trendOverride,
+        defenseApplied: false,
+        notes: [...notes, "ranging_confidence_gate"],
+      };
+    }
+
+    if (confidence < rangeMinConf) {
+      return {
+        allowEntry: false,
+        reason: `entry_blocked_ranging_conf_below_${rangeMinConf.toFixed(2)}`,
+        effectiveSide,
+        confidence,
+        tier: "none",
+        sizeMultiplier: 0,
+        tierMultiplier: tier.multiplier,
+        regimeMultiplier,
+        defenseMultiplier: 1,
+        trendOverride,
+        defenseApplied: false,
+        notes: [...notes, "ranging_confidence_gate"],
+      };
+    }
+
+    if (confidence >= rangeMaxConf) {
+      return {
+        allowEntry: false,
+        reason: `entry_blocked_ranging_conf_at_or_above_${rangeMaxConf.toFixed(2)}`,
+        effectiveSide,
+        confidence,
+        tier: "none",
+        sizeMultiplier: 0,
+        tierMultiplier: tier.multiplier,
+        regimeMultiplier,
+        defenseMultiplier: 1,
+        trendOverride,
+        defenseApplied: false,
+        notes: [...notes, "ranging_confidence_gate"],
+      };
+    }
   }
 
   if (tier.multiplier <= 0) {
@@ -1599,23 +1655,117 @@ async function fetchExecutionSummary(
   };
 }
 
-// ---------- last BUY fill ----------
-async function fetchLastBuyFill(
+// ---------- current open-position anchor from system logs ----------
+async function fetchOpenPositionAnchorFromTradeLogs(
+  user_id: string
+): Promise<
+  | { ok: true; entryPrice: number; entryTime: string; entryQty: number; source: "trade_logs" }
+  | { ok: false; error: any; source: "trade_logs" }
+> {
+  try {
+    const client = sb();
+    const { data, error } = await client
+      .from("trade_logs")
+      .select("created_at, side, base_size, price, ok, status, symbol")
+      .eq("user_id", user_id)
+      .eq("symbol", PRODUCT_ID)
+      .in("side", ["BUY", "SELL"])
+      .order("created_at", { ascending: true })
+      .limit(2000);
+
+    if (error) {
+      return { ok: false, error: error.message || error, source: "trade_logs" };
+    }
+
+    const rows = Array.isArray(data) ? data : [];
+    if (!rows.length) {
+      return { ok: false, error: "no_trade_logs_found", source: "trade_logs" };
+    }
+
+    let openQty = 0;
+    let openCost = 0;
+    let cycleStartTime: string | null = null;
+    const eps = 0.00000001;
+
+    for (const row of rows as any[]) {
+      const side = String(row?.side || "").toUpperCase();
+      const base = Number(row?.base_size || 0);
+      const price = Number(row?.price || 0);
+
+      if (side !== "BUY" && side !== "SELL") continue;
+      if (!Number.isFinite(base) || base <= 0) continue;
+      if (!Number.isFinite(price) || price <= 0) continue;
+
+      if (side === "BUY") {
+        if (openQty <= eps) {
+          openQty = 0;
+          openCost = 0;
+          cycleStartTime = row?.created_at || nowIso();
+        }
+        openQty += base;
+        openCost += base * price;
+        continue;
+      }
+
+      if (side === "SELL") {
+        if (openQty <= eps) continue;
+
+        const sellQty = Math.min(base, openQty);
+        const avgCost = openQty > eps ? openCost / openQty : 0;
+
+        openQty -= sellQty;
+        openCost -= avgCost * sellQty;
+
+        if (openQty <= eps) {
+          openQty = 0;
+          openCost = 0;
+          cycleStartTime = null;
+        }
+      }
+    }
+
+    if (openQty <= eps || openCost <= 0 || !cycleStartTime) {
+      return { ok: false, error: "no_open_cycle_found", source: "trade_logs" };
+    }
+
+    const entryPrice = openCost / openQty;
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+      return { ok: false, error: "bad_open_cycle_price", source: "trade_logs" };
+    }
+
+    return {
+      ok: true,
+      entryPrice,
+      entryTime: cycleStartTime,
+      entryQty: openQty,
+      source: "trade_logs",
+    };
+  } catch (e: any) {
+    return {
+      ok: false,
+      error: e?.message || String(e),
+      source: "trade_logs",
+    };
+  }
+}
+
+// ---------- Coinbase fallback if logs are missing ----------
+async function fetchLastBuyFillCoinbase(
   ctx: Ctx
 ): Promise<
-  | { ok: true; entryPrice: number; entryTime: string; entryQty: number }
-  | { ok: false; error: any }
+  | { ok: true; entryPrice: number; entryTime: string; entryQty: number; source: "coinbase_fills" }
+  | { ok: false; error: any; source: "coinbase_fills" }
 > {
   const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
     PRODUCT_ID
   )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
 
   const r = await cbGet(ctx, path);
-  if (!r.ok) return { ok: false, error: r.json ?? r.text };
+  if (!r.ok) return { ok: false, error: r.json ?? r.text, source: "coinbase_fills" };
 
   const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
   if (!Array.isArray(fills) || fills.length === 0)
-    return { ok: false, error: "no_fills_found" };
+    return { ok: false, error: "no_fills_found", source: "coinbase_fills" };
 
   const buy =
     fills.find((f: any) => String(f?.side || "").toUpperCase() === "BUY") ||
@@ -1626,8 +1776,15 @@ async function fetchLastBuyFill(
   const t = String(buy?.trade_time || buy?.created_time || buy?.time || "");
 
   if (!Number.isFinite(px) || px <= 0)
-    return { ok: false, error: { bad_price: buy } };
-  return { ok: true, entryPrice: px, entryTime: t || nowIso(), entryQty: qty };
+    return { ok: false, error: { bad_price: buy }, source: "coinbase_fills" };
+
+  return {
+    ok: true,
+    entryPrice: px,
+    entryTime: t || nowIso(),
+    entryQty: qty,
+    source: "coinbase_fills",
+  };
 }
 
 // ---------- last fill (ANY side) ----------
@@ -1991,7 +2148,11 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
   }
 
-  const lastBuy = await fetchLastBuyFill(ctx);
+  const positionAnchor = await fetchOpenPositionAnchorFromTradeLogs(ctx.user_id);
+  const lastBuy = positionAnchor.ok
+    ? positionAnchor
+    : await fetchLastBuyFillCoinbase(ctx);
+
   const lastFill = await fetchLastFillAny(ctx);
 
   const lastFillIso = lastFill.ok
@@ -2818,6 +2979,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     log(runId, "EXIT_DECISION", {
       reason: "blocked_cannot_read_entry",
       pnlBps: null,
+      anchorSource: (lastBuy as any)?.source ?? "unknown",
     });
     return {
       ok: false,
@@ -2933,6 +3095,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     entryPrice,
     entryTime: lastBuy.entryTime,
     entryQty: Number.isFinite(lastBuy.entryQty) ? lastBuy.entryQty : null,
+    entrySource: (lastBuy as any)?.source ?? "unknown",
     heldMs: Number.isFinite(heldMs) ? heldMs : null,
     candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
     current,
@@ -3020,6 +3183,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     positionTotal: (position as any).base_total,
     effectiveTrailOffsetBps: decision.effectiveTrailOffsetBps,
     minHoldOk,
+    entrySource: decision.entrySource,
   });
 
   if (!anyExit)
