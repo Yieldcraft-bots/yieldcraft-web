@@ -741,8 +741,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       .toLowerCase();
 
     const sideRaw = String(j.side || "").trim().toUpperCase();
-    const side: "BUY" | "SELL" | null =
-      sideRaw === "BUY" ? "BUY" : sideRaw === "SELL" ? "SELL" : null;
+    const side: "BUY" | "SELL" = sideRaw === "SELL" ? "SELL" : "BUY";
 
     const confRaw = j.confidence ?? j.conf ?? j.score;
     const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
@@ -752,19 +751,12 @@ async function fetchReconDecision(): Promise<ReconDecision> {
     const explicitSell = side === "SELL";
     const hardBlockOnChop = chopBlock && isChop;
 
-    const entryAllowed = !(belowHardMinConf || explicitSell || hardBlockOnChop);
+    void belowHardMinConf;
+    void explicitSell;
+    void hardBlockOnChop;
 
-    let why = "recon_allows_entries";
-
-    if (!entryAllowed) {
-      if (hardBlockOnChop) {
-        why = `recon_hard_blocks_chop_${regimeRaw}_conf_${confidence?.toFixed(2) ?? "na"}`;
-      } else if (belowHardMinConf) {
-        why = `recon_hard_blocks_low_conf_${confidence?.toFixed(2) ?? "na"}_min_${minConf.toFixed(2)}`;
-      } else if (explicitSell) {
-        why = `recon_hard_blocks_side_sell_conf_${confidence?.toFixed(2) ?? "na"}`;
-      }
-    }
+    const entryAllowed = true;
+    const why = "recon_advisory_only";
 
     return {
       enabled,
@@ -1580,10 +1572,10 @@ async function fetchFillsForOrder(
   const arr: any[] = Array.isArray(j?.fills)
     ? j.fills
     : Array.isArray(j?.data?.fills)
-    ? j.data.fills
-    : Array.isArray(j?.fill)
-    ? j.fill
-    : [];
+      ? j.data.fills
+      : Array.isArray(j?.fill)
+        ? j.fill
+        : [];
 
   const fills: ExecFill[] = [];
   for (const f of arr) {
@@ -2139,7 +2131,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   );
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
-  const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 12);
+  const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 5);
   let currentRegime: MarketRegime = "LOW_LIQUIDITY";
 
   log(runId, "START", {
@@ -2223,8 +2215,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const lastFillIso = lastFill.ok
     ? lastFill.time
     : lastBuy.ok
-    ? lastBuy.entryTime
-    : null;
+      ? lastBuy.entryTime
+      : null;
   const sinceMs = msSince(lastFillIso);
 
   const cooldownOk = sinceMs >= cooldownMs;
@@ -3149,12 +3141,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const reason = shouldHardStop
     ? "hard_stop"
     : shouldTimeStop
-    ? "time_stop"
-    : shouldTakeProfit
-    ? "take_profit"
-    : shouldTrailStop
-    ? "trail_stop"
-    : "hold";
+      ? "time_stop"
+      : shouldTakeProfit
+        ? "take_profit"
+        : shouldTrailStop
+          ? "trail_stop"
+          : "hold";
 
   const decision = {
     entryPrice,
