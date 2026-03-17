@@ -186,10 +186,6 @@ type EdgeHeatmapRow = {
   win_rate_pct: number;
 };
 
-type EdgeHeatmapResp =
-  | { ok: true; data: EdgeHeatmapRow[] }
-  | { ok: false; error?: string; [k: string]: any };
-
 type Tone = "green" | "yellow" | "red" | "gray";
 
 function money(n: any) {
@@ -349,33 +345,26 @@ function confidenceTone(v: number | null | undefined): Tone {
   return "red";
 }
 
-function heatCellTone(row: EdgeHeatmapRow): Tone {
-  const trades = Number(row.trades);
-  const edge = Number(row.avg_edge_bps);
-
-  if (!Number.isFinite(edge)) return "gray";
-  if (trades < 2) return "gray";
-  if (edge > 10) return "green";
-  if (edge > 0) return "yellow";
+function heatCellTone(edge: number | null | undefined): Tone {
+  const n = Number(edge);
+  if (!Number.isFinite(n)) return "gray";
+  if (n >= 10) return "green";
+  if (n > 0) return "yellow";
   return "red";
 }
 
-function confidenceOrder(bucket: string) {
-  if (bucket === "0.68-0.72") return 0;
-  if (bucket === "0.72-0.80") return 1;
-  if (bucket === "0.80+") return 2;
-  if (bucket === "unknown") return 3;
-  return 99;
-}
-
-function regimeOrder(regime: string) {
-  const r = String(regime || "").toUpperCase();
-  if (r === "TRENDING") return 0;
-  if (r === "RANGING") return 1;
-  if (r === "VOLATILE") return 2;
-  if (r === "LOW_LIQUIDITY") return 3;
-  if (r === "UNKNOWN") return 4;
-  return 99;
+function heatCellClasses(edge: number | null | undefined) {
+  const tone = heatCellTone(edge);
+  if (tone === "green") {
+    return "bg-emerald-500/18 ring-1 ring-emerald-500/30";
+  }
+  if (tone === "yellow") {
+    return "bg-amber-500/18 ring-1 ring-amber-500/30";
+  }
+  if (tone === "red") {
+    return "bg-rose-500/18 ring-1 ring-rose-500/30";
+  }
+  return "bg-white/5 ring-1 ring-white/10";
 }
 
 function TonePill({
@@ -436,6 +425,7 @@ export default function Admin() {
   const [edgeTest, setEdgeTest] = useState<EdgeTestResp | null>(null);
   const [decisionStream, setDecisionStream] = useState<DecisionRow[]>([]);
   const [edgeHeatmap, setEdgeHeatmap] = useState<EdgeHeatmapRow[]>([]);
+  const [edgeHeatmapOk, setEdgeHeatmapOk] = useState(false);
   const [ts, setTs] = useState<number>(Date.now());
 
   useEffect(() => {
@@ -464,9 +454,7 @@ export default function Admin() {
       const p = await fetch("/api/pulse-stats", { cache: "no-store" });
       const pJson = await p.json();
       setPulse(pJson);
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     try {
       const session = await supabase.auth.getSession();
@@ -481,9 +469,7 @@ export default function Admin() {
         const j = await r.json();
         setInst(j);
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     try {
       const strategyRes = await fetch("/api/strategy-intelligence", {
@@ -491,9 +477,7 @@ export default function Admin() {
       });
       const strategyJson = await strategyRes.json();
       setStrategyIntel(strategyJson);
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     try {
       const adjustmentsRes = await fetch("/api/strategy-adjustments", {
@@ -501,9 +485,7 @@ export default function Admin() {
       });
       const adjustmentsJson = await adjustmentsRes.json();
       setStrategyAdjustments(adjustmentsJson);
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     try {
       const edgeRes = await fetch("/api/edge-test", {
@@ -511,22 +493,24 @@ export default function Admin() {
       });
       const edgeJson = await edgeRes.json();
       setEdgeTest(edgeJson);
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     try {
       const heatmapRes = await fetch("/api/edge-heatmap", {
         cache: "no-store",
       });
-      const heatmapJson: EdgeHeatmapResp = await heatmapRes.json();
+      const heatmapJson = await heatmapRes.json();
+
       if (heatmapJson?.ok && Array.isArray(heatmapJson.data)) {
-        setEdgeHeatmap(heatmapJson.data);
+        setEdgeHeatmap(heatmapJson.data as EdgeHeatmapRow[]);
+        setEdgeHeatmapOk(true);
       } else {
         setEdgeHeatmap([]);
+        setEdgeHeatmapOk(false);
       }
     } catch {
       setEdgeHeatmap([]);
+      setEdgeHeatmapOk(false);
     }
 
     try {
@@ -564,9 +548,7 @@ export default function Admin() {
       : null;
 
   const strategyTradesAnalyzed =
-    strategyIntel && strategyIntel.ok
-      ? strategyIntel.decisionsAnalyzed
-      : null;
+    strategyIntel && strategyIntel.ok ? strategyIntel.decisionsAnalyzed : null;
 
   const strategyWins =
     strategyIntel && strategyIntel.ok ? strategyIntel.entry.wins : null;
@@ -578,9 +560,7 @@ export default function Admin() {
     strategyIntel && strategyIntel.ok ? strategyIntel.entry.winRatePct : null;
 
   const strategyExitEfficiency =
-    strategyIntel && strategyIntel.ok
-      ? strategyIntel.exit.holdQualityPct
-      : null;
+    strategyIntel && strategyIntel.ok ? strategyIntel.exit.holdQualityPct : null;
 
   const strategyAvgWin =
     strategyIntel && strategyIntel.ok
@@ -638,31 +618,18 @@ export default function Admin() {
       ? winRateTone(strategyAdjustments.stats.winRate)
       : "gray";
 
-  const edgeSample =
-    edgeTest && edgeTest.ok ? edgeTest.sampleSize : null;
-
-  const edgeWins =
-    edgeTest && edgeTest.ok ? edgeTest.wins : null;
-
-  const edgeLosses =
-    edgeTest && edgeTest.ok ? edgeTest.losses : null;
-
+  const edgeSample = edgeTest && edgeTest.ok ? edgeTest.sampleSize : null;
+  const edgeWins = edgeTest && edgeTest.ok ? edgeTest.wins : null;
+  const edgeLosses = edgeTest && edgeTest.ok ? edgeTest.losses : null;
   const edgeWinRate =
     edgeTest && edgeTest.ok && edgeTest.winRate != null
       ? Number(edgeTest.winRate) * 100
       : null;
-
-  const edgeAvgWin =
-    edgeTest && edgeTest.ok ? edgeTest.avgWinBps : null;
-
-  const edgeAvgLoss =
-    edgeTest && edgeTest.ok ? edgeTest.avgLossBps : null;
-
+  const edgeAvgWin = edgeTest && edgeTest.ok ? edgeTest.avgWinBps : null;
+  const edgeAvgLoss = edgeTest && edgeTest.ok ? edgeTest.avgLossBps : null;
   const edgePerTrade =
     edgeTest && edgeTest.ok ? edgeTest.edgePerTradeBps : null;
-
-  const edgeTotalPnl =
-    edgeTest && edgeTest.ok ? edgeTest.totalPnL : null;
+  const edgeTotalPnl = edgeTest && edgeTest.ok ? edgeTest.totalPnL : null;
 
   const edgeSampleTone: Tone =
     edgeSample == null
@@ -733,9 +700,7 @@ export default function Admin() {
   const latestMeta = latestDecision?.meta || {};
   const latestExitDecision = latestMeta?.exitDecision || null;
   const latestReconReason =
-    latestMeta?.reconReason ||
-    latestDecision?.decision_reason ||
-    "—";
+    latestMeta?.reconReason || latestDecision?.decision_reason || "—";
 
   const currentMarketRegime =
     latestDecision?.market_regime ||
@@ -749,19 +714,13 @@ export default function Admin() {
       : null;
 
   const currentEntryAllowed =
-    latestMeta?.entry_allow ??
-    latestMeta?.entryPlan?.allowEntry ??
-    null;
+    latestMeta?.entry_allow ?? latestMeta?.entryPlan?.allowEntry ?? null;
 
   const currentMeasuredVol =
-    latestMeta?.measured_vol_bps ??
-    latestExitDecision?.measuredVolBps ??
-    null;
+    latestMeta?.measured_vol_bps ?? latestExitDecision?.measuredVolBps ?? null;
 
   const currentExitProfile =
-    latestExitDecision?.exitProfile ||
-    latestExitDecision?.regime ||
-    "—";
+    latestExitDecision?.exitProfile || latestExitDecision?.regime || "—";
 
   const fallbackBucket =
     currentReconConfidence != null
@@ -778,49 +737,19 @@ export default function Admin() {
 
   const lastRefresh = new Date(ts).toLocaleTimeString();
 
-  const heatmapBuckets = useMemo(() => {
-    const buckets = Array.from(
-      new Set(edgeHeatmap.map((r) => String(r.confidence_bucket || "unknown")))
-    );
-    return buckets.sort((a, b) => confidenceOrder(a) - confidenceOrder(b));
-  }, [edgeHeatmap]);
+  const heatmapBuckets = ["0.68-0.72", "0.72-0.80", "0.80+", "unknown"];
+  const heatmapRegimes = Array.from(
+    new Set(edgeHeatmap.map((r) => String(r.regime || "UNKNOWN")))
+  );
 
-  const heatmapRegimes = useMemo(() => {
-    const regimes = Array.from(
-      new Set(edgeHeatmap.map((r) => String(r.regime || "UNKNOWN")))
-    );
-    return regimes.sort((a, b) => regimeOrder(a) - regimeOrder(b));
-  }, [edgeHeatmap]);
-
-  const heatmapMap = useMemo(() => {
-    const map = new Map<string, EdgeHeatmapRow>();
-    edgeHeatmap.forEach((row) => {
-      map.set(`${row.regime}__${row.confidence_bucket}`, row);
-    });
-    return map;
-  }, [edgeHeatmap]);
-
-  const bestHeatmapRow = useMemo(() => {
-    if (!edgeHeatmap.length) return null;
-    return [...edgeHeatmap].sort((a, b) => {
-      const aScore = Number(a.avg_edge_bps) * Math.max(Number(a.trades), 1);
-      const bScore = Number(b.avg_edge_bps) * Math.max(Number(b.trades), 1);
-      return bScore - aScore;
-    })[0];
-  }, [edgeHeatmap]);
-
-  const worstHeatmapRow = useMemo(() => {
-    if (!edgeHeatmap.length) return null;
-    return [...edgeHeatmap].sort((a, b) => {
-      const aScore = Number(a.avg_edge_bps) * Math.max(Number(a.trades), 1);
-      const bScore = Number(b.avg_edge_bps) * Math.max(Number(b.trades), 1);
-      return aScore - bScore;
-    })[0];
-  }, [edgeHeatmap]);
+  const heatmapLookup = new Map<string, EdgeHeatmapRow>();
+  edgeHeatmap.forEach((row) => {
+    heatmapLookup.set(`${row.regime}__${row.confidence_bucket}`, row);
+  });
 
   return (
     <main className="min-h-screen bg-black text-white">
-      <div className="mx-auto max-w-6xl px-6 py-10">
+      <div className="mx-auto max-w-7xl px-6 py-10">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="text-xs text-white/50">ADMIN</div>
@@ -951,7 +880,8 @@ export default function Admin() {
           </div>
 
           <div className="mt-3 text-sm text-white/60">
-            Real-time read of why the system is trading, waiting, or blocking. This is the quickest way to see whether the engine is being smart or something is off.
+            Real-time read of why the system is trading, waiting, or blocking.
+            This is the quickest way to see whether the engine is being smart or something is off.
           </div>
 
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -1094,181 +1024,109 @@ export default function Admin() {
 
         <section className="mt-6 overflow-hidden rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold">Edge Heatmap</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <TonePill
-                label={edgeHeatmap.length ? "LIVE EDGE MAP" : "HEATMAP OFFLINE"}
-                tone={edgeHeatmap.length ? "green" : "gray"}
-              />
-              <TonePill label="REGIME × CONFIDENCE" tone="gray" />
-            </div>
-          </div>
-
-          <div className="mt-3 text-sm text-white/60">
-            This is the edge finder. It shows exactly where the system is working and where it is bleeding. Green cells are the pockets to protect and expand. Red cells are where not to trust the engine.
-          </div>
-
-          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Stat
-              label="Best Pocket"
-              value={
-                bestHeatmapRow
-                  ? `${bestHeatmapRow.regime} · ${bestHeatmapRow.confidence_bucket}`
-                  : "—"
-              }
-              tone={bestHeatmapRow ? heatCellTone(bestHeatmapRow) : "gray"}
-              sub={
-                bestHeatmapRow
-                  ? `${bps(bestHeatmapRow.avg_edge_bps)} · ${bestHeatmapRow.trades} trades · ${pct(bestHeatmapRow.win_rate_pct)} win rate`
-                  : "No heatmap data yet"
-              }
-            />
-            <Stat
-              label="Worst Pocket"
-              value={
-                worstHeatmapRow
-                  ? `${worstHeatmapRow.regime} · ${worstHeatmapRow.confidence_bucket}`
-                  : "—"
-              }
-              tone={worstHeatmapRow ? heatCellTone(worstHeatmapRow) : "gray"}
-              sub={
-                worstHeatmapRow
-                  ? `${bps(worstHeatmapRow.avg_edge_bps)} · ${worstHeatmapRow.trades} trades · ${pct(worstHeatmapRow.win_rate_pct)} win rate`
-                  : "No heatmap data yet"
-              }
-            />
-            <Stat
-              label="Tracked Pockets"
-              value={edgeHeatmap.length ? String(edgeHeatmap.length) : "—"}
-              tone={edgeHeatmap.length >= 4 ? "green" : edgeHeatmap.length ? "yellow" : "gray"}
-              sub="Regime-confidence cells with completed-trade history"
-            />
-          </div>
-
-          <div className="mt-6 overflow-x-auto">
-            <div className="min-w-[780px]">
-              <div
-                className="grid gap-3"
-                style={{
-                  gridTemplateColumns: `180px repeat(${Math.max(heatmapBuckets.length, 1)}, minmax(160px, 1fr))`,
-                }}
-              >
-                <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-xs uppercase tracking-wide text-white/40">
-                  Regime
-                </div>
-
-                {heatmapBuckets.length ? (
-                  heatmapBuckets.map((bucket) => (
-                    <div
-                      key={bucket}
-                      className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-center"
-                    >
-                      <div className="text-[11px] uppercase tracking-wide text-white/40">
-                        Confidence
-                      </div>
-                      <div className="mt-1 text-sm font-semibold text-white/85">{bucket}</div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-white/45">
-                    No buckets yet
-                  </div>
-                )}
-
-                {heatmapRegimes.length ? (
-                  heatmapRegimes.map((regime) => (
-                    <>
-                      <div
-                        key={`${regime}-label`}
-                        className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4"
-                      >
-                        <div className="text-[11px] uppercase tracking-wide text-white/40">
-                          Regime
-                        </div>
-                        <div className="mt-1 text-sm font-semibold text-white/90">{regime}</div>
-                      </div>
-
-                      {heatmapBuckets.map((bucket) => {
-                        const row = heatmapMap.get(`${regime}__${bucket}`);
-                        const tone = row ? heatCellTone(row) : "gray";
-                        const cls = toneClasses(tone);
-
-                        return (
-                          <div
-                            key={`${regime}-${bucket}`}
-                            className={`rounded-2xl border p-4 transition hover:scale-[1.01] ${
-                              row
-                                ? cls.card
-                                : "border-white/10 bg-white/[0.03] text-white/35 ring-1 ring-white/10"
-                            }`}
-                          >
-                            {row ? (
-                              <>
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="text-[11px] uppercase tracking-wide text-white/45">
-                                    Avg Edge
-                                  </div>
-                                  <span className={`rounded-full px-2 py-1 text-[10px] ${cls.pill}`}>
-                                    {row.trades} trades
-                                  </span>
-                                </div>
-
-                                <div className={`mt-3 text-3xl font-semibold tracking-tight ${cls.value}`}>
-                                  {bps(row.avg_edge_bps)}
-                                </div>
-
-                                <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                                  <div className="rounded-xl bg-black/20 px-3 py-2 ring-1 ring-white/5">
-                                    <div className="text-[11px] text-white/45">Win Rate</div>
-                                    <div className="mt-1 font-semibold text-white/90">
-                                      {pct(row.win_rate_pct)}
-                                    </div>
-                                  </div>
-                                  <div className="rounded-xl bg-black/20 px-3 py-2 ring-1 ring-white/5">
-                                    <div className="text-[11px] text-white/45">Sample</div>
-                                    <div className="mt-1 font-semibold text-white/90">
-                                      {row.trades}
-                                    </div>
-                                  </div>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="flex h-full min-h-[140px] items-center justify-center text-center text-sm text-white/30">
-                                No completed-trade data
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </>
-                  ))
-                ) : (
-                  <div className="col-span-full rounded-2xl border border-white/10 bg-white/5 px-4 py-10 text-center text-sm text-white/45">
-                    Edge heatmap data not available yet.
-                  </div>
-                )}
+            <div>
+              <h2 className="text-lg font-semibold">Edge Heatmap</h2>
+              <div className="mt-2 text-sm text-white/60">
+                Regime × recon confidence. Green means positive average edge. Red means negative edge.
               </div>
             </div>
+
+            <TonePill
+              label={edgeHeatmapOk ? "LIVE HEATMAP" : "HEATMAP OFFLINE"}
+              tone={edgeHeatmapOk ? "green" : "gray"}
+            />
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center gap-3 text-xs text-white/45">
-            <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
-              Positive pocket
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-              Marginal / watch
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-rose-400" />
-              Negative pocket
-            </span>
-            <span className="inline-flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full bg-white/35" />
-              Thin or missing sample
-            </span>
-          </div>
+          {edgeHeatmapOk && heatmapRegimes.length > 0 ? (
+            <>
+              <div className="mt-6 overflow-x-auto">
+                <div className="min-w-[760px]">
+                  <div
+                    className="grid gap-3"
+                    style={{
+                      gridTemplateColumns: `180px repeat(${heatmapBuckets.length}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    <div className="px-3 py-2 text-xs uppercase tracking-wide text-white/40">
+                      Regime
+                    </div>
+
+                    {heatmapBuckets.map((bucket) => (
+                      <div
+                        key={bucket}
+                        className="rounded-2xl bg-white/5 px-4 py-3 text-center text-sm font-medium text-white/80 ring-1 ring-white/10"
+                      >
+                        {bucket}
+                      </div>
+                    ))}
+
+                    {heatmapRegimes.map((regime) => (
+                      <>
+                        <div
+                          key={`${regime}-label`}
+                          className="flex items-center rounded-2xl bg-white/5 px-4 py-4 ring-1 ring-white/10"
+                        >
+                          <div>
+                            <div className="text-sm font-semibold text-white">{regime}</div>
+                            <div className="mt-1 text-xs text-white/45">Observed market state</div>
+                          </div>
+                        </div>
+
+                        {heatmapBuckets.map((bucket) => {
+                          const row = heatmapLookup.get(`${regime}__${bucket}`);
+
+                          return (
+                            <div
+                              key={`${regime}-${bucket}`}
+                              className={`rounded-2xl p-4 ${heatCellClasses(row?.avg_edge_bps)}`}
+                            >
+                              <div className="text-xs uppercase tracking-wide text-white/45">
+                                Avg Edge
+                              </div>
+                              <div className="mt-2 text-2xl font-semibold text-white">
+                                {row ? bps(row.avg_edge_bps) : "—"}
+                              </div>
+
+                              <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+                                <div>
+                                  <div className="text-white/40">Trades</div>
+                                  <div className="mt-1 text-white/85">
+                                    {row ? row.trades : "—"}
+                                  </div>
+                                </div>
+                                <div>
+                                  <div className="text-white/40">Win Rate</div>
+                                  <div className="mt-1 text-white/85">
+                                    {row ? pct(row.win_rate_pct) : "—"}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-2 text-xs">
+                <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-3 py-1 text-emerald-200 ring-1 ring-emerald-500/30">
+                  Positive edge
+                </span>
+                <span className="inline-flex items-center rounded-full bg-amber-500/15 px-3 py-1 text-amber-200 ring-1 ring-amber-500/30">
+                  Small positive / borderline
+                </span>
+                <span className="inline-flex items-center rounded-full bg-rose-500/15 px-3 py-1 text-rose-200 ring-1 ring-rose-500/30">
+                  Negative edge
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="mt-6 rounded-2xl bg-white/5 p-5 text-sm text-white/55 ring-1 ring-white/10">
+              Heatmap data not available yet.
+            </div>
+          )}
         </section>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
@@ -1295,11 +1153,7 @@ export default function Admin() {
               />
               <Stat
                 label="Best Confidence Bucket"
-                value={
-                  bestConfidenceBucket?.bucket ??
-                  fallbackBucket ??
-                  "—"
-                }
+                value={bestConfidenceBucket?.bucket ?? fallbackBucket ?? "—"}
                 tone={
                   bestConfidenceBucket
                     ? edgeTone(bestConfidenceBucket.avg30mBps)
@@ -1424,11 +1278,7 @@ export default function Admin() {
             <h2 className="text-lg font-semibold">Strategy Intelligence</h2>
             <div className="flex flex-wrap items-center gap-2">
               <TonePill
-                label={
-                  strategyIntel && strategyIntel.ok
-                    ? "LEARNING ACTIVE"
-                    : "INTEL OFFLINE"
-                }
+                label={strategyIntel && strategyIntel.ok ? "LEARNING ACTIVE" : "INTEL OFFLINE"}
                 tone={strategyIntel && strategyIntel.ok ? "green" : "gray"}
               />
               <TonePill label="CORE FUND · COMPLETED TRADES" tone="gray" />
@@ -1442,20 +1292,12 @@ export default function Admin() {
           <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <Stat
               label="Trades Analyzed"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? String(strategyTradesAnalyzed)
-                  : "—"
-              }
+              value={strategyIntel && strategyIntel.ok ? String(strategyTradesAnalyzed) : "—"}
             />
 
             <Stat
               label="Edge / Trade"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? bps(strategyEdgeValue)
-                  : "—"
-              }
+              value={strategyIntel && strategyIntel.ok ? bps(strategyEdgeValue) : "—"}
               tone={strategyEdgeToneValue}
               sub={
                 strategyIntel && strategyIntel.ok
@@ -1466,11 +1308,7 @@ export default function Admin() {
 
             <Stat
               label="Entry Quality"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? pct(strategyEntryQuality)
-                  : "—"
-              }
+              value={strategyIntel && strategyIntel.ok ? pct(strategyEntryQuality) : "—"}
               tone={strategyEntryTone}
               sub={
                 strategyIntel && strategyIntel.ok
@@ -1481,11 +1319,7 @@ export default function Admin() {
 
             <Stat
               label="Exit Efficiency"
-              value={
-                strategyIntel && strategyIntel.ok
-                  ? pct(strategyExitEfficiency)
-                  : "—"
-              }
+              value={strategyIntel && strategyIntel.ok ? pct(strategyExitEfficiency) : "—"}
               tone={strategyExitTone}
               sub={
                 strategyIntel && strategyIntel.ok
