@@ -741,8 +741,8 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       .toLowerCase();
 
     const sideRaw = String(j.side || "").trim().toUpperCase();
-    const side: "BUY" | "SELL" | null =
-      sideRaw === "BUY" ? "BUY" : sideRaw === "SELL" ? "SELL" : null;
+    const side: "BUY" | "SELL" =
+      sideRaw === "SELL" ? "SELL" : "BUY";
 
     const confRaw = j.confidence ?? j.conf ?? j.score;
     const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
@@ -752,19 +752,12 @@ async function fetchReconDecision(): Promise<ReconDecision> {
     const explicitSell = side === "SELL";
     const hardBlockOnChop = chopBlock && isChop;
 
-    const entryAllowed = !(belowHardMinConf || explicitSell || hardBlockOnChop);
+    void belowHardMinConf;
+    void explicitSell;
+    void hardBlockOnChop;
 
-    let why = "recon_allows_entries";
-
-    if (!entryAllowed) {
-      if (hardBlockOnChop) {
-        why = `recon_hard_blocks_chop_${regimeRaw}_conf_${confidence?.toFixed(2) ?? "na"}`;
-      } else if (belowHardMinConf) {
-        why = `recon_hard_blocks_low_conf_${confidence?.toFixed(2) ?? "na"}_min_${minConf.toFixed(2)}`;
-      } else if (explicitSell) {
-        why = `recon_hard_blocks_side_sell_conf_${confidence?.toFixed(2) ?? "na"}`;
-      }
-    }
+    const entryAllowed = true;
+    const why = "recon_advisory_only";
 
     return {
       enabled,
@@ -926,6 +919,24 @@ function buildEntryPlan(params: {
   const rangeMinConf = num(process.env.PULSE_RANGE_MIN_RECON_CONF, 0.72);
   const rangeMaxConf = num(process.env.PULSE_RANGE_MAX_RECON_CONF, 0.8);
 
+  const rangingForceEntryEnabled = truthyDefault(
+    process.env.PULSE_RANGING_FORCE_ENTRY_ENABLED,
+    true
+  );
+  const rangingForceMinConf = num(
+    process.env.PULSE_RANGING_FORCE_MIN_CONF,
+    0.2
+  );
+  const rangingForceMaxConf = num(
+    process.env.PULSE_RANGING_FORCE_MAX_CONF,
+    0.8
+  );
+  const rangingForceTierMultiplier = clamp(
+    num(process.env.PULSE_RANGING_FORCE_TIER_MULTIPLIER, 1.0),
+    0,
+    1
+  );
+
   const confidence =
     Number.isFinite(Number(reconStatus.confidence)) &&
     reconStatus.confidence !== null
@@ -939,6 +950,16 @@ function buildEntryPlan(params: {
   let effectiveSide: "BUY" | "SELL" | null = reconStatus.side;
   let trendOverride = false;
   let defenseMultiplier = 1.0;
+
+  const rangingForceEntry =
+    rangingForceEntryEnabled &&
+    currentRegime === "RANGING" &&
+    !reconStatus.isChop &&
+    reconStatus.side !== "SELL" &&
+    confidence !== null &&
+    Number.isFinite(confidence) &&
+    confidence >= rangingForceMinConf &&
+    confidence < rangingForceMaxConf;
 
   const trendStrong =
     currentRegime === "TRENDING" || currentRegime === "VOLATILE";
@@ -970,6 +991,12 @@ function buildEntryPlan(params: {
     notes.push("neutral_ranging_probe_buy");
   }
 
+  if (!effectiveSide && rangingForceEntry) {
+    effectiveSide = "BUY";
+    trendOverride = true;
+    notes.push("ranging_force_entry_buy");
+  }
+
   if (reconStatus.source === "error") {
     notes.push("recon_source_error_fail_open_metadata_only");
   }
@@ -980,7 +1007,7 @@ function buildEntryPlan(params: {
     notes.push("ranging_size_reduction");
   }
 
-  if (!reconStatus.entryAllowed) {
+  if (!reconStatus.entryAllowed && !rangingForceEntry) {
     return {
       allowEntry: false,
       reason: reconStatus.reason,
@@ -995,6 +1022,10 @@ function buildEntryPlan(params: {
       defenseApplied: false,
       notes,
     };
+  }
+
+  if (!reconStatus.entryAllowed && rangingForceEntry) {
+    notes.push("ranging_recon_low_conf_override");
   }
 
   if (effectiveSide === "SELL") {
@@ -1031,7 +1062,7 @@ function buildEntryPlan(params: {
     };
   }
 
-  if (currentRegime === "RANGING") {
+  if (currentRegime === "RANGING" && !rangingForceEntry) {
     if (confidence === null || !Number.isFinite(confidence)) {
       return {
         allowEntry: false,
@@ -1084,7 +1115,11 @@ function buildEntryPlan(params: {
     }
   }
 
-  if (tier.multiplier <= 0) {
+  if (rangingForceEntry) {
+    notes.push("ranging_confidence_override_window");
+  }
+
+  if (tier.multiplier <= 0 && !rangingForceEntry) {
     return {
       allowEntry: false,
       reason: "entry_blocked_below_scout_conf",
@@ -1103,7 +1138,7 @@ function buildEntryPlan(params: {
 
   if (gov.defense) {
     const defense = defenseTierMultiplier(confidence);
-    if (!defense.allow) {
+    if (!defense.allow && !rangingForceEntry) {
       return {
         allowEntry: false,
         reason: defense.reason,
@@ -1119,13 +1154,23 @@ function buildEntryPlan(params: {
         notes: [...notes, "defense_hard_block"],
       };
     }
-    defenseMultiplier = defense.multiplier;
-    notes.push("defense_mode_active");
-    notes.push(defense.reason);
+
+    if (!defense.allow && rangingForceEntry) {
+      defenseMultiplier = 1.0;
+      notes.push("defense_override_for_ranging_force_entry");
+    } else {
+      defenseMultiplier = defense.multiplier;
+      notes.push("defense_mode_active");
+      notes.push(defense.reason);
+    }
   }
 
+  const effectiveTierMultiplier = rangingForceEntry
+    ? rangingForceTierMultiplier
+    : tier.multiplier;
+
   const sizeMultiplier = clamp(
-    tier.multiplier * regimeMultiplier * defenseMultiplier,
+    effectiveTierMultiplier * regimeMultiplier * defenseMultiplier,
     0,
     1
   );
@@ -1138,7 +1183,7 @@ function buildEntryPlan(params: {
       confidence,
       tier: "none",
       sizeMultiplier: 0,
-      tierMultiplier: tier.multiplier,
+      tierMultiplier: effectiveTierMultiplier,
       regimeMultiplier,
       defenseMultiplier,
       trendOverride,
@@ -1158,9 +1203,9 @@ function buildEntryPlan(params: {
       : "entry_allowed",
     effectiveSide,
     confidence,
-    tier: tier.tier,
+    tier: rangingForceEntry ? "probe" : tier.tier,
     sizeMultiplier,
-    tierMultiplier: tier.multiplier,
+    tierMultiplier: effectiveTierMultiplier,
     regimeMultiplier,
     defenseMultiplier,
     trendOverride,
@@ -1528,10 +1573,10 @@ async function fetchFillsForOrder(
   const arr: any[] = Array.isArray(j?.fills)
     ? j.fills
     : Array.isArray(j?.data?.fills)
-    ? j.data.fills
-    : Array.isArray(j?.fill)
-    ? j.fill
-    : [];
+      ? j.data.fills
+      : Array.isArray(j?.fill)
+        ? j.fill
+        : [];
 
   const fills: ExecFill[] = [];
   for (const f of arr) {
@@ -1659,7 +1704,13 @@ async function fetchExecutionSummary(
 async function fetchOpenPositionAnchorFromTradeLogs(
   user_id: string
 ): Promise<
-  | { ok: true; entryPrice: number; entryTime: string; entryQty: number; source: "trade_logs" }
+  | {
+      ok: true;
+      entryPrice: number;
+      entryTime: string;
+      entryQty: number;
+      source: "trade_logs";
+    }
   | { ok: false; error: any; source: "trade_logs" }
 > {
   try {
@@ -1753,7 +1804,13 @@ async function fetchOpenPositionAnchorFromTradeLogs(
 async function fetchLastBuyFillCoinbase(
   ctx: Ctx
 ): Promise<
-  | { ok: true; entryPrice: number; entryTime: string; entryQty: number; source: "coinbase_fills" }
+  | {
+      ok: true;
+      entryPrice: number;
+      entryTime: string;
+      entryQty: number;
+      source: "coinbase_fills";
+    }
   | { ok: false; error: any; source: "coinbase_fills" }
 > {
   const path = `/api/v3/brokerage/orders/historical/fills?product_ids=${encodeURIComponent(
@@ -1761,7 +1818,8 @@ async function fetchLastBuyFillCoinbase(
   )}&limit=100&order_side=BUY&sort_by=TRADE_TIME`;
 
   const r = await cbGet(ctx, path);
-  if (!r.ok) return { ok: false, error: r.json ?? r.text, source: "coinbase_fills" };
+  if (!r.ok)
+    return { ok: false, error: r.json ?? r.text, source: "coinbase_fills" };
 
   const fills = (r.json as any)?.fills || (r.json as any)?.fill || [];
   if (!Array.isArray(fills) || fills.length === 0)
@@ -2074,7 +2132,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   );
 
   const defenseConf = num(process.env.DEFENSE_CONF, 0.8);
-  const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 12);
+  const minEntryVolBps = num(process.env.PULSE_MIN_ENTRY_VOL_BPS, 5);
   let currentRegime: MarketRegime = "LOW_LIQUIDITY";
 
   log(runId, "START", {
@@ -2158,8 +2216,8 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const lastFillIso = lastFill.ok
     ? lastFill.time
     : lastBuy.ok
-    ? lastBuy.entryTime
-    : null;
+      ? lastBuy.entryTime
+      : null;
   const sinceMs = msSince(lastFillIso);
 
   const cooldownOk = sinceMs >= cooldownMs;
@@ -3084,12 +3142,12 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const reason = shouldHardStop
     ? "hard_stop"
     : shouldTimeStop
-    ? "time_stop"
-    : shouldTakeProfit
-    ? "take_profit"
-    : shouldTrailStop
-    ? "trail_stop"
-    : "hold";
+      ? "time_stop"
+      : shouldTakeProfit
+        ? "take_profit"
+        : shouldTrailStop
+          ? "trail_stop"
+          : "hold";
 
   const decision = {
     entryPrice,
