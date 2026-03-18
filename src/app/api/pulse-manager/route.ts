@@ -741,8 +741,7 @@ async function fetchReconDecision(): Promise<ReconDecision> {
       .toLowerCase();
 
     const sideRaw = String(j.side || "").trim().toUpperCase();
-    const side: "BUY" | "SELL" =
-      sideRaw === "SELL" ? "SELL" : "BUY";
+    const side: "BUY" | "SELL" = sideRaw === "SELL" ? "SELL" : "BUY";
 
     const confRaw = j.confidence ?? j.conf ?? j.score;
     const confidence = Number.isFinite(Number(confRaw)) ? Number(confRaw) : null;
@@ -884,10 +883,10 @@ function regimeEntryMultiplier(
     currentRegime === "TRENDING"
       ? 1.0
       : currentRegime === "VOLATILE"
-      ? 0.75
-      : currentRegime === "RANGING"
-      ? 0.5
-      : 0;
+        ? 0.75
+        : currentRegime === "RANGING"
+          ? 0.5
+          : 0;
 
   const chopReduction = clamp(num(process.env.CHOP_SIZE_REDUCTION, 0.5), 0, 1);
 
@@ -1045,7 +1044,10 @@ function buildEntryPlan(params: {
     }
   }
 
-  if (reconStatus.source === "error" && !notes.includes("recon_source_error_fail_open_metadata_only")) {
+  if (
+    reconStatus.source === "error" &&
+    !notes.includes("recon_source_error_fail_open_metadata_only")
+  ) {
     notes.push("recon_source_error_fail_open_metadata_only");
   }
   if (reconStatus.isChop) {
@@ -1055,7 +1057,11 @@ function buildEntryPlan(params: {
     notes.push("ranging_size_reduction");
   }
 
-  if (!reconStatus.entryAllowed && !rangingForceEntry && !reconErrorFallbackApplied) {
+  if (
+    !reconStatus.entryAllowed &&
+    !rangingForceEntry &&
+    !reconErrorFallbackApplied
+  ) {
     return {
       allowEntry: false,
       reason: reconStatus.reason,
@@ -1175,7 +1181,11 @@ function buildEntryPlan(params: {
     notes.push("ranging_confidence_override_window");
   }
 
-  if (tier.multiplier <= 0 && !rangingForceEntry && !reconErrorFallbackApplied) {
+  if (
+    tier.multiplier <= 0 &&
+    !rangingForceEntry &&
+    !reconErrorFallbackApplied
+  ) {
     return {
       allowEntry: false,
       reason: "entry_blocked_below_scout_conf",
@@ -1875,6 +1885,78 @@ async function fetchOpenPositionAnchorFromTradeLogs(
   }
 }
 
+async function fetchRecentBuyFromTradeLogs(
+  user_id: string,
+  withinMs: number
+): Promise<
+  | {
+      ok: true;
+      time: string;
+      price: number;
+      qty: number;
+      ageMs: number;
+      source: "trade_logs_recent_buy";
+    }
+  | { ok: false; error: any; source: "trade_logs_recent_buy" }
+> {
+  try {
+    const client = sb();
+    const { data, error } = await client
+      .from("trade_logs")
+      .select("created_at, side, base_size, price, symbol")
+      .eq("user_id", user_id)
+      .eq("symbol", PRODUCT_ID)
+      .eq("side", "BUY")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      return {
+        ok: false,
+        error: error.message || error,
+        source: "trade_logs_recent_buy",
+      };
+    }
+
+    if (!data) {
+      return {
+        ok: false,
+        error: "no_recent_buy_log_found",
+        source: "trade_logs_recent_buy",
+      };
+    }
+
+    const time = String((data as any)?.created_at || "");
+    const ageMs = msSince(time);
+    if (!Number.isFinite(ageMs) || ageMs > withinMs) {
+      return {
+        ok: false,
+        error: "no_recent_buy_within_lock_window",
+        source: "trade_logs_recent_buy",
+      };
+    }
+
+    const price = Number((data as any)?.price || 0);
+    const qty = Number((data as any)?.base_size || 0);
+
+    return {
+      ok: true,
+      time: time || nowIso(),
+      price: Number.isFinite(price) && price > 0 ? price : 0,
+      qty: Number.isFinite(qty) && qty > 0 ? qty : 0,
+      ageMs,
+      source: "trade_logs_recent_buy",
+    };
+  } catch (e: any) {
+    return {
+      ok: false,
+      error: e?.message || String(e),
+      source: "trade_logs_recent_buy",
+    };
+  }
+}
+
 // ---------- Coinbase fallback if logs are missing ----------
 async function fetchLastBuyFillCoinbase(
   ctx: Ctx
@@ -2101,6 +2183,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
   const exitsDryRun = truthy(process.env.PULSE_EXITS_DRY_RUN);
 
   const cooldownMs = num(process.env.COOLDOWN_MS, 60_000);
+  const entryLockMs = num(process.env.PULSE_ENTRY_LOCK_MS, 10 * 60_000);
 
   const baseProfitTargetBps = num(
     process.env.YC_PROFIT_TARGET_BPS ?? process.env.PROFIT_TARGET_BPS,
@@ -2219,6 +2302,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     scaledEntryUsd,
     finalEntryUsdPrePlan,
     minEntryUsdFloor,
+    entryLockMs,
     position,
     caps: {
       hardMaxUsd,
@@ -2311,6 +2395,59 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     reentryBlocked,
   };
 
+  const recentBuyLog = await fetchRecentBuyFromTradeLogs(
+    ctx.user_id,
+    entryLockMs
+  );
+
+  const recentBuyFill =
+    lastBuy.ok && msSince(lastBuy.entryTime) < entryLockMs
+      ? {
+          ok: true as const,
+          time: lastBuy.entryTime,
+          ageMs: msSince(lastBuy.entryTime),
+          price: lastBuy.entryPrice,
+          qty: lastBuy.entryQty,
+          source: lastBuy.source,
+        }
+      : {
+          ok: false as const,
+          error: "no_recent_buy_fill_within_lock_window",
+          source: (lastBuy as any)?.source ?? "coinbase_fills",
+        };
+
+  const entryLock = {
+    entryLockMs,
+    openCycleBlocked: positionAnchor.ok,
+    openCycle: positionAnchor.ok
+      ? {
+          entryTime: positionAnchor.entryTime,
+          entryPrice: positionAnchor.entryPrice,
+          entryQty: positionAnchor.entryQty,
+          source: positionAnchor.source,
+          ageMs: msSince(positionAnchor.entryTime),
+        }
+      : null,
+    recentBuyLog: recentBuyLog.ok
+      ? {
+          time: recentBuyLog.time,
+          ageMs: recentBuyLog.ageMs,
+          price: recentBuyLog.price,
+          qty: recentBuyLog.qty,
+          source: recentBuyLog.source,
+        }
+      : null,
+    recentBuyFill: recentBuyFill.ok
+      ? {
+          time: recentBuyFill.time,
+          ageMs: recentBuyFill.ageMs,
+          price: recentBuyFill.price,
+          qty: recentBuyFill.qty,
+          source: recentBuyFill.source,
+        }
+      : null,
+  };
+
   // ---------------- ENTRY ----------------
   if (!(position as any).has_position) {
     if (!entriesEnabled)
@@ -2320,6 +2457,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
       };
@@ -2331,6 +2469,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
       };
@@ -2342,9 +2481,235 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
       };
+
+    if (positionAnchor.ok) {
+      await writeStrategyDecision({
+        created_at: nowIso(),
+        user_id: ctx.user_id,
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
+        run_id: runId,
+
+        has_position: false,
+        action_phase: "ENTRY",
+        decision_mode: "blocked",
+        decision_reason: "entry_blocked_open_cycle_trade_logs",
+
+        recon_enabled: reconStatus.enabled,
+        recon_mode: reconStatus.mode,
+        recon_regime: reconStatus.regime,
+        recon_side: reconStatus.side,
+        recon_confidence: reconStatus.confidence,
+        recon_entry_allowed: reconStatus.entryAllowed,
+        recon_is_chop: reconStatus.isChop,
+
+        market_regime: currentRegime,
+        measured_vol_bps: null,
+
+        equity_gov_enabled: gov.enabled,
+        equity_gov_defense: gov.defense,
+        equity_gov_dd_pct: gov.ddPct,
+        equity_gov_multiplier: gov.multiplier,
+
+        entry_allow: false,
+        entry_tier: null,
+        entry_size_multiplier: 0,
+        entry_tier_multiplier: null,
+        entry_regime_multiplier: null,
+        entry_defense_multiplier: null,
+        trend_override: null,
+
+        planned_entry_usd: 0,
+        base_entry_usd: finalEntryUsdPrePlan,
+        spot_price: refPrice || null,
+
+        meta: {
+          gates,
+          cooldown,
+          entryLock,
+          blockReason: "trade_logs_open_cycle_present",
+          openCycle: {
+            entryTime: positionAnchor.entryTime,
+            entryPrice: positionAnchor.entryPrice,
+            entryQty: positionAnchor.entryQty,
+            ageMs: msSince(positionAnchor.entryTime),
+            source: positionAnchor.source,
+          },
+          base_total: (position as any).base_total ?? null,
+          base_available: (position as any).base_available ?? null,
+        },
+      });
+
+      log(runId, "ENTRY_LOCK_BLOCK", {
+        reason: "trade_logs_open_cycle_present",
+        entryLock,
+      });
+
+      return {
+        ok: true,
+        mode: "NO_POSITION_OPEN_CYCLE_BLOCK",
+        gates,
+        position,
+        cooldown,
+        entryLock,
+        reconStatus,
+        equityGov: gov,
+      };
+    }
+
+    if (recentBuyLog.ok) {
+      await writeStrategyDecision({
+        created_at: nowIso(),
+        user_id: ctx.user_id,
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
+        run_id: runId,
+
+        has_position: false,
+        action_phase: "ENTRY",
+        decision_mode: "blocked",
+        decision_reason: `entry_blocked_recent_buy_lock_${entryLockMs}`,
+
+        recon_enabled: reconStatus.enabled,
+        recon_mode: reconStatus.mode,
+        recon_regime: reconStatus.regime,
+        recon_side: reconStatus.side,
+        recon_confidence: reconStatus.confidence,
+        recon_entry_allowed: reconStatus.entryAllowed,
+        recon_is_chop: reconStatus.isChop,
+
+        market_regime: currentRegime,
+        measured_vol_bps: null,
+
+        equity_gov_enabled: gov.enabled,
+        equity_gov_defense: gov.defense,
+        equity_gov_dd_pct: gov.ddPct,
+        equity_gov_multiplier: gov.multiplier,
+
+        entry_allow: false,
+        entry_tier: null,
+        entry_size_multiplier: 0,
+        entry_tier_multiplier: null,
+        entry_regime_multiplier: null,
+        entry_defense_multiplier: null,
+        trend_override: null,
+
+        planned_entry_usd: 0,
+        base_entry_usd: finalEntryUsdPrePlan,
+        spot_price: refPrice || null,
+
+        meta: {
+          gates,
+          cooldown,
+          entryLock,
+          blockReason: "recent_buy_log_within_entry_lock_window",
+          recentBuyLog: {
+            time: recentBuyLog.time,
+            ageMs: recentBuyLog.ageMs,
+            price: recentBuyLog.price,
+            qty: recentBuyLog.qty,
+            source: recentBuyLog.source,
+          },
+          base_total: (position as any).base_total ?? null,
+          base_available: (position as any).base_available ?? null,
+        },
+      });
+
+      log(runId, "ENTRY_LOCK_BLOCK", {
+        reason: "recent_buy_log_within_entry_lock_window",
+        entryLock,
+      });
+
+      return {
+        ok: true,
+        mode: "NO_POSITION_RECENT_BUY_LOCK",
+        gates,
+        position,
+        cooldown,
+        entryLock,
+        reconStatus,
+        equityGov: gov,
+      };
+    }
+
+    if (recentBuyFill.ok) {
+      await writeStrategyDecision({
+        created_at: nowIso(),
+        user_id: ctx.user_id,
+        bot: BOT_NAME,
+        symbol: PRODUCT_ID,
+        run_id: runId,
+
+        has_position: false,
+        action_phase: "ENTRY",
+        decision_mode: "blocked",
+        decision_reason: `entry_blocked_recent_buy_fill_lock_${entryLockMs}`,
+
+        recon_enabled: reconStatus.enabled,
+        recon_mode: reconStatus.mode,
+        recon_regime: reconStatus.regime,
+        recon_side: reconStatus.side,
+        recon_confidence: reconStatus.confidence,
+        recon_entry_allowed: reconStatus.entryAllowed,
+        recon_is_chop: reconStatus.isChop,
+
+        market_regime: currentRegime,
+        measured_vol_bps: null,
+
+        equity_gov_enabled: gov.enabled,
+        equity_gov_defense: gov.defense,
+        equity_gov_dd_pct: gov.ddPct,
+        equity_gov_multiplier: gov.multiplier,
+
+        entry_allow: false,
+        entry_tier: null,
+        entry_size_multiplier: 0,
+        entry_tier_multiplier: null,
+        entry_regime_multiplier: null,
+        entry_defense_multiplier: null,
+        trend_override: null,
+
+        planned_entry_usd: 0,
+        base_entry_usd: finalEntryUsdPrePlan,
+        spot_price: refPrice || null,
+
+        meta: {
+          gates,
+          cooldown,
+          entryLock,
+          blockReason: "recent_buy_fill_within_entry_lock_window",
+          recentBuyFill: {
+            time: recentBuyFill.time,
+            ageMs: recentBuyFill.ageMs,
+            price: recentBuyFill.price,
+            qty: recentBuyFill.qty,
+            source: recentBuyFill.source,
+          },
+          base_total: (position as any).base_total ?? null,
+          base_available: (position as any).base_available ?? null,
+        },
+      });
+
+      log(runId, "ENTRY_LOCK_BLOCK", {
+        reason: "recent_buy_fill_within_entry_lock_window",
+        entryLock,
+      });
+
+      return {
+        ok: true,
+        mode: "NO_POSITION_RECENT_BUY_LOCK",
+        gates,
+        position,
+        cooldown,
+        entryLock,
+        reconStatus,
+        equityGov: gov,
+      };
+    }
 
     // HARD ROLLOUT CAP: total BTC exposure per user
     const maxPositionUsd = Math.max(0.01, Math.min(entMaxUsd, hardMaxUsd));
@@ -2400,6 +2765,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         meta: {
           gates,
           cooldown,
+          entryLock,
           currentPositionUsd,
           maxPositionUsd,
           minEntryUsdFloor,
@@ -2414,6 +2780,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         currentPositionUsd,
@@ -2446,6 +2813,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -2515,6 +2883,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         meta: {
           gates,
           cooldown,
+          entryLock,
           notes: entryPlan.notes,
           defenseApplied: entryPlan.defenseApplied,
           reconReason: reconStatus.reason,
@@ -2543,6 +2912,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -2559,6 +2929,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         currentPositionUsd,
@@ -2611,6 +2982,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         meta: {
           gates,
           cooldown,
+          entryLock,
           notes: [...entryPlan.notes, "blocked_micro_fee_toxic_entry"],
           defenseApplied: entryPlan.defenseApplied,
           reconReason: reconStatus.reason,
@@ -2637,6 +3009,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -2695,6 +3068,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       meta: {
         gates,
         cooldown,
+        entryLock,
         notes: entryPlan.notes,
         defenseApplied: entryPlan.defenseApplied,
         reconReason: reconStatus.reason,
@@ -2715,6 +3089,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -2759,6 +3134,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         decision: {
           regime: currentRegime,
           entryPlan,
+          entryLock,
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
@@ -2781,6 +3157,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_id: orderId,
             execution: exec,
             entry_plan: entryPlan,
+            entry_lock: entryLock,
             currentPositionUsd,
             maxPositionUsd,
             remainingUsdCap,
@@ -2796,6 +3173,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -2817,6 +3195,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           gates,
           position,
           cooldown,
+          entryLock,
           reconStatus,
           equityGov: gov,
           regime: currentRegime,
@@ -2856,6 +3235,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         decision: {
           regime: currentRegime,
           entryPlan,
+          entryLock,
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
@@ -2885,6 +3265,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_id: orderId,
             execution: exec,
             entry_plan: entryPlan,
+            entry_lock: entryLock,
             currentPositionUsd,
             maxPositionUsd,
             remainingUsdCap,
@@ -2900,6 +3281,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -2939,6 +3321,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         decision: {
           regime: currentRegime,
           entryPlan,
+          entryLock,
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
@@ -2978,6 +3361,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
             order_status: lastSt?.raw ?? null,
             execution: exec,
             entry_plan: entryPlan,
+            entry_lock: entryLock,
             currentPositionUsd,
             maxPositionUsd,
             remainingUsdCap,
@@ -2993,6 +3377,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -3008,6 +3393,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         regime: currentRegime,
@@ -3045,6 +3431,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       decision: {
         regime: currentRegime,
         entryPlan,
+        entryLock,
         currentPositionUsd,
         maxPositionUsd,
         remainingUsdCap,
@@ -3071,6 +3458,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
           order_id: orderId,
           execution: exec2,
           entry_plan: entryPlan,
+          entry_lock: entryLock,
           currentPositionUsd,
           maxPositionUsd,
           remainingUsdCap,
@@ -3086,6 +3474,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       regime: currentRegime,
@@ -3103,6 +3492,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
     };
@@ -3120,6 +3510,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       error: "cannot_read_entry",
@@ -3139,6 +3530,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       error: "cannot_read_peak",
@@ -3299,6 +3691,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     meta: {
       gates,
       cooldown,
+      entryLock,
       exitDecision: decision,
       base_total: (position as any).base_total ?? null,
       base_available: (position as any).base_available ?? null,
@@ -3326,6 +3719,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3340,6 +3734,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3401,6 +3796,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3418,6 +3814,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         decision,
@@ -3478,6 +3875,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3499,6 +3897,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         gates,
         position,
         cooldown,
+        entryLock,
         reconStatus,
         equityGov: gov,
         decision,
@@ -3569,6 +3968,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3643,6 +4043,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3658,6 +4059,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       gates,
       position,
       cooldown,
+      entryLock,
       reconStatus,
       equityGov: gov,
       decision,
@@ -3720,6 +4122,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     gates,
     position,
     cooldown,
+    entryLock,
     reconStatus,
     equityGov: gov,
     decision,
@@ -3783,6 +4186,7 @@ async function runForAllUsers(masterRunId: string) {
         gates: (out as any)?.gates,
         position: (out as any)?.position,
         cooldown: (out as any)?.cooldown,
+        entryLock: (out as any)?.entryLock,
         decision: (out as any)?.decision,
         entryPlan: (out as any)?.entryPlan,
         equityGov: (out as any)?.equityGov,
