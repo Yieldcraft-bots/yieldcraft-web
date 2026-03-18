@@ -937,6 +937,26 @@ function buildEntryPlan(params: {
     1
   );
 
+  // NEW: controlled degraded-mode fallback when Recon is down
+  const reconErrorTrendFallbackEnabled = truthyDefault(
+    process.env.RECON_ERROR_TREND_FALLBACK_ENABLED,
+    true
+  );
+  const reconErrorRangingFallbackEnabled = truthyDefault(
+    process.env.RECON_ERROR_RANGING_FALLBACK_ENABLED,
+    true
+  );
+  const reconErrorTrendTierMultiplier = clamp(
+    num(process.env.RECON_ERROR_TREND_TIER_MULTIPLIER, 0.25),
+    0,
+    1
+  );
+  const reconErrorRangingTierMultiplier = clamp(
+    num(process.env.RECON_ERROR_RANGING_TIER_MULTIPLIER, 0.1),
+    0,
+    1
+  );
+
   const confidence =
     Number.isFinite(Number(reconStatus.confidence)) &&
     reconStatus.confidence !== null
@@ -950,6 +970,8 @@ function buildEntryPlan(params: {
   let effectiveSide: "BUY" | "SELL" | null = reconStatus.side;
   let trendOverride = false;
   let defenseMultiplier = 1.0;
+  let reconErrorFallbackApplied = false;
+  let reconErrorFallbackTierMultiplier: number | null = null;
 
   const rangingForceEntry =
     rangingForceEntryEnabled &&
@@ -997,7 +1019,33 @@ function buildEntryPlan(params: {
     notes.push("ranging_force_entry_buy");
   }
 
-  if (reconStatus.source === "error") {
+  // NEW: if Recon is unavailable, degrade gracefully instead of freezing
+  if (!effectiveSide && reconStatus.source === "error") {
+    if (
+      (currentRegime === "TRENDING" || currentRegime === "VOLATILE") &&
+      reconErrorTrendFallbackEnabled
+    ) {
+      effectiveSide = "BUY";
+      trendOverride = true;
+      reconErrorFallbackApplied = true;
+      reconErrorFallbackTierMultiplier = reconErrorTrendTierMultiplier;
+      notes.push("recon_source_error_fail_open_metadata_only");
+      notes.push("recon_error_trend_fallback_buy");
+    } else if (
+      currentRegime === "RANGING" &&
+      !reconStatus.isChop &&
+      reconErrorRangingFallbackEnabled
+    ) {
+      effectiveSide = "BUY";
+      trendOverride = true;
+      reconErrorFallbackApplied = true;
+      reconErrorFallbackTierMultiplier = reconErrorRangingTierMultiplier;
+      notes.push("recon_source_error_fail_open_metadata_only");
+      notes.push("recon_error_ranging_fallback_buy");
+    }
+  }
+
+  if (reconStatus.source === "error" && !notes.includes("recon_source_error_fail_open_metadata_only")) {
     notes.push("recon_source_error_fail_open_metadata_only");
   }
   if (reconStatus.isChop) {
@@ -1007,7 +1055,7 @@ function buildEntryPlan(params: {
     notes.push("ranging_size_reduction");
   }
 
-  if (!reconStatus.entryAllowed && !rangingForceEntry) {
+  if (!reconStatus.entryAllowed && !rangingForceEntry && !reconErrorFallbackApplied) {
     return {
       allowEntry: false,
       reason: reconStatus.reason,
@@ -1026,6 +1074,10 @@ function buildEntryPlan(params: {
 
   if (!reconStatus.entryAllowed && rangingForceEntry) {
     notes.push("ranging_recon_low_conf_override");
+  }
+
+  if (!reconStatus.entryAllowed && reconErrorFallbackApplied) {
+    notes.push("recon_unavailable_regime_fallback_override");
   }
 
   if (effectiveSide === "SELL") {
@@ -1062,7 +1114,11 @@ function buildEntryPlan(params: {
     };
   }
 
-  if (currentRegime === "RANGING" && !rangingForceEntry) {
+  if (
+    currentRegime === "RANGING" &&
+    !rangingForceEntry &&
+    !reconErrorFallbackApplied
+  ) {
     if (confidence === null || !Number.isFinite(confidence)) {
       return {
         allowEntry: false,
@@ -1119,7 +1175,7 @@ function buildEntryPlan(params: {
     notes.push("ranging_confidence_override_window");
   }
 
-  if (tier.multiplier <= 0 && !rangingForceEntry) {
+  if (tier.multiplier <= 0 && !rangingForceEntry && !reconErrorFallbackApplied) {
     return {
       allowEntry: false,
       reason: "entry_blocked_below_scout_conf",
@@ -1138,7 +1194,7 @@ function buildEntryPlan(params: {
 
   if (gov.defense) {
     const defense = defenseTierMultiplier(confidence);
-    if (!defense.allow && !rangingForceEntry) {
+    if (!defense.allow && !rangingForceEntry && !reconErrorFallbackApplied) {
       return {
         allowEntry: false,
         reason: defense.reason,
@@ -1158,6 +1214,15 @@ function buildEntryPlan(params: {
     if (!defense.allow && rangingForceEntry) {
       defenseMultiplier = 1.0;
       notes.push("defense_override_for_ranging_force_entry");
+    } else if (!defense.allow && reconErrorFallbackApplied) {
+      // NEW: degraded Recon fallback respects defense mode by reducing size
+      defenseMultiplier = clamp(
+        num(process.env.RECON_ERROR_DEFENSE_FALLBACK_MULTIPLIER, 0.5),
+        0,
+        1
+      );
+      notes.push("defense_mode_active");
+      notes.push("recon_error_defense_fallback_size");
     } else {
       defenseMultiplier = defense.multiplier;
       notes.push("defense_mode_active");
@@ -1167,7 +1232,9 @@ function buildEntryPlan(params: {
 
   const effectiveTierMultiplier = rangingForceEntry
     ? rangingForceTierMultiplier
-    : tier.multiplier;
+    : reconErrorFallbackApplied
+      ? (reconErrorFallbackTierMultiplier ?? 0)
+      : tier.multiplier;
 
   const sizeMultiplier = clamp(
     effectiveTierMultiplier * regimeMultiplier * defenseMultiplier,
@@ -1194,16 +1261,24 @@ function buildEntryPlan(params: {
 
   return {
     allowEntry: true,
-    reason: trendOverride
+    reason: reconErrorFallbackApplied
       ? gov.defense
-        ? "entry_allowed_trend_override_defense_scaled"
-        : "entry_allowed_trend_override"
-      : gov.defense
-      ? "entry_allowed_defense_scaled"
-      : "entry_allowed",
+        ? "entry_allowed_recon_error_fallback_defense_scaled"
+        : "entry_allowed_recon_error_fallback"
+      : trendOverride
+        ? gov.defense
+          ? "entry_allowed_trend_override_defense_scaled"
+          : "entry_allowed_trend_override"
+        : gov.defense
+          ? "entry_allowed_defense_scaled"
+          : "entry_allowed",
     effectiveSide,
     confidence,
-    tier: rangingForceEntry ? "probe" : tier.tier,
+    tier: reconErrorFallbackApplied
+      ? "probe"
+      : rangingForceEntry
+        ? "probe"
+        : tier.tier,
     sizeMultiplier,
     tierMultiplier: effectiveTierMultiplier,
     regimeMultiplier,
