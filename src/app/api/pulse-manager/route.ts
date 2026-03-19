@@ -2010,7 +2010,8 @@ async function fetchLastFillAny(
 
 // ---------- peak window + volatility ----------
 async function fetchPeakWindowWithVol(
-  ctx: Ctx
+  ctx: Ctx,
+  entryTimeIso?: string | null
 ): Promise<
   | {
       ok: true;
@@ -2023,7 +2024,15 @@ async function fetchPeakWindowWithVol(
   | { ok: false; error: any }
 > {
   const end = new Date();
-  const start = new Date(end.getTime() - 2 * 3600 * 1000);
+  const fallbackStart = new Date(end.getTime() - 2 * 3600 * 1000);
+
+  let start = fallbackStart;
+  if (entryTimeIso) {
+    const entryTs = Date.parse(entryTimeIso);
+    if (Number.isFinite(entryTs)) {
+      start = new Date(Math.max(entryTs, fallbackStart.getTime()));
+    }
+  }
 
   const startTs = String(Math.floor(start.getTime() / 1000));
   const endTs = String(Math.floor(end.getTime() / 1000));
@@ -3492,7 +3501,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
     };
   }
 
-  const peak = await fetchPeakWindowWithVol(ctx);
+ const peak = await fetchPeakWindowWithVol(ctx, lastBuy.entryTime);
   if (!peak.ok) {
     log(runId, "EXIT_DECISION", {
       reason: "blocked_cannot_read_peak",
