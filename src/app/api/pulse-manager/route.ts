@@ -1020,36 +1020,10 @@ function buildEntryPlan(params: {
 
   // NEW: if Recon is unavailable, degrade gracefully instead of freezing
   if (!effectiveSide && reconStatus.source === "error") {
-    if (
-      (currentRegime === "TRENDING" || currentRegime === "VOLATILE") &&
-      reconErrorTrendFallbackEnabled
-    ) {
-      effectiveSide = "BUY";
-      trendOverride = true;
-      reconErrorFallbackApplied = true;
-      reconErrorFallbackTierMultiplier = reconErrorTrendTierMultiplier;
-      notes.push("recon_source_error_fail_open_metadata_only");
-      notes.push("recon_error_trend_fallback_buy");
-    } else if (
-      currentRegime === "RANGING" &&
-      !reconStatus.isChop &&
-      reconErrorRangingFallbackEnabled
-    ) {
-      effectiveSide = "BUY";
-      trendOverride = true;
-      reconErrorFallbackApplied = true;
-      reconErrorFallbackTierMultiplier = reconErrorRangingTierMultiplier;
-      notes.push("recon_source_error_fail_open_metadata_only");
-      notes.push("recon_error_ranging_fallback_buy");
-    }
-  }
-
-  if (
-    reconStatus.source === "error" &&
-    !notes.includes("recon_source_error_fail_open_metadata_only")
-  ) {
     notes.push("recon_source_error_fail_open_metadata_only");
   }
+
+  
   if (reconStatus.isChop) {
     notes.push("chop_size_reduction");
   }
