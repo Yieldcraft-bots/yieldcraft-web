@@ -3743,8 +3743,6 @@ async function runForAllUsers(masterRunId: string) {
 
 // ---------- handlers ----------
 export async function GET(req: Request) {
-  if (!okAuth(req)) return json(401, { ok: false, error: "unauthorized" });
-
   const url = new URL(req.url);
   const action = String(url.searchParams.get("action") || "run").toLowerCase();
 
@@ -3755,6 +3753,7 @@ export async function GET(req: Request) {
     url: req.url,
     action,
     onlyUserId: ONLY_USER_ID,
+    publicReconGet: true,
   });
 
   const result = await runForAllUsers(masterRunId);
@@ -3763,6 +3762,7 @@ export async function GET(req: Request) {
     ok: (result as any).ok,
     usersProcessed: (result as any)?.usersProcessed,
     onlyUserId: ONLY_USER_ID,
+    publicReconGet: true,
   });
 
   return json((result as any).ok ? 200 : 500, {
