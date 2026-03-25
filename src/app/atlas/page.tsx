@@ -45,9 +45,9 @@ export default function AtlasPage() {
           </h1>
 
           <p className="mt-4 max-w-2xl text-slate-400">
-            Sentinel is a disciplined accumulation system designed to build
-            long-term positions automatically — without requiring constant
-            attention, prediction, or emotional decision-making.
+            Build your long-term portfolio without screen time, emotional
+            decisions, or trying to time the market. Sentinel keeps you
+            invested — while you keep your time.
           </p>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
