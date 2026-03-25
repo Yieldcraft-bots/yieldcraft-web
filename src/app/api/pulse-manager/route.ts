@@ -910,7 +910,7 @@ if (currentRegime === "RANGING") {
   return {
     allowEntry: false,
     sizeMultiplier: 0,
-    reason: "blocked_ranging_no_edge",
+    reason: "blocked_ranging_no_edge_v2",
     notes: ["hard_block_ranging"],
   };
 }
