@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 const STARTER_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_STARTER ?? "#";
 const RECON_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_RECON ?? "#";
 const PRO_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_PRO ?? "#";
-const ATLAS_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ?? "#";
+const SENTINEL_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ?? "#";
 
 const REF_STORAGE_KEY = "yc_ref";
 
@@ -62,8 +62,8 @@ export default function PricingPage() {
     [refCode]
   );
   const proHref = useMemo(() => buildCheckoutUrl(PRO_URL, refCode), [refCode]);
-  const atlasHref = useMemo(
-    () => buildCheckoutUrl(ATLAS_URL, refCode),
+  const sentinelHref = useMemo(
+    () => buildCheckoutUrl(SENTINEL_URL, refCode),
     [refCode]
   );
 
@@ -84,15 +84,15 @@ export default function PricingPage() {
           </h1>
 
           <p className="mt-6 text-lg text-slate-300">
-            YieldCraft is a direct-execution AI trading platform built for
-            disciplined operators.
+            YieldCraft is a direct-execution system built for disciplined
+            operators.
             <br />
             Start lean. Upgrade as your account and needs grow.
           </p>
 
           <p className="mt-3 text-sm text-slate-400">
             No signal chasing. No black boxes. Your capital stays on your
-            exchange — YieldCraft only executes your enabled strategy stack.
+            exchange — YieldCraft only operates the systems you enable.
           </p>
 
           {refCode ? (
@@ -150,28 +150,30 @@ export default function PricingPage() {
         <div className="relative mt-12 rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
           <div className="max-w-3xl">
             <p className="mb-2 inline-flex rounded-full bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-300">
-              Long-Term Allocation
+              Long-Term Engine
             </p>
 
             <h2 className="text-2xl font-bold md:text-3xl">
-              Atlas Membership
+              Sentinel Membership
             </h2>
 
             <p className="mt-4 text-slate-300">
-              A buy-only, weekly capital allocator designed for disciplined
-              long-term accumulation without prediction-based exits.
+              A disciplined accumulation system designed to build long-term
+              positions automatically — without requiring constant attention,
+              prediction, or emotional decision-making.
             </p>
 
             <ul className="mt-5 space-y-2 text-sm text-slate-300">
-              <li>• Buy-only weekly execution</li>
+              <li>• Buy-only accumulation</li>
+              <li>• Continuous monitoring</li>
+              <li>• Liquidity-first asset universe</li>
               <li>• Client-controlled exits</li>
-              <li>• Liquidity-first universe</li>
-              <li>• Separate portfolio logic</li>
+              <li>• Separate long-term account structure</li>
             </ul>
 
             <p className="mt-4 text-xs text-slate-500">
-              Atlas adjusts future buys over time — it never auto-sells existing
-              holdings.
+              Sentinel adjusts future buys over time — it never auto-sells
+              existing holdings.
             </p>
           </div>
 
@@ -185,16 +187,16 @@ export default function PricingPage() {
               href="/atlas"
               className="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold hover:border-slate-500"
             >
-              Learn about Atlas
+              Learn about Sentinel
             </Link>
 
             <a
-              href={atlasHref}
+              href={sentinelHref}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300"
             >
-              Start Atlas
+              Start Sentinel
             </a>
           </div>
         </div>
