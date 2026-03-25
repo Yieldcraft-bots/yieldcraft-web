@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 export const metadata = {
-  title: "Bots | YieldCraft",
+  title: "Systems | YieldCraft",
   description:
     "Meet the YieldCraft engines: intelligence, strategy, execution, and risk — built for control you can audit.",
 };
@@ -34,7 +34,7 @@ function Pill({
   );
 }
 
-function BotCard({
+function EngineCard({
   name,
   role,
   tag,
@@ -134,7 +134,7 @@ function SmallCard({
   );
 }
 
-export default function BotsPage() {
+export default function SystemsPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       {/* HERO */}
@@ -147,15 +147,16 @@ export default function BotsPage() {
           </div>
 
           <h1 className="mt-6 text-4xl font-bold leading-tight sm:text-5xl">
-            Bots & Engines —{" "}
+            Systems & Engines —{" "}
             <span className="text-sky-300">a system that behaves.</span>
           </h1>
 
           <p className="mt-4 max-w-3xl text-base text-slate-300 sm:text-lg">
             YieldCraft wasn’t built to “trade more.” It was built to trade{" "}
-            <span className="text-slate-100 font-semibold">with control</span> —
-            explicit rules, clear gates, and a layered architecture where intelligence informs strategy,
-            strategy guides execution, and risk governs everything.
+            <span className="font-semibold text-slate-100">with control</span> —
+            explicit rules, clear gates, and a layered architecture where
+            intelligence informs strategy, strategy guides execution, and risk
+            governs everything.
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -189,11 +190,14 @@ export default function BotsPage() {
               The why
             </p>
             <h2 className="mt-3 text-2xl font-bold text-white sm:text-3xl">
-              Most people don’t need more signals. They need a system that won’t betray them under pressure.
+              Most people don’t need more signals. They need a system that won’t
+              betray them under pressure.
             </h2>
             <p className="mt-4 text-sm text-slate-300 sm:text-base">
-              YieldCraft is designed for repeatability. That means fewer moving parts, clear boundaries,
-              and decision logic that can explain itself. When the right move is to do nothing, the system can do that — on purpose.
+              YieldCraft is designed for repeatability. That means fewer moving
+              parts, clear boundaries, and decision logic that can explain
+              itself. When the right move is to do nothing, the system can do
+              that — on purpose.
             </p>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -224,25 +228,29 @@ export default function BotsPage() {
               <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                 <p className="text-sm font-semibold text-slate-100">1) Intelligence</p>
                 <p className="mt-1 text-sm text-slate-400">
-                  Recon / Horizon — market context: regime, trend strength, momentum decay, risk conditions.
+                  Recon / Horizon — market context: regime, trend strength,
+                  momentum decay, risk conditions.
                 </p>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                 <p className="text-sm font-semibold text-slate-100">2) Strategy</p>
                 <p className="mt-1 text-sm text-slate-400">
-                  Atlas / Ignition — higher-level plans, allocation logic, and “when not to play” filters.
+                  Sentinel / Ignition — higher-level plans, allocation logic, and
+                  “when not to play” filters.
                 </p>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                 <p className="text-sm font-semibold text-slate-100">3) Execution</p>
                 <p className="mt-1 text-sm text-slate-400">
-                  Pulse — deterministic order placement, sizing, cooldowns, and safe-mode behavior.
+                  Pulse — deterministic order placement, sizing, cooldowns, and
+                  safe-mode behavior.
                 </p>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
                 <p className="text-sm font-semibold text-slate-100">4) Risk & Controls</p>
                 <p className="mt-1 text-sm text-slate-400">
-                  Stops, kill-switches, exposure caps, and audit logs — built to fail safely.
+                  Stops, kill-switches, exposure caps, and audit logs — built to
+                  fail safely.
                 </p>
               </div>
             </div>
@@ -261,14 +269,15 @@ export default function BotsPage() {
               Enough detail to trust it — not enough to copy it.
             </h2>
             <p className="mt-2 max-w-3xl text-sm text-slate-300 sm:text-base">
-              These descriptions focus on behavior, constraints, and intent. The edge is in the orchestration,
-              risk posture, and continuous iteration — not a single “secret indicator.”
+              These descriptions focus on behavior, constraints, and intent. The
+              edge is in the orchestration, risk posture, and continuous
+              iteration — not a single “secret indicator.”
             </p>
           </div>
         </div>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
-          <BotCard
+          <EngineCard
             name="Pulse"
             role="Execution Engine — precision over prediction."
             tag="Execution"
@@ -276,7 +285,7 @@ export default function BotsPage() {
             whatItDoes={[
               "Places orders only when all gates are satisfied.",
               "Enforces sizing rules and cooldown behavior to prevent churn.",
-              "Logs decisions so you can see “why it did nothing.”",
+              "Logs decisions so you can see why it acted — or why it did nothing.",
             ]}
             howItBehaves={[
               "Deterministic and boring by design — consistency beats adrenaline.",
@@ -284,26 +293,26 @@ export default function BotsPage() {
               "Respects global kill-switches and safety conditions.",
             ]}
             whyItMatters={[
-              "Execution quality is where most systems fail (slippage, over-trading, randomness).",
+              "Execution quality is where most systems fail: slippage, over-trading, and randomness.",
               "A stable execution layer is required before adding complexity.",
               "When signals are wrong, good gates reduce damage.",
             ]}
             disclosure="Pulse is built to execute a plan safely — it does not promise performance."
           />
 
-          <BotCard
+          <EngineCard
             name="Recon"
             role="Market Intelligence — context, not commands."
             tag="Intelligence"
             tagTone="sky"
             whatItDoes={[
-              "Measures regime + conditions (trend, momentum decay, volatility context).",
-              "Outputs confidence/context signals rather than orders.",
-              "Supports “do nothing” decisions when conditions are unfavorable.",
+              "Measures regime and conditions such as trend, momentum decay, and volatility context.",
+              "Outputs confidence and context signals rather than orders.",
+              "Supports do-nothing decisions when conditions are unfavorable.",
             ]}
             howItBehaves={[
               "Never touches execution directly — separation is intentional.",
-              "Designed to be composable: multiple signals can be blended later.",
+              "Designed to be composable so multiple signals can be blended later.",
               "Can be upgraded without risking the execution engine.",
             ]}
             whyItMatters={[
@@ -313,8 +322,8 @@ export default function BotsPage() {
             ]}
           />
 
-          <BotCard
-            name="Atlas"
+          <EngineCard
+            name="Sentinel"
             role="Long-Horizon Strategy — time as an edge."
             tag="Strategy"
             tagTone="emerald"
@@ -326,7 +335,7 @@ export default function BotsPage() {
             howItBehaves={[
               "Low frequency by design — discipline over constant interaction.",
               "Treats risk limits as first-class inputs.",
-              "Can coordinate with Pulse/Recon without coupling.",
+              "Can coordinate with Pulse and Recon without tight coupling.",
             ]}
             whyItMatters={[
               "Many edges exist on longer horizons where noise is lower.",
@@ -349,7 +358,8 @@ export default function BotsPage() {
                 Built to scale — without breaking what’s live.
               </h2>
               <p className="mt-2 max-w-3xl text-sm text-slate-300 sm:text-base">
-                Additional engines ship behind flags and stability checks. The promise is not speed — it’s controlled expansion.
+                Additional engines ship behind flags and stability checks. The
+                promise is not speed — it’s controlled expansion.
               </p>
             </div>
             <Pill label="Rolling out deliberately" tone="slate" />
@@ -359,28 +369,32 @@ export default function BotsPage() {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5">
               <p className="text-sm font-semibold text-slate-100">Horizon</p>
               <p className="mt-1 text-sm text-slate-400">
-                Regime + volatility awareness that helps Recon decide when signals should be discounted.
+                Regime and volatility awareness that helps Recon decide when
+                signals should be discounted.
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5">
               <p className="text-sm font-semibold text-slate-100">Ignition</p>
               <p className="mt-1 text-sm text-slate-400">
-                Entry timing filters designed to avoid “late” participation and low-quality chase behavior.
+                Entry timing filters designed to avoid late participation and
+                low-quality chase behavior.
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5">
               <p className="text-sm font-semibold text-slate-100">Ascend</p>
               <p className="mt-1 text-sm text-slate-400">
-                Allocation + risk budgeting logic aimed at scaling size only when conditions justify it.
+                Allocation and risk budgeting logic aimed at scaling size only
+                when conditions justify it.
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5">
               <p className="text-sm font-semibold text-slate-100">Forge / Edge</p>
               <p className="mt-1 text-sm text-slate-400">
-                Experimental engines that must prove stability in controlled rollout before touching production behavior.
+                Experimental engines that must prove stability in controlled
+                rollout before touching production behavior.
               </p>
             </div>
           </div>
@@ -394,8 +408,9 @@ export default function BotsPage() {
             Disclosures
           </p>
           <p className="mt-3 text-sm text-slate-300 sm:text-base">
-            YieldCraft provides software tools for structured workflows. It does not provide investment advice.
-            Trading involves risk, including possible loss of capital. No guarantees of performance are made.
+            YieldCraft provides software tools for structured workflows. It does
+            not provide investment advice. Trading involves risk, including
+            possible loss of capital. No guarantees of performance are made.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-3">
@@ -423,8 +438,9 @@ export default function BotsPage() {
 
       <footer className="border-t border-slate-800 bg-slate-950">
         <div className="mx-auto max-w-6xl px-6 py-8 text-center text-[11px] text-slate-500">
-          YieldCraft provides software tools for structured workflows. Not investment advice. Trading involves risk,
-          including possible loss of capital. No guarantees of performance.
+          YieldCraft provides software tools for structured workflows. Not
+          investment advice. Trading involves risk, including possible loss of
+          capital. No guarantees of performance.
         </div>
       </footer>
     </main>
