@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import TruthPanel from "@/components/TruthPanel";
 
 const ADMIN_USER_ID = "295165f4-df46-403f-8727-80408d6a2578";
 
@@ -806,6 +807,10 @@ export default function Admin() {
           </div>
         </div>
 
+        <div className="mt-6">
+          <TruthPanel />
+        </div>
+
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
           <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
             <div className="flex items-center justify-between gap-3">
@@ -1069,9 +1074,7 @@ export default function Admin() {
 
                     {heatmapRegimes.map((regime) => (
                       <div key={regime} className="contents">
-                        <div
-                          className="flex items-center rounded-2xl bg-white/5 px-4 py-4 ring-1 ring-white/10"
-                        >
+                        <div className="flex items-center rounded-2xl bg-white/5 px-4 py-4 ring-1 ring-white/10">
                           <div>
                             <div className="text-sm font-semibold text-white">{regime}</div>
                             <div className="mt-1 text-xs text-white/45">Observed market state</div>
