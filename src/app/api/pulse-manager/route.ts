@@ -909,11 +909,20 @@ const notes: string[] = [];
 // HARD BLOCK...
 if (currentRegime === "RANGING") {
   return {
-    allowEntry: false,
-    sizeMultiplier: 0,
-    reason: "blocked_ranging_no_edge_v2",
-    notes: ["hard_block_ranging"],
-  };
+  allowEntry: false,
+  reason: "blocked_ranging_no_edge_v2",
+  effectiveSide: reconStatus?.side ?? null,
+  confidence: reconStatus?.confidence ?? null,
+  tier: "none",
+  sizeMultiplier: 0,
+  tierMultiplier: 0,
+  regimeMultiplier: 0,
+  defenseMultiplier: 1,
+  trendOverride: false,
+  defenseApplied: false,
+  notes: ["hard_block_ranging"],
+};
+
 }
 
   const trendOverrideEnabled = truthyDefault(
