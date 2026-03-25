@@ -796,6 +796,13 @@ export default function Admin() {
             >
               Platform
             </Link>
+
+            <Link
+              href="/admin/scout-watch"
+              className="rounded-xl bg-indigo-500/20 px-4 py-2 text-sm ring-1 ring-white/10 transition hover:bg-indigo-500/30"
+            >
+              Scout Watch
+            </Link>
           </div>
         </div>
 
@@ -1061,9 +1068,8 @@ export default function Admin() {
                     ))}
 
                     {heatmapRegimes.map((regime) => (
-                      <>
+                      <div key={regime} className="contents">
                         <div
-                          key={`${regime}-label`}
                           className="flex items-center rounded-2xl bg-white/5 px-4 py-4 ring-1 ring-white/10"
                         >
                           <div>
@@ -1104,7 +1110,7 @@ export default function Admin() {
                             </div>
                           );
                         })}
-                      </>
+                      </div>
                     ))}
                   </div>
                 </div>
