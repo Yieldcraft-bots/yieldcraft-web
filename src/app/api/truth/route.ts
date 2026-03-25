@@ -11,47 +11,38 @@ export async function GET() {
     const { data: trades } = await supabase
       .from("trade_logs")
       .select("*")
-      .order("created_at", { ascending: true }) // IMPORTANT: oldest → newest
+      .order("created_at", { ascending: true })
       .limit(200);
 
-    let openTrade: any = null;
-    let completedTrades: number[] = [];
+    let openTrade: { entry: number } | null = null;
+    const completedTrades: number[] = [];
 
     for (const t of trades || []) {
-      const price = Number(t.price);
+      const price = Number(t.price || 0);
 
-      // ENTRY
+      if (!price) continue;
+
       if (t.side === "BUY") {
         openTrade = { entry: price };
+        continue;
       }
 
-      // EXIT
       if (t.side === "SELL" && openTrade) {
         const entry = openTrade.entry;
         const exit = price;
-
         const pnlPct = (exit - entry) / entry;
         const pnlBps = pnlPct * 10000;
-
         completedTrades.push(pnlBps);
-
         openTrade = null;
       }
     }
 
-    // Stats
     const sampleSize = completedTrades.length;
-
-    const totalEdge = completedTrades.reduce((a, b) => a + b, 0);
-
-    const edgePerTrade = sampleSize
-      ? totalEdge / sampleSize
-      : 0;
-
+    const totalEdge = completedTrades.reduce((sum, x) => sum + x, 0);
+    const edgePerTrade = sampleSize ? totalEdge / sampleSize : 0;
     const wins = completedTrades.filter((x) => x > 0).length;
     const losses = completedTrades.filter((x) => x < 0).length;
 
-    // Latest trade
     const last = trades?.[trades.length - 1];
 
     const status =
@@ -64,32 +55,35 @@ export async function GET() {
         : "UNKNOWN";
 
     return NextResponse.json({
+      version: "truth-v2-paired-trades",
       edge: {
         edgePerTradeBps: Number(edgePerTrade.toFixed(2)),
         sampleSize,
         wins,
         losses,
       },
-
       system: {
         status,
         lastAction: last?.side || "NONE",
         price: last?.price || null,
         time: last?.created_at || null,
       },
-
       note:
-        edgePerTrade < 0
+        sampleSize === 0
+          ? "No completed trade pairs found yet"
+          : edgePerTrade < 0
           ? "System negative — evaluating edge"
           : edgePerTrade > 0
           ? "System showing positive edge"
-          : "System neutral — insufficient data",
-
+          : "System neutral",
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
     return NextResponse.json(
-      { error: "Truth layer failed", details: err },
+      {
+        error: "Truth layer failed",
+        details: err instanceof Error ? err.message : String(err),
+      },
       { status: 500 }
     );
   }
