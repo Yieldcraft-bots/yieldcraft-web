@@ -8,31 +8,51 @@ const supabase = createClient(
 
 export async function GET() {
   try {
-    // 1. Get recent trades
     const { data: trades } = await supabase
       .from("trade_logs")
       .select("*")
-      .order("created_at", { ascending: false })
-      .limit(50);
+      .order("created_at", { ascending: true }) // IMPORTANT: oldest → newest
+      .limit(200);
 
-    // 2. Calculate edge
-    let totalEdge = 0;
-    let wins = 0;
-    let losses = 0;
+    let openTrade: any = null;
+    let completedTrades: number[] = [];
 
-    trades?.forEach((t: any) => {
-      const pnl = Number(t.pnl_bps || 0);
+    for (const t of trades || []) {
+      const price = Number(t.price);
 
-      totalEdge += pnl;
-      if (pnl > 0) wins++;
-      if (pnl < 0) losses++;
-    });
+      // ENTRY
+      if (t.side === "BUY") {
+        openTrade = { entry: price };
+      }
 
-    const sampleSize = trades?.length || 0;
-    const edgePerTrade = sampleSize ? totalEdge / sampleSize : 0;
+      // EXIT
+      if (t.side === "SELL" && openTrade) {
+        const entry = openTrade.entry;
+        const exit = price;
 
-    // 3. Latest decision
-    const last = trades?.[0];
+        const pnlPct = (exit - entry) / entry;
+        const pnlBps = pnlPct * 10000;
+
+        completedTrades.push(pnlBps);
+
+        openTrade = null;
+      }
+    }
+
+    // Stats
+    const sampleSize = completedTrades.length;
+
+    const totalEdge = completedTrades.reduce((a, b) => a + b, 0);
+
+    const edgePerTrade = sampleSize
+      ? totalEdge / sampleSize
+      : 0;
+
+    const wins = completedTrades.filter((x) => x > 0).length;
+    const losses = completedTrades.filter((x) => x < 0).length;
+
+    // Latest trade
+    const last = trades?.[trades.length - 1];
 
     const status =
       last?.mode === "HOLD"
@@ -60,8 +80,10 @@ export async function GET() {
 
       note:
         edgePerTrade < 0
-          ? "System currently negative — data collection phase"
-          : "System showing positive edge",
+          ? "System negative — evaluating edge"
+          : edgePerTrade > 0
+          ? "System showing positive edge"
+          : "System neutral — insufficient data",
 
       timestamp: new Date().toISOString(),
     });
