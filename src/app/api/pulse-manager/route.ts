@@ -904,26 +904,7 @@ function buildEntryPlan(params: {
   defenseConf: number;
 }): EntryPlan {
   const { reconStatus, currentRegime, gov } = params;
-const notes: string[] = [];
-
-// HARD BLOCK...
-if (currentRegime === "RANGING") {
-  return {
-  allowEntry: false,
-  reason: "blocked_ranging_no_edge_v2",
-  effectiveSide: reconStatus?.side ?? null,
-  confidence: reconStatus?.confidence ?? null,
-  tier: "none",
-  sizeMultiplier: 0,
-  tierMultiplier: 0,
-  regimeMultiplier: 0,
-  defenseMultiplier: 1,
-  trendOverride: false,
-  defenseApplied: false,
-  notes: ["hard_block_ranging"],
-};
-
-}
+  const notes: string[] = [];
 
   const trendOverrideEnabled = truthyDefault(
     process.env.TREND_OVERRIDE_ENABLED,
@@ -932,8 +913,7 @@ if (currentRegime === "RANGING") {
   const rangingNeutralProbeEnabled = truthyDefault(
     process.env.RANGING_NEUTRAL_PROBE_ENABLED,
     true
-  );
-
+  )
   const rangeMinConf = num(process.env.PULSE_RANGE_MIN_RECON_CONF, 0.72);
   const rangeMaxConf = num(process.env.PULSE_RANGE_MAX_RECON_CONF, 0.8);
 
