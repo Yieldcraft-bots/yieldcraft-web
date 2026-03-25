@@ -32,7 +32,7 @@ const navLinks = [
   { href: "/pricing", label: "Pricing" },
   { href: "/quick-start", label: "Quick Start" },
   { href: "/bots", label: "Systems" },
-  { href: "/system", label: "System" },
+  { href: "/system", label: "How It Works" },
   { href: "/atlas", label: "Sentinel" },
   { href: "/affiliate", label: "Affiliate" },
   // Live/Dashboard/Account/Logout handled by <AuthNav />
