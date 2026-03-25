@@ -904,8 +904,9 @@ function buildEntryPlan(params: {
   defenseConf: number;
 }): EntryPlan {
   const { reconStatus, currentRegime, gov } = params;
+const notes: string[] = [];
 
-// HARD BLOCK — NO EDGE IN RANGING
+// HARD BLOCK...
 if (currentRegime === "RANGING") {
   return {
     allowEntry: false,
@@ -914,8 +915,6 @@ if (currentRegime === "RANGING") {
     notes: ["hard_block_ranging"],
   };
 }
-
-const notes: string[] = [];
 
   const trendOverrideEnabled = truthyDefault(
     process.env.TREND_OVERRIDE_ENABLED,
