@@ -32,7 +32,7 @@ export default function TruthPanel() {
       .then((json) => setData(json))
       .catch((err) =>
         setData({
-          error: "Failed to load truth layer",
+          error: "Failed to load network truth layer",
           details: err instanceof Error ? err.message : String(err),
         })
       )
@@ -43,9 +43,12 @@ export default function TruthPanel() {
     return (
       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
         <p className="text-xs uppercase tracking-wide text-slate-400">
-          Truth Layer
+          Truth Layer — Network
         </p>
-        <p className="mt-3 text-sm text-slate-300">Loading truth layer...</p>
+        <p className="mt-1 text-sm text-slate-500">
+          All accounts · Real execution data
+        </p>
+        <p className="mt-3 text-sm text-slate-300">Loading network truth...</p>
       </div>
     );
   }
@@ -54,10 +57,13 @@ export default function TruthPanel() {
     return (
       <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-6">
         <p className="text-xs uppercase tracking-wide text-red-300">
-          Truth Layer
+          Truth Layer — Network
+        </p>
+        <p className="mt-1 text-sm text-red-300/80">
+          All accounts · Real execution data
         </p>
         <p className="mt-3 text-sm text-red-200">
-          {data?.error || "Truth layer unavailable"}
+          {data?.error || "Network truth layer unavailable"}
         </p>
         {data?.details ? (
           <p className="mt-2 text-xs text-red-300/80">{data.details}</p>
@@ -92,11 +98,14 @@ export default function TruthPanel() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-wide text-slate-400">
-            Truth Layer
+            Truth Layer — Network
           </p>
           <h3 className="mt-1 text-lg font-semibold text-white">
             Real system truth
           </h3>
+          <p className="mt-1 text-sm text-slate-500">
+            All accounts · Real execution data
+          </p>
         </div>
 
         <span
@@ -132,7 +141,7 @@ export default function TruthPanel() {
 
       <div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4">
         <p className="text-xs uppercase tracking-wide text-slate-400">
-          System Status
+          Network Status
         </p>
         <p className="mt-2 text-sm text-slate-200">
           {status} — {lastAction} @ {price}
