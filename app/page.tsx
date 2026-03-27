@@ -1,5 +1,3 @@
-import Image from "next/image";
-
 export default function Home() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -22,7 +20,6 @@ export default function Home() {
               to reduce emotional trading.
             </p>
 
-            {/* Above-the-fold disclosure (highest value liability shield) */}
             <p className="mt-4 text-xs text-slate-400">
               YieldCraft provides software tools and systems — not financial
               advice. Trading involves risk, including possible loss of capital.
