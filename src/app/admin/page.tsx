@@ -144,6 +144,19 @@ type EdgeTestResp =
     }
   | { ok: false; error?: string; [k: string]: any };
 
+type EdgeHunterResp =
+  | {
+      ok: true;
+      product_id: string;
+      status: "favorable" | "neutral" | "avoid";
+      regime: string;
+      structure: string;
+      volatility_bps: number;
+      sample: number;
+      note: string;
+    }
+  | { ok: false; error?: string; [k: string]: any };
+
 type DecisionRow = {
   id: string;
   created_at: string;
@@ -368,6 +381,29 @@ function heatCellClasses(edge: number | null | undefined) {
   return "bg-white/5 ring-1 ring-white/10";
 }
 
+function edgeHunterTone(status: string | null | undefined): Tone {
+  const s = String(status || "").toLowerCase();
+  if (s === "favorable") return "green";
+  if (s === "neutral") return "yellow";
+  if (s === "avoid") return "red";
+  return "gray";
+}
+
+function structureTone(structure: string | null | undefined): Tone {
+  const s = String(structure || "").toLowerCase();
+  if (s === "expanding") return "green";
+  if (s === "stable") return "yellow";
+  if (s === "compressing") return "red";
+  return "gray";
+}
+
+function volTone(v: number | null | undefined): Tone {
+  if (v == null || !Number.isFinite(v)) return "gray";
+  if (v >= 20) return "green";
+  if (v >= 8) return "yellow";
+  return "red";
+}
+
 function TonePill({
   label,
   tone,
@@ -424,6 +460,7 @@ export default function Admin() {
   const [strategyAdjustments, setStrategyAdjustments] =
     useState<StrategyAdjustmentsResp | null>(null);
   const [edgeTest, setEdgeTest] = useState<EdgeTestResp | null>(null);
+  const [edgeHunter, setEdgeHunter] = useState<EdgeHunterResp | null>(null);
   const [decisionStream, setDecisionStream] = useState<DecisionRow[]>([]);
   const [edgeHeatmap, setEdgeHeatmap] = useState<EdgeHeatmapRow[]>([]);
   const [edgeHeatmapOk, setEdgeHeatmapOk] = useState(false);
@@ -495,6 +532,16 @@ export default function Admin() {
       const edgeJson = await edgeRes.json();
       setEdgeTest(edgeJson);
     } catch {}
+
+    try {
+      const hunterRes = await fetch("/api/edge-hunter", {
+        cache: "no-store",
+      });
+      const hunterJson = await hunterRes.json();
+      setEdgeHunter(hunterJson);
+    } catch {
+      setEdgeHunter(null);
+    }
 
     try {
       const heatmapRes = await fetch("/api/edge-heatmap", {
@@ -748,6 +795,18 @@ export default function Admin() {
     heatmapLookup.set(`${row.regime}__${row.confidence_bucket}`, row);
   });
 
+  const edgeHunterToneValue: Tone =
+    edgeHunter && edgeHunter.ok ? edgeHunterTone(edgeHunter.status) : "gray";
+
+  const edgeHunterRegimeTone: Tone =
+    edgeHunter && edgeHunter.ok ? regimeTone(edgeHunter.regime) : "gray";
+
+  const edgeHunterStructureTone: Tone =
+    edgeHunter && edgeHunter.ok ? structureTone(edgeHunter.structure) : "gray";
+
+  const edgeHunterVolTone: Tone =
+    edgeHunter && edgeHunter.ok ? volTone(edgeHunter.volatility_bps) : "gray";
+
   return (
     <main className="min-h-screen bg-black text-white">
       <div className="mx-auto max-w-7xl px-6 py-10">
@@ -810,6 +869,80 @@ export default function Admin() {
         <div className="mt-6">
           <TruthPanel />
         </div>
+
+        <section className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Market Edge State</h2>
+            <TonePill
+              label={
+                edgeHunter && edgeHunter.ok
+                  ? `LIVE · ${String(edgeHunter.status).toUpperCase()}`
+                  : "EDGE HUNTER OFFLINE"
+              }
+              tone={edgeHunterToneValue}
+            />
+          </div>
+
+          <div className="mt-3 text-sm text-white/60">
+            Read-only BTC environment scanner. This does not change trading logic.
+            It tells you whether current conditions look favorable, neutral, or avoid.
+          </div>
+
+          <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Stat
+              label="Status"
+              value={
+                edgeHunter && edgeHunter.ok
+                  ? String(edgeHunter.status).toUpperCase()
+                  : "—"
+              }
+              tone={edgeHunterToneValue}
+              sub="Live BTC edge state"
+            />
+
+            <Stat
+              label="Regime"
+              value={edgeHunter && edgeHunter.ok ? edgeHunter.regime : "—"}
+              tone={edgeHunterRegimeTone}
+              sub="Current market regime"
+            />
+
+            <Stat
+              label="Structure"
+              value={edgeHunter && edgeHunter.ok ? edgeHunter.structure : "—"}
+              tone={edgeHunterStructureTone}
+              sub="Expansion / compression state"
+            />
+
+            <Stat
+              label="Volatility"
+              value={
+                edgeHunter && edgeHunter.ok
+                  ? bps(edgeHunter.volatility_bps)
+                  : "—"
+              }
+              tone={edgeHunterVolTone}
+              sub={
+                edgeHunter && edgeHunter.ok
+                  ? `${edgeHunter.sample} one-minute candles`
+                  : "Live BTC sample"
+              }
+            />
+          </div>
+
+          <div className="mt-5">
+            <Stat
+              label="Edge Hunter Note"
+              value={edgeHunter && edgeHunter.ok ? edgeHunter.note : "—"}
+              tone={edgeHunterToneValue}
+              sub={
+                edgeHunter && edgeHunter.ok
+                  ? `Product ${edgeHunter.product_id}`
+                  : "Read-only environment diagnosis"
+              }
+            />
+          </div>
+        </section>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
           <section className="rounded-3xl bg-white/5 p-6 ring-1 ring-white/10">
