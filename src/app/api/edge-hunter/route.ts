@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 type Candle = {
   start: string;
@@ -47,10 +48,51 @@ function detectStructure(prices: number[]) {
   return "stable";
 }
 
+function getAdminClient() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    throw new Error("Missing Supabase admin env vars");
+  }
+
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+async function logEdgeHunterScan(payload: {
+  product_id: string;
+  status: string;
+  regime: string;
+  structure: string;
+  volatility_bps: number;
+  sample: number;
+  note: string;
+}) {
+  try {
+    const supabase = getAdminClient();
+
+    await supabase.from("edge_hunter_logs").insert([
+      {
+        product_id: payload.product_id,
+        status: payload.status,
+        regime: payload.regime,
+        structure: payload.structure,
+        volatility_bps: payload.volatility_bps,
+        sample: payload.sample,
+        note: payload.note,
+      },
+    ]);
+  } catch (err) {
+    console.error("edge_hunter_log_failed", err);
+  }
+}
+
 export async function GET() {
   try {
     const now = Math.floor(Date.now() / 1000);
-    const start = now - 60 * 100; // last 100 minutes
+    const start = now - 60 * 100;
     const end = now;
 
     const url =
@@ -105,9 +147,11 @@ export async function GET() {
     for (let i = 1; i < prices.length; i++) {
       returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
     }
+
     const avg = average(returns);
     const variance =
       returns.reduce((sum, r) => sum + Math.pow(r - avg, 2), 0) / returns.length;
+
     const volatility_bps = Math.round(Math.sqrt(variance) * 10000 * 100) / 100;
 
     let status: "favorable" | "neutral" | "avoid" = "neutral";
@@ -127,7 +171,7 @@ export async function GET() {
       note = "Compression detected. Wait for clearer expansion.";
     }
 
-    return NextResponse.json({
+    const responsePayload = {
       ok: true,
       product_id: "BTC-USD",
       status,
@@ -136,7 +180,19 @@ export async function GET() {
       volatility_bps,
       sample: prices.length,
       note,
+    };
+
+    await logEdgeHunterScan({
+      product_id: responsePayload.product_id,
+      status: responsePayload.status,
+      regime: responsePayload.regime,
+      structure: responsePayload.structure,
+      volatility_bps: responsePayload.volatility_bps,
+      sample: responsePayload.sample,
+      note: responsePayload.note,
     });
+
+    return NextResponse.json(responsePayload);
   } catch (err: any) {
     return NextResponse.json({
       ok: false,
