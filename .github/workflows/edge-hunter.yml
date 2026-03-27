@@ -1,0 +1,15 @@
+name: Edge Hunter Scan
+
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Edge Hunter
+        run: |
+          curl -X GET "https://yieldcraft.co/api/edge-hunter"
