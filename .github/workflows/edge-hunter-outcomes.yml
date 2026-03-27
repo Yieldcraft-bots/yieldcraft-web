@@ -1,0 +1,15 @@
+name: Edge Hunter Outcomes
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  outcomes:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call Edge Hunter Outcomes
+        run: |
+          curl -X GET "https://yieldcraft.co/api/edge-hunter-outcomes?secret=${{ secrets.CRON_SECRET }}"
