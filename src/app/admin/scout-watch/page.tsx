@@ -57,6 +57,201 @@ type ScoutWatchResponse = {
   error?: string;
 };
 
+type InsightItem = {
+  label: string;
+  value: string;
+  tone: "neutral" | "good" | "bad";
+};
+
+function formatNumber(value: number, digits = 2) {
+  if (!Number.isFinite(value)) return "n/a";
+  return Number(value.toFixed(digits)).toString();
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value)) return "n/a";
+  return `${Number(value.toFixed(2))}%`;
+}
+
+function toneClass(tone: "neutral" | "good" | "bad") {
+  if (tone === "good") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-900";
+  }
+  if (tone === "bad") {
+    return "border-red-200 bg-red-50 text-red-900";
+  }
+  return "border-gray-200 bg-white text-gray-900";
+}
+
+function getBestBucket(
+  rows: Record<string, BucketStats> | undefined,
+  minTrades = 3
+): { key: string; row: BucketStats } | null {
+  if (!rows) return null;
+
+  const filtered = Object.entries(rows).filter(
+    ([, row]) => row && row.trades >= minTrades
+  );
+
+  if (!filtered.length) return null;
+
+  filtered.sort((a, b) => b[1].avg_edge_bps - a[1].avg_edge_bps);
+  return { key: filtered[0][0], row: filtered[0][1] };
+}
+
+function getWorstBucket(
+  rows: Record<string, BucketStats> | undefined,
+  minTrades = 3
+): { key: string; row: BucketStats } | null {
+  if (!rows) return null;
+
+  const filtered = Object.entries(rows).filter(
+    ([, row]) => row && row.trades >= minTrades
+  );
+
+  if (!filtered.length) return null;
+
+  filtered.sort((a, b) => a[1].avg_edge_bps - b[1].avg_edge_bps);
+  return { key: filtered[0][0], row: filtered[0][1] };
+}
+
+function buildInsights(
+  data: ScoutWatchResponse | null,
+  winRate: number
+): InsightItem[] {
+  if (!data) return [];
+
+  const insights: InsightItem[] = [];
+  const summary = data.summary;
+
+  const bestEntry = getBestBucket(data.by_entry_mode, 3);
+  const worstEntry = getWorstBucket(data.by_entry_mode, 3);
+  const bestRegime = getBestBucket(data.by_regime, 3);
+  const worstRegime = getWorstBucket(data.by_regime, 3);
+  const bestConfidence = getBestBucket(data.by_confidence_bucket, 3);
+  const worstConfidence = getWorstBucket(data.by_confidence_bucket, 3);
+
+  insights.push({
+    label: "Primary Diagnosis",
+    value:
+      summary.avg_edge_bps >= 0
+        ? `System edge is currently positive at ${formatNumber(
+            summary.avg_edge_bps
+          )} bps/trade.`
+        : `System edge is currently negative at ${formatNumber(
+            summary.avg_edge_bps
+          )} bps/trade.`,
+    tone: summary.avg_edge_bps >= 0 ? "good" : "bad",
+  });
+
+  if (summary.avg_loss_bps < 0 && Math.abs(summary.avg_loss_bps) > summary.avg_win_bps) {
+    insights.push({
+      label: "Loss Profile",
+      value: `Average loss (${formatNumber(
+        summary.avg_loss_bps
+      )} bps) is larger than average win (${formatNumber(
+        summary.avg_win_bps
+      )} bps).`,
+      tone: "bad",
+    });
+  } else {
+    insights.push({
+      label: "Loss Profile",
+      value: `Average win/loss structure is currently controlled (${formatNumber(
+        summary.avg_win_bps
+      )} / ${formatNumber(summary.avg_loss_bps)} bps).`,
+      tone: "good",
+    });
+  }
+
+  if (worstEntry) {
+    insights.push({
+      label: "Weakest Entry Path",
+      value: `${worstEntry.key} is the weakest execution path at ${formatNumber(
+        worstEntry.row.avg_edge_bps
+      )} bps over ${worstEntry.row.trades} trades.`,
+      tone: worstEntry.row.avg_edge_bps < 0 ? "bad" : "neutral",
+    });
+  }
+
+  if (bestEntry) {
+    insights.push({
+      label: "Strongest Entry Path",
+      value: `${bestEntry.key} is the strongest execution path at ${formatNumber(
+        bestEntry.row.avg_edge_bps
+      )} bps over ${bestEntry.row.trades} trades.`,
+      tone: bestEntry.row.avg_edge_bps >= 0 ? "good" : "neutral",
+    });
+  }
+
+  if (worstRegime) {
+    insights.push({
+      label: "Weakest Regime",
+      value: `${worstRegime.key} is the weakest market state at ${formatNumber(
+        worstRegime.row.avg_edge_bps
+      )} bps over ${worstRegime.row.trades} trades.`,
+      tone: worstRegime.row.avg_edge_bps < 0 ? "bad" : "neutral",
+    });
+  }
+
+  if (bestRegime) {
+    insights.push({
+      label: "Strongest Regime",
+      value: `${bestRegime.key} is the strongest market state at ${formatNumber(
+        bestRegime.row.avg_edge_bps
+      )} bps over ${bestRegime.row.trades} trades.`,
+      tone: bestRegime.row.avg_edge_bps >= 0 ? "good" : "neutral",
+    });
+  }
+
+  if (worstConfidence) {
+    insights.push({
+      label: "Weakest Confidence Bucket",
+      value: `${worstConfidence.key} is weakest at ${formatNumber(
+        worstConfidence.row.avg_edge_bps
+      )} bps over ${worstConfidence.row.trades} trades.`,
+      tone: worstConfidence.row.avg_edge_bps < 0 ? "bad" : "neutral",
+    });
+  }
+
+  if (bestConfidence) {
+    insights.push({
+      label: "Strongest Confidence Bucket",
+      value: `${bestConfidence.key} is strongest at ${formatNumber(
+        bestConfidence.row.avg_edge_bps
+      )} bps over ${bestConfidence.row.trades} trades.`,
+      tone: bestConfidence.row.avg_edge_bps >= 0 ? "good" : "neutral",
+    });
+  }
+
+  if (summary.hard_stops > summary.trail_stops) {
+    insights.push({
+      label: "Stop Pattern",
+      value: `Hard stops are dominating (${summary.hard_stops} hard stops vs ${summary.trail_stops} trail stops).`,
+      tone: "bad",
+    });
+  } else {
+    insights.push({
+      label: "Stop Pattern",
+      value: `Trail exits are keeping pace with hard stops (${summary.trail_stops} trail stops vs ${summary.hard_stops} hard stops).`,
+      tone: "good",
+    });
+  }
+
+  insights.push({
+    label: "Sample Context",
+    value:
+      data.summary.trades < 30
+        ? `Low sample environment (${data.summary.trades} trades). Treat conclusions as early signal, not final truth.`
+        : `Sample is building (${data.summary.trades} trades, ${formatPercent(
+            winRate
+          )} win rate). Continue validating before changing core logic.`,
+    tone: data.summary.trades < 30 ? "neutral" : "good",
+  });
+
+  return insights.slice(0, 8);
+}
+
 function StatCard({
   label,
   value,
@@ -70,6 +265,17 @@ function StatCard({
         {label}
       </div>
       <div className="mt-2 text-2xl font-semibold text-gray-900">{value}</div>
+    </div>
+  );
+}
+
+function InsightCard({ item }: { item: InsightItem }) {
+  return (
+    <div className={`rounded-2xl border p-4 shadow-sm ${toneClass(item.tone)}`}>
+      <div className="text-xs font-medium uppercase tracking-wide opacity-70">
+        {item.label}
+      </div>
+      <div className="mt-2 text-sm leading-6">{item.value}</div>
     </div>
   );
 }
@@ -183,6 +389,8 @@ export default function ScoutWatchAdminPage() {
     return Math.round((data.summary.wins / data.summary.trades) * 10000) / 100;
   }, [data]);
 
+  const insights = useMemo(() => buildInsights(data, winRate), [data, winRate]);
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -195,7 +403,8 @@ export default function ScoutWatchAdminPage() {
               Scout Watch
             </h1>
             <p className="mt-2 text-sm text-gray-600">
-              Read-only edge engine. Measures what Pulse is actually doing.
+              Read-only edge microscope. Explains where Pulse is gaining or
+              losing edge across execution path, regime, and confidence.
             </p>
           </div>
 
@@ -240,6 +449,29 @@ export default function ScoutWatchAdminPage() {
               />
               <StatCard label="Hard Stops" value={data.summary.hard_stops} />
               <StatCard label="Trail Stops" value={data.summary.trail_stops} />
+            </div>
+
+            <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-lg font-semibold text-gray-900">
+                    Insight Panel
+                  </div>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Read-only diagnosis from completed trades. No live trading
+                    logic changes happen here.
+                  </p>
+                </div>
+                <div className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium uppercase tracking-wide text-gray-600">
+                  Diagnostic Only
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {insights.map((item, idx) => (
+                  <InsightCard key={`${item.label}-${idx}`} item={item} />
+                ))}
+              </div>
             </div>
 
             <div className="grid gap-6 xl:grid-cols-3">
