@@ -15,7 +15,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "YieldCraft — Direct Execution AI Trading Engine",
     description:
-      "Pulse, Recon, Sentinel, and Pro Suite. Real trades. Real risk controls. No simulations.",
+      "Pulse, Recon, Atlas, and Pro Suite. Real trades. Real risk controls. No simulations.",
     url: "https://yieldcraft.co",
     siteName: "YieldCraft",
     type: "website",
@@ -33,7 +33,7 @@ const navLinks = [
   { href: "/quick-start", label: "Quick Start" },
   { href: "/bots", label: "Systems" },
   { href: "/system", label: "How It Works" },
-  { href: "/atlas", label: "Sentinel" },
+  { href: "/atlas", label: "Atlas" },
   { href: "/affiliate", label: "Affiliate" },
   // Live/Dashboard/Account/Logout handled by <AuthNav />
 ];
