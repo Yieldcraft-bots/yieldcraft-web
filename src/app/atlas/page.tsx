@@ -18,14 +18,14 @@ export default function AtlasPage() {
           </Link>
 
           <Link
-            href="/quick-start"
+            href="/atlas/quick-start"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
             View Quick Start guide
           </Link>
 
           <Link
-            href="/quick-start?product=atlas"
+            href="/atlas/quick-start"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
             Start Atlas
@@ -182,7 +182,7 @@ export default function AtlasPage() {
                 </Link>
 
                 <Link
-                  href="/quick-start?product=atlas"
+                  href="/atlas/quick-start"
                   className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
                 >
                   Start Atlas
