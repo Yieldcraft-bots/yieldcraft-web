@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 const STARTER_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_STARTER ?? "#";
 const RECON_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_RECON ?? "#";
 const PRO_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_PRO ?? "#";
-const SENTINEL_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ?? "#";
+const ATLAS_URL = process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ?? "#";
 
 const REF_STORAGE_KEY = "yc_ref";
 
@@ -62,8 +62,8 @@ export default function PricingPage() {
     [refCode]
   );
   const proHref = useMemo(() => buildCheckoutUrl(PRO_URL, refCode), [refCode]);
-  const sentinelHref = useMemo(
-    () => buildCheckoutUrl(SENTINEL_URL, refCode),
+  const atlasHref = useMemo(
+    () => buildCheckoutUrl(ATLAS_URL, refCode),
     [refCode]
   );
 
@@ -154,7 +154,7 @@ export default function PricingPage() {
             </p>
 
             <h2 className="text-2xl font-bold md:text-3xl">
-              Sentinel Membership
+              Atlas Membership
             </h2>
 
             <p className="mt-4 text-slate-300">
@@ -172,7 +172,7 @@ export default function PricingPage() {
             </ul>
 
             <p className="mt-4 text-xs text-slate-500">
-              Sentinel adjusts future buys over time — it never auto-sells
+              Atlas adjusts future buys over time — it never auto-sells
               existing holdings.
             </p>
           </div>
@@ -187,16 +187,16 @@ export default function PricingPage() {
               href="/atlas"
               className="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold hover:border-slate-500"
             >
-              Learn about Sentinel
+              Learn about Atlas
             </Link>
 
             <a
-              href={sentinelHref}
+              href={atlasHref}
               target="_blank"
               rel="noopener noreferrer"
               className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300"
             >
-              Start Sentinel
+              Start Atlas
             </a>
           </div>
         </div>
