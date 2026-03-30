@@ -183,6 +183,12 @@ export default function PricingPage() {
               Use a dedicated Coinbase account or portfolio for Atlas. Do not
               share it with Pulse or other active trading systems.
             </p>
+
+            <p className="mt-2 text-xs text-slate-500">
+              Atlas manages long-term accumulation. Active execution systems
+              manage shorter-horizon opportunity. These systems must never share
+              funds or API credentials.
+            </p>
           </div>
 
           <div className="mt-6 flex flex-wrap items-center gap-4">
