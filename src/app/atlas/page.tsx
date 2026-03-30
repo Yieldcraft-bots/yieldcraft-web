@@ -21,15 +21,17 @@ export default function AtlasPage() {
             href="/atlas/quick-start"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
-            View Quick Start guide
+            View Atlas Quick Start Guide
           </Link>
 
-          <Link
-            href="/atlas/quick-start"
+          <a
+            href={SENTINEL_STRIPE_LINK}
+            target="_blank"
+            rel="noreferrer"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
             Start Atlas
-          </Link>
+          </a>
         </div>
 
         {/* Hero */}
@@ -147,17 +149,17 @@ export default function AtlasPage() {
           <Section title="Account Structure (Required)">
             <p className="text-slate-300">
               <span className="font-semibold text-slate-200">
-                Atlas requires a separate exchange account or portfolio from
-                active execution systems.
+                Atlas requires a separate Coinbase account or separate dedicated
+                portfolio from all other YieldCraft systems.
               </span>{" "}
-              This separation prevents risk bleed and preserves clean
-              accounting.
+              This separation protects Pulse, prevents risk bleed, and preserves
+              clean accounting.
             </p>
 
             <p className="mt-3 text-slate-400">
               Atlas manages long-term accumulation. Active execution systems
-              manage shorter-horizon opportunity. These systems never share
-              funds.
+              manage shorter-horizon opportunity. Atlas should not share funds
+              or API credentials with Pulse.
             </p>
           </Section>
 
@@ -175,18 +177,20 @@ export default function AtlasPage() {
 
               <div className="flex flex-wrap gap-3">
                 <Link
-                  href="/pricing"
+                  href="/atlas/quick-start"
                   className="inline-flex items-center justify-center rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500"
                 >
-                  See all plans
+                  View Atlas Quick Start Guide
                 </Link>
 
-                <Link
-                  href="/atlas/quick-start"
+                <a
+                  href={SENTINEL_STRIPE_LINK}
+                  target="_blank"
+                  rel="noreferrer"
                   className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
                 >
                   Start Atlas
-                </Link>
+                </a>
               </div>
             </div>
           </Section>
