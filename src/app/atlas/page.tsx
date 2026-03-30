@@ -24,14 +24,12 @@ export default function AtlasPage() {
             View Quick Start guide
           </Link>
 
-          <a
-            href={SENTINEL_STRIPE_LINK}
-            target="_blank"
-            rel="noreferrer"
+          <Link
+            href="/quick-start?product=atlas"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
             Start Atlas
-          </a>
+          </Link>
         </div>
 
         {/* Hero */}
@@ -127,9 +125,9 @@ export default function AtlasPage() {
 
           <Section title="Asset Selection & Liquidity">
             <p className="text-slate-300">
-              Atlas allocates only among a small universe of large-cap,
-              highly liquid digital assets. Liquidity is a core requirement so
-              clients can exit efficiently when they choose.
+              Atlas allocates only among a small universe of large-cap, highly
+              liquid digital assets. Liquidity is a core requirement so clients
+              can exit efficiently when they choose.
             </p>
 
             <ul className="mt-4 space-y-2 text-slate-300">
@@ -141,8 +139,8 @@ export default function AtlasPage() {
 
             <p className="mt-4 text-xs text-slate-500">
               Asset inclusion is reviewed periodically and adjusted
-              deliberately. Atlas does not chase trends or react to
-              short-term price movement.
+              deliberately. Atlas does not chase trends or react to short-term
+              price movement.
             </p>
           </Section>
 
@@ -183,14 +181,12 @@ export default function AtlasPage() {
                   See all plans
                 </Link>
 
-                <a
-                  href={SENTINEL_STRIPE_LINK}
-                  target="_blank"
-                  rel="noreferrer"
+                <Link
+                  href="/quick-start?product=atlas"
                   className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
                 >
                   Start Atlas
-                </a>
+                </Link>
               </div>
             </div>
           </Section>
