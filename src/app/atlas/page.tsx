@@ -158,8 +158,8 @@ export default function AtlasPage() {
 
             <p className="mt-3 text-slate-400">
               Atlas manages long-term accumulation. Active execution systems
-              manage shorter-horizon opportunity. Atlas should not share funds
-              or API credentials with Pulse.
+              manage shorter-horizon opportunity. These systems must never share
+              funds or API credentials.
             </p>
           </Section>
 
