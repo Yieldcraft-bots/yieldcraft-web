@@ -30,7 +30,7 @@ export default function AtlasPage() {
             rel="noreferrer"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
           >
-            Start Sentinel
+            Start Atlas
           </a>
         </div>
 
@@ -41,13 +41,13 @@ export default function AtlasPage() {
           </p>
 
           <h1 className="mt-3 text-3xl font-bold text-slate-50 md:text-5xl">
-            YieldCraft Sentinel
+            Atlas by YieldCraft
           </h1>
 
           <p className="mt-4 max-w-2xl text-slate-400">
-            Build your long-term portfolio without screen time, emotional
-            decisions, or trying to time the market. Sentinel keeps you
-            invested — while you keep your time.
+            A disciplined accumulation engine designed to build long-term
+            positions automatically — without screen time, prediction, or
+            emotional decisions.
           </p>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -64,14 +64,19 @@ export default function AtlasPage() {
               Client-controlled exits
             </span>
           </div>
+
+          <p className="mt-4 max-w-2xl text-sm text-slate-400">
+            Runs independently from Pulse — with a dedicated long-term account
+            structure.
+          </p>
         </div>
 
         {/* Content */}
         <div className="grid gap-6">
-          <Section title="How Sentinel Works">
+          <Section title="How Atlas Works">
             <ul className="space-y-2 text-slate-300">
               <li>
-                • Sentinel continuously monitors market conditions — it does not
+                • Atlas continuously monitors market conditions — it does not
                 rely on fixed schedules.
               </li>
               <li>
@@ -96,33 +101,33 @@ export default function AtlasPage() {
               <span className="font-semibold text-slate-200">
                 You are always in control of when you take profit.
               </span>{" "}
-              Sentinel never sells assets or decides when to exit positions. You
+              Atlas never sells assets or decides when to exit positions. You
               choose if, when, and how positions are reduced or exited based on
               your own goals, timeline, and tax considerations.
             </p>
 
             <p className="mt-3 text-slate-400">
-              Sentinel helps you build positions with discipline — it does not
-              tell you when your journey is complete.
+              Atlas helps you build positions with discipline — it does not tell
+              you when your journey is complete.
             </p>
           </Section>
 
           <Section title="What Happens If You Sell">
             <p className="text-slate-300">
-              If you reduce or exit a position manually, Sentinel automatically
+              If you reduce or exit a position manually, Atlas automatically
               adjusts future allocations based on current holdings. No reset is
               required.
             </p>
 
             <p className="mt-3 text-slate-400">
-              Sentinel is designed to adapt to client decisions — not override
+              Atlas is designed to adapt to client decisions — not override
               them.
             </p>
           </Section>
 
           <Section title="Asset Selection & Liquidity">
             <p className="text-slate-300">
-              Sentinel allocates only among a small universe of large-cap,
+              Atlas allocates only among a small universe of large-cap,
               highly liquid digital assets. Liquidity is a core requirement so
               clients can exit efficiently when they choose.
             </p>
@@ -136,7 +141,7 @@ export default function AtlasPage() {
 
             <p className="mt-4 text-xs text-slate-500">
               Asset inclusion is reviewed periodically and adjusted
-              deliberately. Sentinel does not chase trends or react to
+              deliberately. Atlas does not chase trends or react to
               short-term price movement.
             </p>
           </Section>
@@ -144,7 +149,7 @@ export default function AtlasPage() {
           <Section title="Account Structure (Required)">
             <p className="text-slate-300">
               <span className="font-semibold text-slate-200">
-                Sentinel requires a separate exchange account or portfolio from
+                Atlas requires a separate exchange account or portfolio from
                 active execution systems.
               </span>{" "}
               This separation prevents risk bleed and preserves clean
@@ -152,7 +157,7 @@ export default function AtlasPage() {
             </p>
 
             <p className="mt-3 text-slate-400">
-              Sentinel manages long-term accumulation. Active execution systems
+              Atlas manages long-term accumulation. Active execution systems
               manage shorter-horizon opportunity. These systems never share
               funds.
             </p>
@@ -166,7 +171,7 @@ export default function AtlasPage() {
                   per month · flat pricing
                 </p>
                 <p className="mt-2 text-sm text-slate-400">
-                  Sentinel is designed to scale with any account size.
+                  Atlas is designed to scale with any account size.
                 </p>
               </div>
 
@@ -184,7 +189,7 @@ export default function AtlasPage() {
                   rel="noreferrer"
                   className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
                 >
-                  Start Sentinel
+                  Start Atlas
                 </a>
               </div>
             </div>
@@ -192,8 +197,8 @@ export default function AtlasPage() {
 
           <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
             <p className="text-xs text-slate-500">
-              Disclaimer: YieldCraft Sentinel is an automation and discipline
-              tool. It does not guarantee returns. Digital assets carry risk.
+              Disclaimer: Atlas by YieldCraft is an automation and discipline
+              system. It does not guarantee returns. Digital assets carry risk.
               Clients remain responsible for funding, withdrawals, and any
               manual selling decisions.
             </p>
