@@ -69,6 +69,26 @@ export default function AtlasPage() {
             Runs independently from Pulse — with a dedicated long-term account
             structure.
           </p>
+
+          <div className="mt-6 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
+            <p className="text-sm font-semibold text-emerald-300">
+              Who Atlas is for
+            </p>
+            <div className="mt-2 space-y-1 text-xs text-slate-300">
+              <p>• You want to build long-term crypto positions without staring at charts</p>
+              <p>• You value discipline over hype and short-term trades</p>
+              <p>• You prefer steady accumulation over trying to time the market</p>
+            </div>
+
+            <p className="mt-4 text-sm font-semibold text-rose-300">
+              Who Atlas is NOT for
+            </p>
+            <div className="mt-2 space-y-1 text-xs text-slate-300">
+              <p>• You want fast trades or daily action</p>
+              <p>• You expect instant results or immediate buys</p>
+              <p>• You want a system that sells automatically</p>
+            </div>
+          </div>
         </div>
 
         {/* Content */}
