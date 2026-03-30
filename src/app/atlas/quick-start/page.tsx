@@ -24,7 +24,7 @@ export default function AtlasQuickStartPage() {
             Atlas Quick Start (Order-Enforced)
           </p>
 
-          <h1 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
+          <h1 className="mt-4 text-4xl font-extrabold leading-tight md:text-5xl">
             Join → Subscribe → Coinbase (Atlas account) → Connect →{" "}
             <span className="text-sky-300">Confirm green lights</span>.
           </h1>
@@ -32,7 +32,8 @@ export default function AtlasQuickStartPage() {
           <p className="mt-6 text-lg text-slate-300">
             Atlas by YieldCraft is the long-term accumulation system.
             <br />
-            Use a separate Coinbase account or separate portfolio for Atlas only.
+            Use a separate Coinbase account or separate dedicated portfolio for
+            Atlas only.
           </p>
 
           <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 shadow-[0_0_60px_rgba(56,189,248,0.08)]">
@@ -59,22 +60,38 @@ export default function AtlasQuickStartPage() {
             </div>
 
             <div className="mt-5 grid gap-3 md:grid-cols-5">
-              <MiniStep title="1) Join" subtitle="Create account / login" active />
+              <MiniStep
+                title="1) Join"
+                subtitle="Create account / login"
+                active
+              />
               <MiniStep title="2) Atlas Plan" subtitle="Subscribe" />
-              <MiniStep title="3) Coinbase" subtitle="Separate Atlas account + API" />
-              <MiniStep title="4) Connect" subtitle="Paste Atlas keys securely" />
-              <MiniStep title="5) Dashboard" subtitle="Confirm Atlas lights" />
+              <MiniStep
+                title="3) Coinbase"
+                subtitle="Separate Atlas account + API"
+              />
+              <MiniStep
+                title="4) Connect"
+                subtitle="Paste Atlas keys securely"
+              />
+              <MiniStep
+                title="5) Dashboard"
+                subtitle="Confirm Atlas lights"
+              />
             </div>
 
             <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <p className="text-sm text-slate-200">
                 <span className="font-semibold text-slate-50">Important:</span>{" "}
                 Atlas is a long-term accumulation system. It is normal to see{" "}
-                <span className="text-sky-300 font-semibold">no immediate trade</span>.
+                <span className="text-sky-300 font-semibold">
+                  no immediate trade
+                </span>
+                .
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Your proof is the green lights + connection confirmation — not an
-                instant order.
+                Your proof is the green lights + connection confirmation — not
+                an instant order.
               </p>
             </div>
           </div>
@@ -92,9 +109,11 @@ export default function AtlasQuickStartPage() {
               </h2>
               <p className="mt-3 text-sm md:text-base text-slate-300">
                 Atlas is designed for slow, deliberate accumulation. It rewards{" "}
-                <span className="text-slate-50 font-semibold">consistency</span>,
-                not impulsive action. Fund the account, keep it separate from Pulse,
-                and let the long-horizon system do its job.
+                <span className="text-slate-50 font-semibold">
+                  consistency
+                </span>
+                , not impulsive action. Fund the account, keep it separate from
+                Pulse, and let the long-horizon system do its job.
               </p>
             </div>
 
@@ -122,7 +141,9 @@ export default function AtlasQuickStartPage() {
 
           <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
             <p className="text-sm text-slate-200">
-              <span className="font-semibold text-slate-50">How Atlas works:</span>{" "}
+              <span className="font-semibold text-slate-50">
+                How Atlas works:
+              </span>{" "}
               Atlas uses your available exchange balances, exchange minimum order
               rules, and long-horizon discipline logic.{" "}
               <span className="text-slate-50 font-semibold">
@@ -149,7 +170,8 @@ export default function AtlasQuickStartPage() {
             <div>
               <h3 className="text-lg font-semibold">Atlas status lights</h3>
               <p className="mt-1 text-sm text-slate-400">
-                This is what “ready” looks like even if Atlas has not bought yet.
+                This is what “ready” looks like even if Atlas has not bought
+                yet.
               </p>
             </div>
 
@@ -190,14 +212,16 @@ export default function AtlasQuickStartPage() {
           </div>
 
           <p className="mt-4 text-xs text-slate-500">
-            Atlas is a discipline system, not a promise of returns. Markets are risky
-            and results vary.
+            Atlas is a discipline system, not a promise of returns. Markets are
+            risky and results vary.
           </p>
         </section>
 
         {/* CONNECTION NOTICE */}
         <div className="mb-10 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
-          <p className="text-sm font-semibold text-sky-200">Connection check ≠ trade</p>
+          <p className="text-sm font-semibold text-sky-200">
+            Connection check ≠ trade
+          </p>
           <p className="mt-1 text-xs text-slate-300">
             When you connect your Atlas API key, YieldCraft performs a signed
             heartbeat check. This confirms access — it does{" "}
@@ -254,7 +278,7 @@ export default function AtlasQuickStartPage() {
             bullets={[
               "Do not use the same active trading account/API you use for Pulse",
               "Use a dedicated Coinbase account or separate portfolio for Atlas",
-              "Atlas API key must be View + Trade only (NO withdrawals)",
+              "Atlas API key must be View + Trade only with withdrawals OFF",
             ]}
             primary={{
               label: "I have my Atlas Coinbase ready",
@@ -271,7 +295,7 @@ export default function AtlasQuickStartPage() {
             comfort={{
               title: "Rules-of-thumb",
               lines: [
-                "Pulse account/API and Atlas account/API should stay separate.",
+                "Pulse account/API and Atlas account/API must stay separate.",
                 "Never enable withdrawals on API keys.",
                 "Keep Atlas simple: fund it, connect it, and let it accumulate.",
               ],
@@ -284,7 +308,8 @@ export default function AtlasQuickStartPage() {
             title="Create an Atlas Coinbase API key (View + Trade only)"
             bullets={[
               "Open Coinbase API settings from your Atlas account/portfolio",
-              "Create an API key with View + Trade only (NO withdrawals)",
+              "Create an API key with View + Trade enabled and withdrawals OFF",
+              "Make sure the Trade permission is checked before saving the key",
               "Copy two values: API key name + private key",
               "Fund the Atlas account/portfolio before expecting Atlas to operate",
             ]}
@@ -347,8 +372,9 @@ export default function AtlasQuickStartPage() {
         {/* SIMPLE FOOTER ACTIONS */}
         <div className="mt-12 rounded-3xl border border-slate-800 bg-slate-900/40 p-7">
           <h3 className="text-xl font-semibold">Need a shortcut?</h3>
-          <p className="mt-2 text-sm text-slate-400 max-w-3xl">
-            Use these only if you already know where you are in the Atlas steps above.
+          <p className="mt-2 max-w-3xl text-sm text-slate-400">
+            Use these only if you already know where you are in the Atlas steps
+            above.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-3">
@@ -495,7 +521,12 @@ function StepCard({
   number: number;
   title: string;
   bullets: string[];
-  primary: { label: string; href?: string; internalHref?: string; onClick?: () => void };
+  primary: {
+    label: string;
+    href?: string;
+    internalHref?: string;
+    onClick?: () => void;
+  };
   secondary?: { label: string; href?: string; internalHref?: string };
   tertiary?: { label: string; href?: string; internalHref?: string };
   comfort: { title: string; lines: string[] };
@@ -503,7 +534,7 @@ function StepCard({
   return (
     <div
       id={id}
-      className="rounded-3xl border border-slate-800 bg-slate-900/40 p-7 hover:border-sky-500/25 hover:shadow-[0_0_70px_rgba(56,189,248,0.08)] transition"
+      className="rounded-3xl border border-slate-800 bg-slate-900/40 p-7 transition hover:border-sky-500/25 hover:shadow-[0_0_70px_rgba(56,189,248,0.08)]"
     >
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="flex gap-4">
