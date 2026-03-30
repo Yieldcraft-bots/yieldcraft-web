@@ -168,12 +168,20 @@ export default function PricingPage() {
               <li>• Continuous monitoring</li>
               <li>• Liquidity-first asset universe</li>
               <li>• Client-controlled exits</li>
-              <li>• Separate long-term account structure</li>
+              <li>
+                • Requires a separate Coinbase account or portfolio (critical
+                for risk separation)
+              </li>
             </ul>
 
             <p className="mt-4 text-xs text-slate-500">
               Atlas adjusts future buys over time — it never auto-sells
               existing holdings.
+            </p>
+
+            <p className="mt-2 text-xs text-slate-500">
+              Use a dedicated Coinbase account or portfolio for Atlas. Do not
+              share it with Pulse or other active trading systems.
             </p>
           </div>
 
