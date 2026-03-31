@@ -259,7 +259,7 @@ function PlanCard({
 }) {
   return (
     <div
-      className={`relative flex h-full flex-col rounded-3xl border p-6 transition ${
+      className={`relative flex h-full flex-col rounded-3xl border p-6 transition duration-200 hover:-translate-y-1 hover:border-amber-400/40 hover:bg-slate-900/60 ${
         highlight
           ? "border-amber-500/50 bg-slate-900/60 shadow-[0_0_60px_rgba(251,191,36,0.25)]"
           : "border-slate-800 bg-slate-900/40"
@@ -283,7 +283,7 @@ function PlanCard({
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-auto inline-flex justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-amber-300"
+        className="mt-auto inline-flex justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-amber-300"
       >
         {cta}
       </a>
