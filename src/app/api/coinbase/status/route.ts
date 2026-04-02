@@ -5,6 +5,8 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type ProductScope = "pulse" | "atlas";
+
 function getBearer(req: Request): string | null {
   const h = req.headers.get("authorization") || req.headers.get("Authorization");
   if (!h) return null;
@@ -17,6 +19,10 @@ function json(status: number, body: any) {
     status,
     headers: { "Cache-Control": "no-store" },
   });
+}
+
+function normalizeScope(v: string | null): ProductScope {
+  return v?.toLowerCase() === "atlas" ? "atlas" : "pulse";
 }
 
 export async function GET(req: Request) {
@@ -35,29 +41,43 @@ export async function GET(req: Request) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Validate token and get user id
     const { data: userData, error: userErr } = await admin.auth.getUser(token);
     const userId = userData?.user?.id || null;
-    if (userErr || !userId) return json(401, { connected: false, reason: "not_authenticated" });
+    if (userErr || !userId) {
+      return json(401, { connected: false, reason: "not_authenticated" });
+    }
 
-    // 1) Do we have saved keys?
+    const reqUrl = new URL(req.url);
+    const productScope = normalizeScope(reqUrl.searchParams.get("product"));
+
     const { data: keys, error: keyError } = await admin
       .from("coinbase_keys")
-      .select("api_key_name, private_key, key_alg, updated_at")
+      .select("api_key_name, private_key, key_alg, updated_at, product_scope")
       .eq("user_id", userId)
+      .eq("product_scope", productScope)
       .maybeSingle();
 
     if (keyError || !keys) {
-      return json(200, { connected: false, reason: "no_keys" });
+      return json(200, {
+        connected: false,
+        reason: "no_keys",
+        product_scope: productScope,
+      });
     }
 
     if (!keys.api_key_name?.trim() || !keys.private_key?.trim()) {
-      return json(200, { connected: false, reason: "invalid_keys" });
+      return json(200, {
+        connected: false,
+        reason: "invalid_keys",
+        product_scope: productScope,
+      });
     }
 
-    // 2) REAL verification: call balances endpoint (hits Coinbase using user keys)
-    // This avoids duplicating JWT/signing logic here.
-    const probeUrl = new URL("/api/coinbase/balances", req.url).toString();
+    const probeUrl = new URL(
+      `/api/coinbase/balances?product=${productScope}`,
+      req.url
+    ).toString();
+
     const probeRes = await fetch(probeUrl, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${token}` },
@@ -76,6 +96,7 @@ export async function GET(req: Request) {
       return json(200, {
         connected: false,
         reason: "coinbase_auth_failed",
+        product_scope: productScope,
         status: probeJson?.status ?? probeRes.status,
         hint:
           probeJson?.error ||
@@ -88,6 +109,7 @@ export async function GET(req: Request) {
     return json(200, {
       connected: true,
       reason: "ok",
+      product_scope: productScope,
       alg: keys.key_alg ?? "unknown",
       updated_at: keys.updated_at ?? null,
     });
