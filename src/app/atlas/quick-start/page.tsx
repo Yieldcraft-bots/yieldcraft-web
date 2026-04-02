@@ -337,7 +337,10 @@ export default function AtlasQuickStartPage() {
               "Click Verify & Continue",
               "Confirm your Coinbase connection turns GREEN in YieldCraft",
             ]}
-            primary={{ label: "Open Connect Keys", internalHref: "/connect-keys" }}
+            primary={{
+              label: "Open Connect Keys",
+              internalHref: "/connect-keys?product=atlas",
+            }}
             comfort={{
               title: "Comfort check",
               lines: [
@@ -386,7 +389,7 @@ export default function AtlasQuickStartPage() {
             </Link>
 
             <Link
-              href="/connect-keys"
+              href="/connect-keys?product=atlas"
               className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
             >
               Connect Keys

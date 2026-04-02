@@ -3,10 +3,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 type Status = "idle" | "checking" | "verifying" | "ok" | "error";
+type ProductScope = "pulse" | "atlas";
 
 function isProbablyOrgPath(v: string) {
   return /^organizations\/.+/i.test((v || "").trim());
@@ -24,10 +25,18 @@ function fmtDate(v?: string | null) {
   return d.toLocaleString();
 }
 
+function normalizeScope(v: string | null): ProductScope {
+  return v?.toLowerCase() === "atlas" ? "atlas" : "pulse";
+}
+
 export default function ConnectKeysPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [label, setLabel] = useState("Coinbase");
+  const productScope = normalizeScope(searchParams.get("product"));
+  const isAtlas = productScope === "atlas";
+
+  const [label, setLabel] = useState(isAtlas ? "Atlas Coinbase" : "Pulse Coinbase");
   const [apiKeyName, setApiKeyName] = useState("");
   const [privateKeyPem, setPrivateKeyPem] = useState("");
   const [showPem, setShowPem] = useState(false);
@@ -35,13 +44,11 @@ export default function ConnectKeysPage() {
   const [status, setStatus] = useState<Status>("checking");
   const [errorMsg, setErrorMsg] = useState("");
 
-  // Server-known connection state (does NOT expose the private key)
   const [existingConnected, setExistingConnected] = useState(false);
   const [existingAlg, setExistingAlg] = useState<string | null>(null);
   const [existingUpdatedAt, setExistingUpdatedAt] = useState<string | null>(null);
   const [existingReason, setExistingReason] = useState<string | null>(null);
 
-  // If connected already, user must intentionally choose to replace
   const [replaceMode, setReplaceMode] = useState(false);
 
   const coinbaseApiUrl = "https://www.coinbase.com/settings/api";
@@ -53,7 +60,10 @@ export default function ConnectKeysPage() {
     return true;
   }, [apiKeyName, privateKeyPem]);
 
-  // Require login + check if keys already exist (so user doesn’t think they must re-paste)
+  useEffect(() => {
+    setLabel(isAtlas ? "Atlas Coinbase" : "Pulse Coinbase");
+  }, [isAtlas]);
+
   useEffect(() => {
     (async () => {
       setErrorMsg("");
@@ -68,7 +78,7 @@ export default function ConnectKeysPage() {
       }
 
       try {
-        const r = await fetch("/api/coinbase/status", {
+        const r = await fetch(`/api/coinbase/status?product=${productScope}`, {
           cache: "no-store",
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -82,11 +92,9 @@ export default function ConnectKeysPage() {
         setExistingUpdatedAt(j?.updated_at ?? null);
         setExistingReason(j?.reason ?? j?.error ?? null);
 
-        // If already connected, default to safe “view” mode (don’t show empty inputs)
         setReplaceMode(!connected);
         setStatus("idle");
       } catch {
-        // If status endpoint fails, we still allow user to paste keys
         setExistingConnected(false);
         setExistingAlg(null);
         setExistingUpdatedAt(null);
@@ -95,7 +103,7 @@ export default function ConnectKeysPage() {
         setStatus("idle");
       }
     })();
-  }, [router]);
+  }, [router, productScope]);
 
   async function verifyAndContinue() {
     setErrorMsg("");
@@ -134,7 +142,6 @@ export default function ConnectKeysPage() {
         return;
       }
 
-      // Save keys for THIS user (multi-user safe)
       const res = await fetch("/api/coinbase/save-keys", {
         method: "POST",
         headers: {
@@ -143,9 +150,10 @@ export default function ConnectKeysPage() {
         },
         cache: "no-store",
         body: JSON.stringify({
-          label: label.trim() || "Coinbase",
+          label: label.trim() || (isAtlas ? "Atlas Coinbase" : "Pulse Coinbase"),
           api_key_name: apiKeyName.trim(),
           private_key: privateKeyPem.trim(),
+          product_scope: productScope,
         }),
       });
 
@@ -161,8 +169,7 @@ export default function ConnectKeysPage() {
         return;
       }
 
-      // Immediately re-check status so UI reflects “stored” truth
-      const st = await fetch("/api/coinbase/status", {
+      const st = await fetch(`/api/coinbase/status?product=${productScope}`, {
         cache: "no-store",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -192,13 +199,19 @@ export default function ConnectKeysPage() {
 
   const ConnectedPanel = (
     <div className="mt-8 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-6">
-      <p className="font-semibold text-white">✅ Coinbase already connected</p>
+      <p className="font-semibold text-white">
+        ✅ {isAtlas ? "Atlas" : "Pulse"} Coinbase already connected
+      </p>
       <p className="mt-2 text-sm text-emerald-100/90">
-        You do <b>not</b> need to paste keys again. They are stored securely for your account.
+        You do <b>not</b> need to paste keys again. They are stored securely for this{" "}
+        {isAtlas ? "Atlas" : "Pulse"} connection.
       </p>
 
       <div className="mt-4 text-sm text-slate-200">
         <div className="flex flex-wrap gap-3">
+          <span className="rounded-full bg-white/10 px-3 py-1 text-xs">
+            scope: <span className="font-mono">{productScope}</span>
+          </span>
           <span className="rounded-full bg-white/10 px-3 py-1 text-xs">
             alg: <span className="font-mono">{existingAlg ?? "unknown"}</span>
           </span>
@@ -238,13 +251,18 @@ export default function ConnectKeysPage() {
   return (
     <main className="mx-auto max-w-4xl px-6 py-12">
       <section className="rounded-3xl border border-white/10 bg-white/[0.03] p-8 backdrop-blur-xl">
-        <h1 className="text-3xl font-bold text-white">Connect Coinbase in under 5 minutes</h1>
+        <h1 className="text-3xl font-bold text-white">
+          Connect {isAtlas ? "Atlas" : "Pulse"} Coinbase in under 5 minutes
+        </h1>
 
         <p className="mt-2 text-sm text-slate-400">
           Trading stays OFF until you explicitly enable it.
         </p>
 
-        {/* WHY */}
+        <div className="mt-3 inline-flex rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-xs font-semibold text-sky-200">
+          Product scope: {productScope}
+        </div>
+
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
           <p className="font-semibold text-white">Why this is safe</p>
           <ul className="mt-3 space-y-1 text-sm text-slate-300">
@@ -254,7 +272,6 @@ export default function ConnectKeysPage() {
           </ul>
         </div>
 
-        {/* If already connected, show the “you’re good” panel instead of empty inputs */}
         {status === "checking" ? (
           <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6 text-sm text-slate-300">
             Checking your saved connection…
@@ -263,7 +280,6 @@ export default function ConnectKeysPage() {
           ConnectedPanel
         ) : null}
 
-        {/* STEP 1 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
           <p className="font-semibold text-white">Step 1: Open Coinbase API settings</p>
 
@@ -277,7 +293,6 @@ export default function ConnectKeysPage() {
           </a>
         </div>
 
-        {/* STEP 2 */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
           <p className="font-semibold text-white">Step 2: Copy from Coinbase (IMPORTANT)</p>
 
@@ -304,7 +319,6 @@ export default function ConnectKeysPage() {
           </div>
         </div>
 
-        {/* STEP 3 (only show form if replacing or not yet connected) */}
         <div className="mt-8 rounded-xl border border-white/10 bg-white/[0.02] p-6">
           <p className="font-semibold text-white">Step 3: Paste below and verify</p>
 
@@ -319,7 +333,7 @@ export default function ConnectKeysPage() {
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               className="w-full rounded-xl bg-slate-950/40 px-4 py-3 text-white"
-              placeholder="Label (e.g. Coinbase)"
+              placeholder={`Label (e.g. ${isAtlas ? "Atlas Coinbase" : "Pulse Coinbase"})`}
             />
 
             <input
@@ -374,7 +388,7 @@ export default function ConnectKeysPage() {
           <Link href="/dashboard" className="text-slate-300 underline">
             ← Back to Dashboard
           </Link>
-          <Link href="/quick-start" className="text-slate-300 underline">
+          <Link href={isAtlas ? "/atlas/quick-start" : "/quick-start"} className="text-slate-300 underline">
             Quick Start →
           </Link>
         </div>
