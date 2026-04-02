@@ -440,7 +440,7 @@ export default function DashboardPage() {
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
-        const r = await fetch("/api/coinbase/balances", {
+        const r = await fetch("/api/coinbase/balances?product=pulse", {
           cache: "no-store",
           headers: { Authorization: `Bearer ${accessToken}` },
         });
