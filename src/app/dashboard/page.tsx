@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 type Conn = "ok" | "no" | "checking" | "warn";
+type Traffic = "green" | "yellow" | "red" | "unknown";
+type ProductScope = "pulse" | "atlas";
 
 type TradeGates = {
   COINBASE_TRADING_ENABLED: boolean;
@@ -34,7 +36,7 @@ type Entitlements = {
 type BalancesOk = {
   ok: true;
   exchange: "coinbase";
-  product_scope?: "pulse" | "atlas";
+  product_scope?: ProductScope;
   available_usd: number | null;
   btc_balance: number | null;
   btc_price_usd: number | null;
@@ -47,50 +49,37 @@ type BalancesErr = {
   ok: false;
   error: string;
   status?: number;
-  details?: any;
-  product_scope?: "pulse" | "atlas";
+  details?: unknown;
+  product_scope?: ProductScope;
 };
 
 type BalancesResp = BalancesOk | BalancesErr;
 
-type Traffic = "green" | "yellow" | "red" | "unknown";
-
-/**
- * PnL Snapshot response (from /api/pnl-snapshot proxy).
- * Keep it loose so backend can evolve without breaking UI.
- */
 type PnlSnapshotOk = {
   ok: true;
   runId?: string;
   since?: string;
   symbol?: string;
   user_id?: string;
-
   rows_scanned?: number;
   rows_usable?: number;
   limit?: number;
-
   total_trades?: number;
   wins?: number;
   losses?: number;
   win_rate?: number;
-
   avg_win_bps?: number;
   avg_loss_bps?: number;
-
   net_realized_pnl_usd?: number;
   current_open_pnl_usd?: number;
-
   open_position_base?: number;
   open_cost_usd?: number;
   spot_price?: number | null;
   open_avg_price?: number | null;
-
   starting_equity_usd?: number;
   running_equity_usd?: number;
   max_drawdown_pct?: number;
-
-  debug?: any;
+  debug?: unknown;
 };
 
 type PnlSnapshotErr = {
@@ -101,11 +90,21 @@ type PnlSnapshotErr = {
 
 type PnlSnapshotResp = PnlSnapshotOk | PnlSnapshotErr;
 
-function truthy(v: any) {
+type PillTone = "green" | "yellow" | "red" | "neutral";
+
+type PillModalState = {
+  open: boolean;
+  title: string;
+  tone: PillTone;
+  body: string[];
+  footer?: string[];
+};
+
+function truthy(v: unknown) {
   return v === true || v === "true" || v === 1 || v === "1";
 }
 
-function normEmail(v: any): string {
+function normEmail(v: unknown): string {
   return (typeof v === "string" ? v : "").trim().toLowerCase();
 }
 
@@ -139,11 +138,42 @@ function safeCount(n: number | null | undefined) {
   return typeof n === "number" && Number.isFinite(n) ? n : 0;
 }
 
-function pnlPerfStateFromSnapshot(pnlSnapshot: PnlSnapshotResp | null, pnlConn: Conn): Conn {
-  if (!pnlSnapshot || (pnlSnapshot as any).ok !== true) return pnlConn;
+function getConnPill(state: Conn) {
+  if (state === "checking") {
+    return {
+      wrap: "bg-slate-800/60 text-slate-200 ring-1 ring-slate-700",
+      dot: "bg-slate-300",
+      label: "CHECKING",
+    };
+  }
 
-  const ok = pnlSnapshot as PnlSnapshotOk;
-  const realized = ok.net_realized_pnl_usd ?? 0;
+  if (state === "ok") {
+    return {
+      wrap: "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30",
+      dot: "bg-emerald-400",
+      label: "GREEN",
+    };
+  }
+
+  if (state === "warn") {
+    return {
+      wrap: "bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/30",
+      dot: "bg-amber-400",
+      label: "YELLOW",
+    };
+  }
+
+  return {
+    wrap: "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
+    dot: "bg-rose-400",
+    label: "RED",
+  };
+}
+
+function pnlPerfStateFromSnapshot(pnlSnapshot: PnlSnapshotResp | null, pnlConn: Conn): Conn {
+  if (!pnlSnapshot || pnlSnapshot.ok !== true) return pnlConn;
+
+  const realized = pnlSnapshot.net_realized_pnl_usd ?? 0;
 
   if (realized > 0) return "ok";
   if (realized < -1) return "no";
@@ -151,10 +181,152 @@ function pnlPerfStateFromSnapshot(pnlSnapshot: PnlSnapshotResp | null, pnlConn: 
   return "warn";
 }
 
+function StatusButton({
+  label,
+  pill,
+  onClick,
+  title,
+}: {
+  label: string;
+  pill: ReturnType<typeof getConnPill>;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const className = [
+    "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+    pill.wrap,
+  ].join(" ");
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className} title={title}>
+        <span className={["h-2 w-2 rounded-full", pill.dot].join(" ")} />
+        {label}: {pill.label}
+      </button>
+    );
+  }
+
+  return (
+    <span className={className} title={title}>
+      <span className={["h-2 w-2 rounded-full", pill.dot].join(" ")} />
+      {label}: {pill.label}
+    </span>
+  );
+}
+
+function BalanceCard({
+  title,
+  scopeLabel,
+  conn,
+  balances,
+  tone = "slate",
+  onOpenDetails,
+  emptyMessage,
+  subtitle,
+}: {
+  title: string;
+  scopeLabel: string;
+  conn: Conn;
+  balances: BalancesResp | null;
+  tone?: "slate" | "indigo";
+  onOpenDetails: () => void;
+  emptyMessage: string;
+  subtitle?: string;
+}) {
+  const p = getConnPill(conn);
+
+  const boxClass =
+    tone === "indigo"
+      ? "mt-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-4 text-xs text-indigo-100"
+      : "mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300";
+
+  const labelClass = tone === "indigo" ? "text-indigo-200/80" : "text-slate-400";
+  const valueClass = tone === "indigo" ? "font-mono text-indigo-50" : "font-mono text-slate-100";
+  const footClass = tone === "indigo" ? "text-indigo-200/70" : "text-slate-500";
+
+  if (conn !== "ok" || !balances || balances.ok !== true) {
+    const msg =
+      balances && balances.ok === false ? String(balances.error || emptyMessage) : emptyMessage;
+
+    return (
+      <div className={boxClass}>
+        <div className="flex items-center justify-between">
+          <p className="font-semibold">{title}</p>
+          <button
+            type="button"
+            onClick={onOpenDetails}
+            className={[
+              "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+              p.wrap,
+            ].join(" ")}
+            title="Click for details"
+          >
+            <span className={["h-2 w-2 rounded-full", p.dot].join(" ")} />
+            {scopeLabel}: {p.label}
+          </button>
+        </div>
+
+        <p className="mt-1 opacity-90">{msg}</p>
+        {subtitle ? <p className="mt-2 opacity-80">{subtitle}</p> : null}
+      </div>
+    );
+  }
+
+  const ok = balances;
+
+  return (
+    <div className={boxClass}>
+      <div className="flex items-center justify-between">
+        <p className="font-semibold">{title}</p>
+        <button
+          type="button"
+          onClick={onOpenDetails}
+          className={[
+            "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+            p.wrap,
+          ].join(" ")}
+          title="Click for details"
+        >
+          <span className={["h-2 w-2 rounded-full", p.dot].join(" ")} />
+          {scopeLabel}: {p.label}
+        </button>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <div className="flex justify-between">
+          <span className={labelClass}>Available USD</span>
+          <span className={valueClass}>{fmtMoney(ok.available_usd)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className={labelClass}>BTC Balance</span>
+          <span className={valueClass}>{fmtNum(ok.btc_balance, 8)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className={labelClass}>BTC Price</span>
+          <span className={valueClass}>{fmtMoney(ok.btc_price_usd)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className={labelClass}>Equity (USD)</span>
+          <span className={valueClass}>{fmtMoney(ok.equity_usd)}</span>
+        </div>
+
+        <p className={`mt-2 text-[11px] ${footClass}`}>
+          Last check:{" "}
+          <span className={tone === "indigo" ? "text-indigo-50" : "text-slate-300"}>
+            {ok.last_checked_at ?? ok.updated_at ?? "—"}
+          </span>
+          <span className={tone === "indigo" ? "ml-2 text-indigo-200/50" : "ml-2 text-slate-600"}>
+            · Auto-refresh: 60s
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
-
   const AUTO_REFRESH_MS = 60_000;
   const intervalRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
@@ -167,8 +339,8 @@ export default function DashboardPage() {
 
   const [accountConn, setAccountConn] = useState<Conn>("checking");
   const [healthConn, setHealthConn] = useState<Conn>("checking");
-
   const [planConn, setPlanConn] = useState<Conn>("checking");
+
   const [entitlements, setEntitlements] = useState<Entitlements>({
     pulse: false,
     recon: false,
@@ -183,15 +355,13 @@ export default function DashboardPage() {
     mode?: string;
   }>({ authOk: false });
 
-  // Pulse connection state
   const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
   const [userCoinbaseMeta, setUserCoinbaseMeta] = useState<{ alg?: string }>({});
+  const [coinbaseStatusRaw, setCoinbaseStatusRaw] = useState<unknown>(null);
 
-  // Pulse balances
   const [balancesConn, setBalancesConn] = useState<Conn>("checking");
   const [balances, setBalances] = useState<BalancesResp | null>(null);
 
-  // Atlas balances
   const [atlasBalancesConn, setAtlasBalancesConn] = useState<Conn>("checking");
   const [atlasBalances, setAtlasBalances] = useState<BalancesResp | null>(null);
 
@@ -209,29 +379,108 @@ export default function DashboardPage() {
     rawStatus?: string;
   }>({ traffic: "unknown", blocking: [], next_steps: [] });
 
-  const [coinbaseStatusRaw, setCoinbaseStatusRaw] = useState<any>(null);
-  const [lastCheck, setLastCheck] = useState<Date | null>(null);
-
   const [pnlConn, setPnlConn] = useState<Conn>("checking");
   const [pnlSnapshot, setPnlSnapshot] = useState<PnlSnapshotResp | null>(null);
 
-  const [pillModal, setPillModal] = useState<{
-    open: boolean;
-    title: string;
-    tone: "green" | "yellow" | "red" | "neutral";
-    body: string[];
-    footer?: string[];
-  }>({ open: false, title: "", tone: "neutral", body: [] });
+  const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
-  const openPillModal = (p: {
-    title: string;
-    tone: "green" | "yellow" | "red" | "neutral";
-    body: string[];
-    footer?: string[];
-  }) => setPillModal({ open: true, ...p });
+  const [pillModal, setPillModal] = useState<PillModalState>({
+    open: false,
+    title: "",
+    tone: "neutral",
+    body: [],
+  });
 
-  const closePillModal = () =>
+  const openPillModal = (p: Omit<PillModalState, "open">) => {
+    setPillModal({ open: true, ...p });
+  };
+
+  const closePillModal = () => {
     setPillModal({ open: false, title: "", tone: "neutral", body: [] });
+  };
+
+  const fmt = useCallback((d: Date) => {
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }, []);
+
+  const isAdmin = useMemo(() => {
+    const target = "dk@dwklein.com";
+    return normEmail(userEmail) === target || normEmail(displayEmail) === target;
+  }, [userEmail, displayEmail]);
+
+  const openBalanceModal = useCallback(
+    (title: string, conn: Conn, data: BalancesResp | null, footer: string[]) => {
+      if (conn !== "ok" || !data || data.ok !== true) {
+        const msg = data && data.ok === false ? String(data.error || "Unable to fetch balances.") : "Unable to fetch balances.";
+
+        openPillModal({
+          title,
+          tone: "red",
+          body: [msg],
+          footer,
+        });
+        return;
+      }
+
+      openPillModal({
+        title,
+        tone: "green",
+        body: [
+          `Available USD: ${fmtMoney(data.available_usd)}`,
+          `BTC Balance: ${fmtNum(data.btc_balance, 8)}`,
+          `BTC Price: ${fmtMoney(data.btc_price_usd)}`,
+          `Equity (USD): ${fmtMoney(data.equity_usd)}`,
+          `Last check: ${data.last_checked_at ?? data.updated_at ?? "—"}`,
+        ],
+        footer,
+      });
+    },
+    []
+  );
+
+  const coinbaseClickMsg = useCallback(() => {
+    if (userCoinbaseConn === "ok") {
+      return `✅ Pulse Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
+    }
+
+    const r = (coinbaseStatusRaw ?? {}) as Record<string, unknown>;
+    const reason = String(r?.reason ?? r?.error ?? "unknown");
+
+    if (reason === "no_keys") {
+      return "❌ No Pulse keys saved yet.\n\nNext: Go to Connect Pulse Keys and complete the flow.";
+    }
+
+    if (reason === "invalid_keys") {
+      return "❌ Pulse keys are saved but invalid.\n\nNext: Re-paste using Coinbase copy icons and verify again.";
+    }
+
+    if (reason === "not_authenticated") {
+      return "❌ Not signed in.\n\nNext: Log out and back in, then re-check.";
+    }
+
+    return `❌ Pulse Coinbase not connected.\nReason: ${reason}\n\nNext: Go to Connect Pulse Keys and verify again.`;
+  }, [coinbaseStatusRaw, userCoinbaseConn, userCoinbaseMeta.alg]);
+
+  const tradingClickMsg = useCallback(() => {
+    if (tradeExplain.traffic === "green") return "✅ Trading status verified (per-user).";
+    if (tradeExplain.traffic === "yellow") return "🟡 Trading is locked in safe mode. This is not a failure.";
+
+    const blocks = tradeExplain.blocking.length
+      ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}`
+      : "";
+
+    const steps = tradeExplain.next_steps.length
+      ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}`
+      : "";
+
+    return `⚠️ Trading is not green.${blocks}${steps}`;
+  }, [tradeExplain]);
 
   const runCheck = useCallback(async () => {
     if (inFlightRef.current) return;
@@ -265,13 +514,13 @@ export default function DashboardPage() {
         setAccountConn(ok ? "ok" : "no");
 
         const email = session?.user?.email ?? null;
+        const meta = (session?.user as { user_metadata?: Record<string, unknown> } | null)?.user_metadata;
         const metaEmail =
-          (session?.user as any)?.user_metadata?.email ??
-          (session?.user as any)?.user_metadata?.preferred_email ??
-          null;
+          (typeof meta?.email === "string" ? meta.email : null) ??
+          (typeof meta?.preferred_email === "string" ? meta.preferred_email : null);
 
-        setUserEmail(email as string | null);
-        setDisplayEmail((metaEmail ?? email) as string | null);
+        setUserEmail(email);
+        setDisplayEmail(metaEmail ?? email);
 
         if (!ok) {
           setHealthConn("no");
@@ -310,13 +559,16 @@ export default function DashboardPage() {
 
       try {
         const res = await fetch("/api/health", { cache: "no-store" });
-        let json: any = null;
+        let json: unknown = null;
+
         try {
           json = await res.json();
         } catch {
           json = null;
         }
-        const healthy = !!(res.ok && json && json.ok === true);
+
+        const healthy = !!(res.ok && typeof json === "object" && json && (json as { ok?: boolean }).ok === true);
+
         if (!mountedRef.current) return;
         setHealthConn(healthy ? "ok" : "no");
       } catch {
@@ -332,32 +584,33 @@ export default function DashboardPage() {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        let j: any = null;
+        let j: unknown = null;
         try {
           j = await r.json();
         } catch {
           j = null;
         }
 
-        const ok = !!(r.ok && j && j.ok === true && j.entitlements);
+        const ok =
+          !!r.ok &&
+          typeof j === "object" &&
+          j !== null &&
+          (j as { ok?: boolean; entitlements?: unknown }).ok === true &&
+          !!(j as { entitlements?: unknown }).entitlements;
 
         if (!mountedRef.current) return;
 
         if (ok) {
+          const ent = (j as { entitlements: Partial<Entitlements> }).entitlements;
           setEntitlements({
-            pulse: !!j.entitlements.pulse,
-            recon: !!j.entitlements.recon,
-            atlas: !!j.entitlements.atlas,
-            created_at: j.entitlements.created_at ?? null,
+            pulse: !!ent.pulse,
+            recon: !!ent.recon,
+            atlas: !!ent.atlas,
+            created_at: ent.created_at ?? null,
           });
           setPlanConn("ok");
         } else {
-          setEntitlements({
-            pulse: false,
-            recon: false,
-            atlas: false,
-            created_at: null,
-          });
+          setEntitlements({ pulse: false, recon: false, atlas: false, created_at: null });
           setPlanConn("no");
         }
       } catch {
@@ -376,10 +629,8 @@ export default function DashboardPage() {
           j = null;
         }
 
-        const authOk = !!(
-          j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200
-        );
-        const ok = !!(r.ok && j && j.ok === true && authOk);
+        const authOk = !!(j?.coinbase_auth?.ok === true && (j?.coinbase_auth?.status ?? 0) >= 200);
+        const ok = !!(r.ok && j?.ok === true && authOk);
 
         if (!mountedRef.current) return;
 
@@ -396,9 +647,8 @@ export default function DashboardPage() {
         setPlatformEngineMeta({ authOk: false });
       }
 
-      // Pulse key status only
       let userKeysOk = false;
-      let userAlg: string | undefined = undefined;
+      let userAlg: string | undefined;
 
       try {
         if (!accessToken) throw new Error("missing_access_token");
@@ -408,7 +658,7 @@ export default function DashboardPage() {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        let j: any = null;
+        let j: unknown = null;
         try {
           j = await r.json();
         } catch {
@@ -417,8 +667,9 @@ export default function DashboardPage() {
 
         setCoinbaseStatusRaw(j);
 
-        userKeysOk = !!(r.ok && j && j.connected === true);
-        userAlg = j?.alg;
+        const jr = (j ?? {}) as { connected?: boolean; alg?: string };
+        userKeysOk = !!(r.ok && jr.connected === true);
+        userAlg = jr.alg;
 
         if (!mountedRef.current) return;
 
@@ -429,10 +680,8 @@ export default function DashboardPage() {
         setCoinbaseStatusRaw({ connected: false, error: "network_error" });
         setUserCoinbaseConn("no");
         setUserCoinbaseMeta({});
-        userKeysOk = false;
       }
 
-      // Pulse balances
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
@@ -441,7 +690,7 @@ export default function DashboardPage() {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        let j: any = null;
+        let j: unknown = null;
         try {
           j = await r.json();
         } catch {
@@ -450,30 +699,31 @@ export default function DashboardPage() {
 
         if (!mountedRef.current) return;
 
-        if (r.ok && j && j.ok === true) {
+        const parsed = j as Partial<BalancesOk & BalancesErr>;
+
+        if (r.ok && parsed && parsed.ok === true) {
           setBalancesConn("ok");
-          setBalances(j as BalancesOk);
+          setBalances(parsed as BalancesOk);
         } else {
           setBalancesConn("no");
           setBalances({
             ok: false,
-            error: j?.error || "balances_failed",
-            status: j?.status || r.status,
-            details: j?.details,
+            error: String(parsed?.error ?? "balances_failed"),
+            status: parsed?.status ?? r.status,
+            details: parsed?.details,
             product_scope: "pulse",
-          } as BalancesErr);
+          });
         }
-      } catch (e: any) {
+      } catch (e) {
         if (!mountedRef.current) return;
         setBalancesConn("no");
         setBalances({
           ok: false,
-          error: e?.message || "balances_failed",
+          error: e instanceof Error ? e.message : "balances_failed",
           product_scope: "pulse",
-        } as BalancesErr);
+        });
       }
 
-      // Atlas balances
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
@@ -482,7 +732,7 @@ export default function DashboardPage() {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        let j: any = null;
+        let j: unknown = null;
         try {
           j = await r.json();
         } catch {
@@ -491,27 +741,29 @@ export default function DashboardPage() {
 
         if (!mountedRef.current) return;
 
-        if (r.ok && j && j.ok === true) {
+        const parsed = j as Partial<BalancesOk & BalancesErr>;
+
+        if (r.ok && parsed && parsed.ok === true) {
           setAtlasBalancesConn("ok");
-          setAtlasBalances(j as BalancesOk);
+          setAtlasBalances(parsed as BalancesOk);
         } else {
           setAtlasBalancesConn("no");
           setAtlasBalances({
             ok: false,
-            error: j?.error || "atlas_balances_failed",
-            status: j?.status || r.status,
-            details: j?.details,
+            error: String(parsed?.error ?? "atlas_balances_failed"),
+            status: parsed?.status ?? r.status,
+            details: parsed?.details,
             product_scope: "atlas",
-          } as BalancesErr);
+          });
         }
-      } catch (e: any) {
+      } catch (e) {
         if (!mountedRef.current) return;
         setAtlasBalancesConn("no");
         setAtlasBalances({
           ok: false,
-          error: e?.message || "atlas_balances_failed",
+          error: e instanceof Error ? e.message : "atlas_balances_failed",
           product_scope: "atlas",
-        } as BalancesErr);
+        });
       }
 
       try {
@@ -528,14 +780,20 @@ export default function DashboardPage() {
           body: JSON.stringify({ action: "status", user_id: sessionUserId }),
         });
 
-        let j: any = null;
+        let j: unknown = null;
         try {
           j = await r.json();
         } catch {
           j = null;
         }
 
-        const gates = j?.gates || {};
+        const jr = (j ?? {}) as {
+          ok?: boolean;
+          status?: string;
+          gates?: Partial<Record<keyof TradeGates, unknown>>;
+        };
+
+        const gates = jr.gates ?? {};
         const parsed: TradeGates = {
           COINBASE_TRADING_ENABLED: truthy(gates.COINBASE_TRADING_ENABLED),
           PULSE_TRADE_ARMED: truthy(gates.PULSE_TRADE_ARMED),
@@ -546,8 +804,7 @@ export default function DashboardPage() {
 
         setTradeGates(parsed);
 
-        const ok = !!(r.ok && j && j.ok === true);
-
+        const ok = !!(r.ok && jr.ok === true);
         const blocking: string[] = [];
         const next_steps: string[] = [];
 
@@ -562,14 +819,12 @@ export default function DashboardPage() {
         } else {
           if (!userKeysOk) {
             blocking.push("No Pulse Coinbase keys found for your account.");
-            next_steps.push("Click “Connect Keys” and finish the Pulse Coinbase connection.");
+            next_steps.push("Click Connect Pulse Keys and finish the Pulse Coinbase connection.");
             traffic = "red";
             connState = "no";
           } else if (!parsed.COINBASE_TRADING_ENABLED) {
             blocking.push("Trading is disabled by platform admin.");
-            next_steps.push(
-              "Admin must enable COINBASE_TRADING_ENABLED=true in Production env and redeploy."
-            );
+            next_steps.push("Admin must enable COINBASE_TRADING_ENABLED=true in Production env and redeploy.");
             traffic = "red";
             connState = "no";
           } else if (!parsed.PULSE_TRADE_ARMED || !parsed.LIVE_ALLOWED) {
@@ -594,7 +849,7 @@ export default function DashboardPage() {
           traffic,
           blocking,
           next_steps,
-          rawStatus: j?.status,
+          rawStatus: jr.status,
         });
       } catch {
         if (!mountedRef.current) return;
@@ -616,7 +871,7 @@ export default function DashboardPage() {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
 
-        let j: any = null;
+        let j: unknown = null;
         try {
           j = await r.json();
         } catch {
@@ -625,21 +880,26 @@ export default function DashboardPage() {
 
         if (!mountedRef.current) return;
 
-        if (r.ok && j && j.ok === true) {
+        const parsed = j as Partial<PnlSnapshotOk & PnlSnapshotErr>;
+
+        if (r.ok && parsed && parsed.ok === true) {
           setPnlConn("ok");
-          setPnlSnapshot(j as PnlSnapshotOk);
+          setPnlSnapshot(parsed as PnlSnapshotOk);
         } else {
           const errMsg =
-            j?.error ||
+            parsed?.error ||
             (r.status === 404 ? "pnl_endpoint_missing" : `pnl_failed_http_${r.status}`);
 
           setPnlConn("no");
-          setPnlSnapshot({ ok: false, error: String(errMsg), runId: j?.runId } as PnlSnapshotErr);
+          setPnlSnapshot({ ok: false, error: String(errMsg), runId: parsed?.runId });
         }
-      } catch (e: any) {
+      } catch (e) {
         if (!mountedRef.current) return;
         setPnlConn("no");
-        setPnlSnapshot({ ok: false, error: e?.message || "pnl_failed" } as PnlSnapshotErr);
+        setPnlSnapshot({
+          ok: false,
+          error: e instanceof Error ? e.message : "pnl_failed",
+        });
       }
 
       if (!mountedRef.current) return;
@@ -652,6 +912,7 @@ export default function DashboardPage() {
   useEffect(() => {
     mountedRef.current = true;
     runCheck();
+
     return () => {
       mountedRef.current = false;
     };
@@ -668,8 +929,11 @@ export default function DashboardPage() {
     const start = () => {
       clear();
       if (document.visibilityState !== "visible") return;
+
       intervalRef.current = window.setInterval(() => {
-        if (document.visibilityState === "visible") runCheck();
+        if (document.visibilityState === "visible") {
+          runCheck();
+        }
       }, AUTO_REFRESH_MS);
     };
 
@@ -687,20 +951,6 @@ export default function DashboardPage() {
     };
   }, [runCheck]);
 
-  const fmt = (d: Date) =>
-    d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-
-  const isAdmin = useMemo(() => {
-    const target = "dk@dwklein.com";
-    return normEmail(userEmail) === target || normEmail(displayEmail) === target;
-  }, [userEmail, displayEmail]);
-
   if (checking) {
     return (
       <main className="min-h-screen bg-slate-950 text-slate-50 flex items-center justify-center">
@@ -717,56 +967,19 @@ export default function DashboardPage() {
     );
   }
 
-  const pill = (state: Conn) => {
-    if (state === "checking") {
-      return {
-        wrap: "bg-slate-800/60 text-slate-200 ring-1 ring-slate-700",
-        dot: "bg-slate-300",
-        label: "CHECKING",
-      };
-    }
-    if (state === "ok") {
-      return {
-        wrap: "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/30",
-        dot: "bg-emerald-400",
-        label: "GREEN",
-      };
-    }
-    if (state === "warn") {
-      return {
-        wrap: "bg-amber-500/20 text-amber-200 ring-1 ring-amber-500/30",
-        dot: "bg-amber-400",
-        label: "YELLOW",
-      };
-    }
-    return {
-      wrap: "bg-rose-500/20 text-rose-200 ring-1 ring-rose-500/30",
-      dot: "bg-rose-400",
-      label: "RED",
-    };
-  };
-
-  const accP = pill(accountConn);
-  const healthP = pill(healthConn);
-  const planP = pill(planConn);
-  const platP = pill(platformEngineConn);
-  const userKeysP = pill(userCoinbaseConn);
-  const balP = pill(balancesConn);
-  const atlasBalP = pill(atlasBalancesConn);
-  const tradeP = pill(tradeConn);
+  const accP = getConnPill(accountConn);
+  const healthP = getConnPill(healthConn);
+  const planP = getConnPill(planConn);
+  const platP = getConnPill(platformEngineConn);
+  const userKeysP = getConnPill(userCoinbaseConn);
+  const balP = getConnPill(balancesConn);
+  const atlasBalP = getConnPill(atlasBalancesConn);
+  const tradeP = getConnPill(tradeConn);
 
   const pnlPerfState = pnlPerfStateFromSnapshot(pnlSnapshot, pnlConn);
-  const pnlP = pill(pnlPerfState);
+  const pnlP = getConnPill(pnlPerfState);
 
-  const armedLabel = tradeGates.LIVE_ALLOWED
-    ? {
-        title: "HOT (Live Allowed)",
-        tone: "text-rose-200",
-      }
-    : {
-        title: "LOCKED (Safe)",
-        tone: "text-amber-200",
-      };
+  const shownEmail = displayEmail ?? userEmail ?? null;
 
   const planText =
     planConn === "ok"
@@ -775,217 +988,20 @@ export default function DashboardPage() {
         }`
       : "Unable to read plan entitlements (check login / RLS / API).";
 
-  const shownEmail = displayEmail ?? userEmail ?? null;
+  const armedLabel = tradeGates.LIVE_ALLOWED
+    ? { title: "HOT (Live Allowed)", tone: "text-rose-200" }
+    : { title: "LOCKED (Safe)", tone: "text-amber-200" };
 
-  const balancesBox = (() => {
-    const pulseBox = (() => {
-      if (userCoinbaseConn !== "ok") {
-        return (
-          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
-            <p className="font-semibold text-slate-100">Pulse Coinbase</p>
-            <p className="mt-1 text-slate-400">Connect Pulse keys to view balances.</p>
-          </div>
-        );
-      }
-
-      if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
-        const msg =
-          (balances as any)?.error ||
-          (balances as any)?.details ||
-          "Unable to fetch Pulse balances.";
-
-        return (
-          <div className="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 p-4 text-xs text-rose-100">
-            <div className="flex items-center justify-between">
-              <p className="font-semibold">Pulse Coinbase</p>
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
-                  balP.wrap,
-                ].join(" ")}
-              >
-                <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
-                PULSE: {balP.label}
-              </span>
-            </div>
-            <p className="mt-1 opacity-90">{String(msg)}</p>
-          </div>
-        );
-      }
-
-      const ok = balances as BalancesOk;
-
-      return (
-        <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
-          <div className="flex items-center justify-between">
-            <p className="font-semibold text-slate-100">Pulse Coinbase</p>
-            <button
-              type="button"
-              onClick={() => {
-                openPillModal({
-                  title: "PULSE BALANCES",
-                  tone: balancesConn === "ok" ? "green" : "red",
-                  body: [
-                    `Available USD: ${fmtMoney(ok.available_usd)}`,
-                    `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
-                    `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
-                    `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
-                    `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
-                  ],
-                  footer: ["Pulse balances are read-only and server-verified."],
-                });
-              }}
-              className={[
-                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
-                balP.wrap,
-              ].join(" ")}
-              title="Click for details"
-            >
-              <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
-              PULSE: {balP.label}
-            </button>
-          </div>
-
-          <div className="mt-3 space-y-2">
-            <div className="flex justify-between">
-              <span className="text-slate-400">Available USD</span>
-              <span className="font-mono text-slate-100">{fmtMoney(ok.available_usd)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">BTC Balance</span>
-              <span className="font-mono text-slate-100">{fmtNum(ok.btc_balance, 8)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">BTC Price</span>
-              <span className="font-mono text-slate-100">{fmtMoney(ok.btc_price_usd)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-400">Equity (USD)</span>
-              <span className="font-mono text-slate-100">{fmtMoney(ok.equity_usd)}</span>
-            </div>
-
-            <p className="mt-2 text-[11px] text-slate-500">
-              Last check:{" "}
-              <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
-              <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
-            </p>
-          </div>
-        </div>
-      );
-    })();
-
-    const atlasBox = (() => {
-      if (!entitlements.atlas && !isAdmin) return null;
-
-      if (atlasBalancesConn !== "ok" || !atlasBalances || (atlasBalances as any).ok !== true) {
-        const msg =
-          (atlasBalances as any)?.error ||
-          (atlasBalances as any)?.details ||
-          "Unable to fetch Atlas balances.";
-
-        return (
-          <div className="mt-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-4 text-xs text-indigo-100">
-            <div className="flex items-center justify-between">
-              <p className="font-semibold">Atlas Coinbase</p>
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
-                  atlasBalP.wrap,
-                ].join(" ")}
-              >
-                <span className={["h-2 w-2 rounded-full", atlasBalP.dot].join(" ")} />
-                ATLAS: {atlasBalP.label}
-              </span>
-            </div>
-            <p className="mt-1 opacity-90">{String(msg)}</p>
-            <p className="mt-2 text-indigo-200/80">Separate account. Uses its own Coinbase keys.</p>
-          </div>
-        );
-      }
-
-      const ok = atlasBalances as BalancesOk;
-
-      return (
-        <div className="mt-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-4 text-xs text-indigo-100">
-          <div className="flex items-center justify-between">
-            <p className="font-semibold">Atlas Coinbase</p>
-            <button
-              type="button"
-              onClick={() => {
-                openPillModal({
-                  title: "ATLAS BALANCES",
-                  tone: atlasBalancesConn === "ok" ? "green" : "red",
-                  body: [
-                    `Available USD: ${fmtMoney(ok.available_usd)}`,
-                    `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
-                    `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
-                    `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
-                    `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
-                  ],
-                  footer: ["Atlas balances are read-only and separate from Pulse."],
-                });
-              }}
-              className={[
-                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
-                atlasBalP.wrap,
-              ].join(" ")}
-              title="Click for details"
-            >
-              <span className={["h-2 w-2 rounded-full", atlasBalP.dot].join(" ")} />
-              ATLAS: {atlasBalP.label}
-            </button>
-          </div>
-
-          <div className="mt-3 space-y-2">
-            <div className="flex justify-between">
-              <span className="text-indigo-200/80">Available USD</span>
-              <span className="font-mono text-indigo-50">{fmtMoney(ok.available_usd)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-indigo-200/80">BTC Balance</span>
-              <span className="font-mono text-indigo-50">{fmtNum(ok.btc_balance, 8)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-indigo-200/80">BTC Price</span>
-              <span className="font-mono text-indigo-50">{fmtMoney(ok.btc_price_usd)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-indigo-200/80">Equity (USD)</span>
-              <span className="font-mono text-indigo-50">{fmtMoney(ok.equity_usd)}</span>
-            </div>
-
-            <p className="mt-2 text-[11px] text-indigo-200/70">
-              Last check:{" "}
-              <span className="text-indigo-50">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
-              <span className="ml-2 text-indigo-200/50">· Auto-refresh: 60s</span>
-            </p>
-          </div>
-        </div>
-      );
-    })();
-
-    return (
-      <>
-        {pulseBox}
-        {atlasBox}
-      </>
-    );
-  })();
+  const canSeeAtlas = entitlements.atlas || isAdmin;
+  const canSeePulsePnl = entitlements.pulse || isAdmin;
 
   const pnlBox = (() => {
-    const allowed = entitlements.pulse || isAdmin;
-
-    if (!allowed) {
+    if (!canSeePulsePnl) {
       return (
         <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
           <div className="flex items-center justify-between">
             <p className="font-semibold text-slate-100">PnL Snapshot</p>
-            <span
-              className={[
-                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
-                "bg-slate-800/60 text-slate-200 ring-1 ring-slate-700",
-              ].join(" ")}
-            >
+            <span className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold bg-slate-800/60 text-slate-200 ring-1 ring-slate-700">
               <span className="h-2 w-2 rounded-full bg-slate-300" />
               LOCKED
             </span>
@@ -995,10 +1011,11 @@ export default function DashboardPage() {
       );
     }
 
-    if (pnlConn !== "ok" || !pnlSnapshot || (pnlSnapshot as any).ok !== true) {
+    if (pnlConn !== "ok" || !pnlSnapshot || pnlSnapshot.ok !== true) {
       const err =
-        (pnlSnapshot as any)?.error ||
-        "Unable to load PnL Snapshot. If this is new, confirm /api/pnl-snapshot exists.";
+        pnlSnapshot && pnlSnapshot.ok === false
+          ? pnlSnapshot.error
+          : "Unable to load PnL Snapshot. Confirm /api/pnl-snapshot exists.";
 
       return (
         <div className="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 p-4 text-xs text-rose-100">
@@ -1014,7 +1031,7 @@ export default function DashboardPage() {
                     String(err),
                     "This page calls /api/pnl-snapshot (server). It must be authenticated and must not expose secrets.",
                   ],
-                  footer: ["Fix backend route if missing; then refresh."],
+                  footer: ["Fix the backend route if missing, then refresh."],
                 });
               }}
               className={[
@@ -1033,8 +1050,7 @@ export default function DashboardPage() {
       );
     }
 
-    const ok = pnlSnapshot as PnlSnapshotOk;
-
+    const ok = pnlSnapshot;
     const realized = ok.net_realized_pnl_usd ?? 0;
     const runningEq = ok.running_equity_usd ?? 0;
     const wins = safeCount(ok.wins);
@@ -1043,7 +1059,7 @@ export default function DashboardPage() {
     const winLossDisplay = `${wins}/${losses}`;
     const tradeLineDisplay = `${totalTrades} (${winLossDisplay})`;
 
-    const tone =
+    const tone: PillTone =
       realized > 0 ? "green" : realized < -1 ? "red" : realized < 0 ? "yellow" : "neutral";
 
     return (
@@ -1056,14 +1072,7 @@ export default function DashboardPage() {
             onClick={() => {
               openPillModal({
                 title: "PNL SNAPSHOT",
-                tone:
-                  tone === "green"
-                    ? "green"
-                    : tone === "red"
-                    ? "red"
-                    : tone === "yellow"
-                    ? "yellow"
-                    : "neutral",
+                tone,
                 body: [
                   `Realized PnL: ${fmtSignedMoney(ok.net_realized_pnl_usd)}`,
                   `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
@@ -1133,31 +1142,6 @@ export default function DashboardPage() {
     );
   })();
 
-  const coinbaseClickMsg = () => {
-    if (userCoinbaseConn === "ok")
-      return `✅ Pulse Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
-
-    const r = coinbaseStatusRaw || {};
-    const reason = r?.reason || r?.error || "unknown";
-    if (reason === "no_keys") return "❌ No Pulse keys saved yet.\n\nNext: Go to Connect Keys and click Verify & Continue.";
-    if (reason === "invalid_keys")
-      return "❌ Pulse keys saved but invalid.\n\nNext: Re-paste using Coinbase copy icons (don’t drag-select).";
-    if (reason === "not_authenticated") return "❌ Not signed in.\n\nNext: Log out and back in, then re-check.";
-    return `❌ Pulse Coinbase not connected.\nReason: ${reason}\n\nNext: Go to Connect Keys and click Verify & Continue.`;
-  };
-
-  const tradingClickMsg = () => {
-    if (tradeExplain.traffic === "green") return "✅ Trading status verified (per-user).";
-    if (tradeExplain.traffic === "yellow") return "🟡 Trading is locked (safe mode). Not an error.";
-    const blocks = tradeExplain.blocking.length
-      ? `\n\nBlocking:\n• ${tradeExplain.blocking.join("\n• ")}`
-      : "";
-    const steps = tradeExplain.next_steps.length
-      ? `\n\nNext:\n• ${tradeExplain.next_steps.join("\n• ")}`
-      : "";
-    return `⚠️ Trading is not green.${blocks}${steps}`;
-  };
-
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       {pillModal.open && (
@@ -1225,9 +1209,7 @@ export default function DashboardPage() {
 
             <div className="mt-4 space-y-2 text-sm text-slate-200">
               {pillModal.body.map((line, idx) => (
-                <p key={idx} className="text-slate-200">
-                  {line}
-                </p>
+                <p key={idx}>{line}</p>
               ))}
             </div>
 
@@ -1250,41 +1232,18 @@ export default function DashboardPage() {
                 Dashboard · Control Panel (Read-Only)
               </span>
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  accP.wrap,
-                ].join(" ")}
-              >
-                <span className={["h-2 w-2 rounded-full", accP.dot].join(" ")} />
-                SIGNED IN: {accP.label}
-              </span>
+              <StatusButton label="SIGNED IN" pill={accP} />
+              <StatusButton label="HEALTH" pill={healthP} />
+              <StatusButton label="PLAN ACCESS" pill={planP} />
 
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  healthP.wrap,
-                ].join(" ")}
-              >
-                <span className={["h-2 w-2 rounded-full", healthP.dot].join(" ")} />
-                HEALTH: {healthP.label}
-              </span>
-
-              <span
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  planP.wrap,
-                ].join(" ")}
-              >
-                <span className={["h-2 w-2 rounded-full", planP.dot].join(" ")} />
-                PLAN ACCESS: {planP.label}
-              </span>
-
-              <button
-                type="button"
+              <StatusButton
+                label="YOUR COINBASE"
+                pill={userKeysP}
                 onClick={() => {
-                  const msg = coinbaseClickMsg();
-                  const lines = msg.split("\n").map((s) => s.trim()).filter(Boolean);
+                  const lines = coinbaseClickMsg()
+                    .split("\n")
+                    .map((s) => s.trim())
+                    .filter(Boolean);
 
                   openPillModal({
                     title: "YOUR COINBASE",
@@ -1293,112 +1252,39 @@ export default function DashboardPage() {
                     footer: ["This is your Pulse connection status (server-verified)."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  userKeysP.wrap,
-                ].join(" ")}
                 title="Click for details"
-              >
-                <span className={["h-2 w-2 rounded-full", userKeysP.dot].join(" ")} />
-                YOUR COINBASE: {userKeysP.label}
-              </button>
+              />
 
-              <button
-                type="button"
-                onClick={() => {
-                  if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
-                    const msg =
-                      (balances as any)?.error ||
-                      (balances as any)?.details ||
-                      "Unable to fetch Pulse balances.";
+              <StatusButton
+                label="PULSE BALANCES"
+                pill={balP}
+                onClick={() =>
+                  openBalanceModal("PULSE BALANCES", balancesConn, balances, [
+                    "Pulse balances are read-only and server-verified.",
+                  ])
+                }
+                title="Click for details"
+              />
 
-                    openPillModal({
-                      title: "PULSE BALANCES",
-                      tone: "red",
-                      body: [String(msg)],
-                      footer: ["Pulse balances are read-only and server-verified."],
-                    });
-                    return;
+              {canSeeAtlas && (
+                <StatusButton
+                  label="ATLAS BALANCES"
+                  pill={atlasBalP}
+                  onClick={() =>
+                    openBalanceModal("ATLAS BALANCES", atlasBalancesConn, atlasBalances, [
+                      "Atlas balances are read-only and separate from Pulse.",
+                    ])
                   }
-
-                  const ok = balances as BalancesOk;
-
-                  openPillModal({
-                    title: "PULSE BALANCES",
-                    tone: "green",
-                    body: [
-                      `Available USD: ${fmtMoney(ok.available_usd)}`,
-                      `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
-                      `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
-                      `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
-                      `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
-                    ],
-                    footer: ["Pulse balances are read-only and server-verified."],
-                  });
-                }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  balP.wrap,
-                ].join(" ")}
-                title="Click for details"
-              >
-                <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
-                PULSE BALANCES: {balP.label}
-              </button>
-
-              {(entitlements.atlas || isAdmin) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (
-                      atlasBalancesConn !== "ok" ||
-                      !atlasBalances ||
-                      (atlasBalances as any).ok !== true
-                    ) {
-                      const msg =
-                        (atlasBalances as any)?.error ||
-                        (atlasBalances as any)?.details ||
-                        "Unable to fetch Atlas balances.";
-
-                      openPillModal({
-                        title: "ATLAS BALANCES",
-                        tone: "red",
-                        body: [String(msg)],
-                        footer: ["Atlas balances are read-only and separate from Pulse."],
-                      });
-                      return;
-                    }
-
-                    const ok = atlasBalances as BalancesOk;
-
-                    openPillModal({
-                      title: "ATLAS BALANCES",
-                      tone: "green",
-                      body: [
-                        `Available USD: ${fmtMoney(ok.available_usd)}`,
-                        `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
-                        `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
-                        `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
-                        `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
-                      ],
-                      footer: ["Atlas balances are read-only and separate from Pulse."],
-                    });
-                  }}
-                  className={[
-                    "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                    atlasBalP.wrap,
-                  ].join(" ")}
                   title="Click for details"
-                >
-                  <span className={["h-2 w-2 rounded-full", atlasBalP.dot].join(" ")} />
-                  ATLAS BALANCES: {atlasBalP.label}
-                </button>
+                />
               )}
 
-              <button
-                type="button"
+              <StatusButton
+                label="PLATFORM ENGINE"
+                pill={platP}
                 onClick={() => {
                   const ok = platformEngineConn === "ok" && platformEngineMeta.authOk;
+
                   openPillModal({
                     title: "PLATFORM ENGINE",
                     tone: ok ? "green" : "red",
@@ -1409,24 +1295,20 @@ export default function DashboardPage() {
                       `Auth status: ${platformEngineMeta.authStatus ?? "—"}`,
                       `Mode: ${platformEngineMeta.mode ?? "—"}`,
                     ],
-                    footer: ["This is the platform’s server connectivity (not your personal keys)."],
+                    footer: ["This is the platform server connectivity, not your personal keys."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  platP.wrap,
-                ].join(" ")}
                 title="Click for details"
-              >
-                <span className={["h-2 w-2 rounded-full", platP.dot].join(" ")} />
-                PLATFORM ENGINE: {platP.label}
-              </button>
+              />
 
-              <button
-                type="button"
+              <StatusButton
+                label="TRADING STATUS"
+                pill={tradeP}
                 onClick={() => {
-                  const msg = tradingClickMsg();
-                  const lines = msg.split("\n").map((s) => s.trim()).filter(Boolean);
+                  const lines = tradingClickMsg()
+                    .split("\n")
+                    .map((s) => s.trim())
+                    .filter(Boolean);
 
                   openPillModal({
                     title: "TRADING STATUS",
@@ -1440,35 +1322,21 @@ export default function DashboardPage() {
                     footer: ["This is per-user Pulse status (server-verified)."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  tradeP.wrap,
-                ].join(" ")}
-                title={
-                  tradeExplain.traffic === "green"
-                    ? "Trading status verified (per-user)."
-                    : tradeExplain.traffic === "yellow"
-                    ? "Trading is locked (safe mode)."
-                    : tradeExplain.blocking.length
-                    ? `${tradeExplain.blocking.join(" ")} ${
-                        tradeExplain.next_steps.length ? "Next: " + tradeExplain.next_steps.join(" ") : ""
-                      }`
-                    : "Trading status unavailable."
-                }
-              >
-                <span className={["h-2 w-2 rounded-full", tradeP.dot].join(" ")} />
-                TRADING STATUS: {tradeP.label}
-              </button>
+                title="Click for details"
+              />
 
-              <button
-                type="button"
+              <StatusButton
+                label="PNL"
+                pill={pnlP}
                 onClick={() => {
-                  if (!pnlSnapshot || (pnlSnapshot as any).ok !== true) {
+                  if (!pnlSnapshot || pnlSnapshot.ok !== true) {
                     openPillModal({
                       title: "PNL SNAPSHOT",
                       tone: "red",
                       body: [
-                        (pnlSnapshot as any)?.error || "PnL snapshot not available yet.",
+                        pnlSnapshot && pnlSnapshot.ok === false
+                          ? pnlSnapshot.error
+                          : "PnL snapshot not available yet.",
                         "This dashboard calls /api/pnl-snapshot (server). No secrets are exposed to the browser.",
                       ],
                       footer: ["If missing, add the server proxy route and refresh."],
@@ -1476,44 +1344,30 @@ export default function DashboardPage() {
                     return;
                   }
 
-                  const ok = pnlSnapshot as PnlSnapshotOk;
-                  const wins = safeCount(ok.wins);
-                  const losses = safeCount(ok.losses);
+                  const wins = safeCount(pnlSnapshot.wins);
+                  const losses = safeCount(pnlSnapshot.losses);
+                  const realized = pnlSnapshot.net_realized_pnl_usd ?? 0;
 
                   openPillModal({
                     title: "PNL SNAPSHOT",
-                    tone:
-                      (ok.net_realized_pnl_usd ?? 0) > 0
-                        ? "green"
-                        : (ok.net_realized_pnl_usd ?? 0) < -1
-                        ? "red"
-                        : (ok.net_realized_pnl_usd ?? 0) < 0
-                        ? "yellow"
-                        : "neutral",
+                    tone: realized > 0 ? "green" : realized < -1 ? "red" : realized < 0 ? "yellow" : "neutral",
                     body: [
-                      `Realized PnL: ${fmtSignedMoney(ok.net_realized_pnl_usd)}`,
-                      `Open PnL: ${fmtSignedMoney(ok.current_open_pnl_usd)}`,
+                      `Realized PnL: ${fmtSignedMoney(pnlSnapshot.net_realized_pnl_usd)}`,
+                      `Open PnL: ${fmtSignedMoney(pnlSnapshot.current_open_pnl_usd)}`,
                       `W/L: ${wins}/${losses}`,
-                      `Trades: ${safeCount(ok.total_trades)}`,
-                      `Win rate: ${typeof ok.win_rate === "number" ? `${ok.win_rate}%` : "—"}`,
-                      `Running Equity: ${fmtMoney(ok.running_equity_usd)}`,
-                      `Max drawdown: ${fmtPct(ok.max_drawdown_pct)}`,
-                      `Position: ${fmtNum(ok.open_position_base, 8)} BTC`,
-                      `Spot: ${fmtMoney(ok.spot_price ?? null)} · Avg entry: ${fmtMoney(ok.open_avg_price ?? null)}`,
-                      `Since: ${ok.since ?? "—"}`,
+                      `Trades: ${safeCount(pnlSnapshot.total_trades)}`,
+                      `Win rate: ${typeof pnlSnapshot.win_rate === "number" ? `${pnlSnapshot.win_rate}%` : "—"}`,
+                      `Running Equity: ${fmtMoney(pnlSnapshot.running_equity_usd)}`,
+                      `Max drawdown: ${fmtPct(pnlSnapshot.max_drawdown_pct)}`,
+                      `Position: ${fmtNum(pnlSnapshot.open_position_base, 8)} BTC`,
+                      `Spot: ${fmtMoney(pnlSnapshot.spot_price ?? null)} · Avg entry: ${fmtMoney(pnlSnapshot.open_avg_price ?? null)}`,
+                      `Since: ${pnlSnapshot.since ?? "—"}`,
                     ],
                     footer: ["Read-only · computed from trade logs."],
                   });
                 }}
-                className={[
-                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
-                  pnlP.wrap,
-                ].join(" ")}
                 title="Click for details"
-              >
-                <span className={["h-2 w-2 rounded-full", pnlP.dot].join(" ")} />
-                PNL: {pnlP.label}
-              </button>
+              />
 
               <span className="text-xs text-slate-400">
                 Last check: <span className="text-slate-200">{lastCheck ? fmt(lastCheck) : "—"}</span>
@@ -1543,6 +1397,7 @@ export default function DashboardPage() {
                 <h1 className="text-3xl font-bold leading-tight sm:text-4xl">
                   Your system hub — <span className="text-sky-300">simple, clear, and safe.</span>
                 </h1>
+
                 <p className="mt-3 max-w-2xl text-sm text-slate-300 sm:text-base">
                   Follow the setup path once. After that, the system runs on rules — not emotions.
                 </p>
@@ -1554,12 +1409,23 @@ export default function DashboardPage() {
                   >
                     Connect Pulse Keys
                   </Link>
+
+                  {canSeeAtlas && (
+                    <Link
+                      href="/connect-keys?product=atlas"
+                      className="rounded-full bg-indigo-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-indigo-400/25 hover:bg-indigo-300"
+                    >
+                      Connect Atlas Keys
+                    </Link>
+                  )}
+
                   <Link
                     href="/atlas/quick-start"
                     className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
                   >
                     Atlas Quick Start
                   </Link>
+
                   <Link
                     href="/pricing"
                     className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
@@ -1581,18 +1447,84 @@ export default function DashboardPage() {
                   Trading is <span className={armedLabel.tone}>{armedLabel.title}</span> unless you explicitly arm it.
                 </div>
 
-                {balancesBox}
+                <div className="mt-4 grid gap-4">
+                  <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-100">Pulse / Recon</p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          Active trading system and live decision layer.
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1 text-[11px] font-semibold text-slate-200">
+                        {entitlements.pulse ? "PULSE ON" : "PULSE OFF"} · {entitlements.recon ? "RECON ON" : "RECON OFF"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {canSeeAtlas && (
+                    <div className="rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-indigo-50">Atlas</p>
+                          <p className="mt-1 text-xs text-indigo-200/80">
+                            Long-term allocation track with separate Coinbase scope.
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-indigo-400/25 bg-indigo-400/10 px-3 py-1 text-[11px] font-semibold text-indigo-100">
+                          {entitlements.atlas ? "ATLAS ON" : "ATLAS OFF"}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <BalanceCard
+                  title="Pulse Coinbase"
+                  scopeLabel="PULSE"
+                  conn={balancesConn}
+                  balances={balances}
+                  onOpenDetails={() =>
+                    openBalanceModal("PULSE BALANCES", balancesConn, balances, [
+                      "Pulse balances are read-only and server-verified.",
+                    ])
+                  }
+                  emptyMessage="Connect Pulse keys to view balances."
+                />
+
+                {canSeeAtlas && (
+                  <BalanceCard
+                    title="Atlas Coinbase"
+                    scopeLabel="ATLAS"
+                    conn={atlasBalancesConn}
+                    balances={atlasBalances}
+                    tone="indigo"
+                    onOpenDetails={() =>
+                      openBalanceModal("ATLAS BALANCES", atlasBalancesConn, atlasBalances, [
+                        "Atlas balances are read-only and separate from Pulse.",
+                      ])
+                    }
+                    emptyMessage="Connect Atlas keys to view balances."
+                    subtitle="Separate account. Uses its own Coinbase keys."
+                  />
+                )}
+
                 {pnlBox}
 
                 <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
                   <p className="font-semibold text-slate-100">Important</p>
                   <p className="mt-1 text-slate-400">
-                    “PLATFORM ENGINE” = server connectivity (us).<br />
-                    “YOUR COINBASE” = your Pulse setup completion (server-verified).<br />
-                    “PULSE BALANCES” = read-only Pulse account snapshot (server-verified).<br />
-                    “ATLAS BALANCES” = read-only Atlas account snapshot (server-verified).<br />
-                    “TRADING STATUS” = per-user pulse-trade status (server-verified).<br />
-                    “PNL” = user-scoped snapshot (read-only; server computed).
+                    “PLATFORM ENGINE” = server connectivity.
+                    <br />
+                    “YOUR COINBASE” = your Pulse setup completion.
+                    <br />
+                    “PULSE BALANCES” = read-only Pulse account snapshot.
+                    <br />
+                    “ATLAS BALANCES” = read-only Atlas account snapshot.
+                    <br />
+                    “TRADING STATUS” = per-user Pulse status.
+                    <br />
+                    “PNL” = user-scoped snapshot computed server-side.
                   </p>
                 </div>
 
