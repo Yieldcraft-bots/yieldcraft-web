@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type ProductScope = "pulse" | "atlas";
+type ScopeRequest = ProductScope | "all";
 
 function getBearer(req: Request): string | null {
   const h = req.headers.get("authorization") || req.headers.get("Authorization");
@@ -21,8 +22,9 @@ function json(status: number, body: any) {
   });
 }
 
-function normalizeScope(v: string | null): ProductScope {
-  return v?.toLowerCase() === "atlas" ? "atlas" : "pulse";
+function normalizeScope(v: string | null): ScopeRequest {
+  if (!v) return "all";
+  return v.toLowerCase() === "atlas" ? "atlas" : "pulse";
 }
 
 export async function GET(req: Request) {
@@ -50,12 +52,32 @@ export async function GET(req: Request) {
     const reqUrl = new URL(req.url);
     const productScope = normalizeScope(reqUrl.searchParams.get("product"));
 
-    const { data: keys, error: keyError } = await admin
-      .from("coinbase_keys")
-      .select("api_key_name, private_key, key_alg, updated_at, product_scope")
-      .eq("user_id", userId)
-      .eq("product_scope", productScope)
-      .maybeSingle();
+    let keys: any = null;
+    let keyError: any = null;
+
+    if (productScope === "all") {
+      const result = await admin
+        .from("coinbase_keys")
+        .select("api_key_name, private_key, key_alg, updated_at, product_scope")
+        .eq("user_id", userId)
+        .in("product_scope", ["pulse", "atlas"])
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      keys = result.data;
+      keyError = result.error;
+    } else {
+      const result = await admin
+        .from("coinbase_keys")
+        .select("api_key_name, private_key, key_alg, updated_at, product_scope")
+        .eq("user_id", userId)
+        .eq("product_scope", productScope)
+        .maybeSingle();
+
+      keys = result.data;
+      keyError = result.error;
+    }
 
     if (keyError || !keys) {
       return json(200, {
@@ -69,12 +91,14 @@ export async function GET(req: Request) {
       return json(200, {
         connected: false,
         reason: "invalid_keys",
-        product_scope: productScope,
+        product_scope: keys.product_scope ?? productScope,
       });
     }
 
+    const effectiveScope = (keys.product_scope as ProductScope | null) ?? "pulse";
+
     const probeUrl = new URL(
-      `/api/coinbase/balances?product=${productScope}`,
+      `/api/coinbase/balances?product=${effectiveScope}`,
       req.url
     ).toString();
 
@@ -96,7 +120,7 @@ export async function GET(req: Request) {
       return json(200, {
         connected: false,
         reason: "coinbase_auth_failed",
-        product_scope: productScope,
+        product_scope: effectiveScope,
         status: probeJson?.status ?? probeRes.status,
         hint:
           probeJson?.error ||
@@ -109,7 +133,7 @@ export async function GET(req: Request) {
     return json(200, {
       connected: true,
       reason: "ok",
-      product_scope: productScope,
+      product_scope: effectiveScope,
       alg: keys.key_alg ?? "unknown",
       updated_at: keys.updated_at ?? null,
     });
