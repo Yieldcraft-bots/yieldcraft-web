@@ -417,7 +417,8 @@ export default function DashboardPage() {
   const openBalanceModal = useCallback(
     (title: string, conn: Conn, data: BalancesResp | null, footer: string[]) => {
       if (conn !== "ok" || !data || data.ok !== true) {
-        const msg = data && data.ok === false ? String(data.error || "Unable to fetch balances.") : "Unable to fetch balances.";
+        const msg =
+          data && data.ok === false ? String(data.error || "Unable to fetch balances.") : "Unable to fetch balances.";
 
         openPillModal({
           title,
@@ -567,7 +568,12 @@ export default function DashboardPage() {
           json = null;
         }
 
-        const healthy = !!(res.ok && typeof json === "object" && json && (json as { ok?: boolean }).ok === true);
+        const healthy = !!(
+          res.ok &&
+          typeof json === "object" &&
+          json &&
+          (json as { ok?: boolean }).ok === true
+        );
 
         if (!mountedRef.current) return;
         setHealthConn(healthy ? "ok" : "no");
@@ -699,9 +705,9 @@ export default function DashboardPage() {
 
         if (!mountedRef.current) return;
 
-        const parsed = j as Partial<BalancesOk & BalancesErr>;
+        const parsed = j as (Partial<BalancesOk> & Partial<BalancesErr>) | null;
 
-        if (r.ok && parsed && parsed.ok === true) {
+        if (r.ok && parsed?.ok === true) {
           setBalancesConn("ok");
           setBalances(parsed as BalancesOk);
         } else {
@@ -741,9 +747,9 @@ export default function DashboardPage() {
 
         if (!mountedRef.current) return;
 
-        const parsed = j as Partial<BalancesOk & BalancesErr>;
+        const parsed = j as (Partial<BalancesOk> & Partial<BalancesErr>) | null;
 
-        if (r.ok && parsed && parsed.ok === true) {
+        if (r.ok && parsed?.ok === true) {
           setAtlasBalancesConn("ok");
           setAtlasBalances(parsed as BalancesOk);
         } else {
@@ -880,9 +886,9 @@ export default function DashboardPage() {
 
         if (!mountedRef.current) return;
 
-        const parsed = j as Partial<PnlSnapshotOk & PnlSnapshotErr>;
+        const parsed = j as (Partial<PnlSnapshotOk> & Partial<PnlSnapshotErr>) | null;
 
-        if (r.ok && parsed && parsed.ok === true) {
+        if (r.ok && parsed?.ok === true) {
           setPnlConn("ok");
           setPnlSnapshot(parsed as PnlSnapshotOk);
         } else {
@@ -1350,7 +1356,8 @@ export default function DashboardPage() {
 
                   openPillModal({
                     title: "PNL SNAPSHOT",
-                    tone: realized > 0 ? "green" : realized < -1 ? "red" : realized < 0 ? "yellow" : "neutral",
+                    tone:
+                      realized > 0 ? "green" : realized < -1 ? "red" : realized < 0 ? "yellow" : "neutral",
                     body: [
                       `Realized PnL: ${fmtSignedMoney(pnlSnapshot.net_realized_pnl_usd)}`,
                       `Open PnL: ${fmtSignedMoney(pnlSnapshot.current_open_pnl_usd)}`,
