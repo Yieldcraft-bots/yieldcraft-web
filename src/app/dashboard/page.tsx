@@ -1,4 +1,3 @@
-// src/app/dashboard/page.tsx
 "use client";
 
 import Link from "next/link";
@@ -35,6 +34,7 @@ type Entitlements = {
 type BalancesOk = {
   ok: true;
   exchange: "coinbase";
+  product_scope?: "pulse" | "atlas";
   available_usd: number | null;
   btc_balance: number | null;
   btc_price_usd: number | null;
@@ -48,6 +48,7 @@ type BalancesErr = {
   error: string;
   status?: number;
   details?: any;
+  product_scope?: "pulse" | "atlas";
 };
 
 type BalancesResp = BalancesOk | BalancesErr;
@@ -144,7 +145,6 @@ function pnlPerfStateFromSnapshot(pnlSnapshot: PnlSnapshotResp | null, pnlConn: 
   const ok = pnlSnapshot as PnlSnapshotOk;
   const realized = ok.net_realized_pnl_usd ?? 0;
 
-  // Tiny negative = caution, not disaster
   if (realized > 0) return "ok";
   if (realized < -1) return "no";
   if (realized < 0) return "warn";
@@ -155,7 +155,6 @@ export default function DashboardPage() {
   const router = useRouter();
   const mountedRef = useRef(true);
 
-  // Auto-refresh safety
   const AUTO_REFRESH_MS = 60_000;
   const intervalRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
@@ -184,15 +183,18 @@ export default function DashboardPage() {
     mode?: string;
   }>({ authOk: false });
 
-  // ✅ multi-user (server-verified)
+  // Pulse connection state
   const [userCoinbaseConn, setUserCoinbaseConn] = useState<Conn>("checking");
   const [userCoinbaseMeta, setUserCoinbaseMeta] = useState<{ alg?: string }>({});
 
-  // ✅ Balances (read-only)
+  // Pulse balances
   const [balancesConn, setBalancesConn] = useState<Conn>("checking");
   const [balances, setBalances] = useState<BalancesResp | null>(null);
 
-  // ✅ Trading status pill (now supports YELLOW for locked)
+  // Atlas balances
+  const [atlasBalancesConn, setAtlasBalancesConn] = useState<Conn>("checking");
+  const [atlasBalances, setAtlasBalances] = useState<BalancesResp | null>(null);
+
   const [tradeConn, setTradeConn] = useState<Conn>("checking");
   const [tradeGates, setTradeGates] = useState<TradeGates>({
     COINBASE_TRADING_ENABLED: false,
@@ -200,7 +202,6 @@ export default function DashboardPage() {
     LIVE_ALLOWED: false,
   });
 
-  // ✅ Explain payload (used for click + title)
   const [tradeExplain, setTradeExplain] = useState<{
     traffic: Traffic;
     blocking: string[];
@@ -208,16 +209,12 @@ export default function DashboardPage() {
     rawStatus?: string;
   }>({ traffic: "unknown", blocking: [], next_steps: [] });
 
-  // ✅ store coinbase/status raw so we can show exact reason on click
   const [coinbaseStatusRaw, setCoinbaseStatusRaw] = useState<any>(null);
-
   const [lastCheck, setLastCheck] = useState<Date | null>(null);
 
-  // ✅ PnL Snapshot (read-only, user-scoped)
   const [pnlConn, setPnlConn] = useState<Conn>("checking");
   const [pnlSnapshot, setPnlSnapshot] = useState<PnlSnapshotResp | null>(null);
 
-  // ✅ UI-only: pill details modal (no trading impact)
   const [pillModal, setPillModal] = useState<{
     open: boolean;
     title: string;
@@ -247,6 +244,7 @@ export default function DashboardPage() {
     setPlatformEngineConn("checking");
     setUserCoinbaseConn("checking");
     setBalancesConn("checking");
+    setAtlasBalancesConn("checking");
     setTradeConn("checking");
     setPnlConn("checking");
     setLastCheck(new Date());
@@ -254,7 +252,6 @@ export default function DashboardPage() {
     let accessToken: string | null = null;
 
     try {
-      // 1) Auth session (Supabase)
       let sessionUserId: string | null = null;
 
       try {
@@ -282,6 +279,7 @@ export default function DashboardPage() {
           setPlatformEngineConn("no");
           setUserCoinbaseConn("no");
           setBalancesConn("no");
+          setAtlasBalancesConn("no");
           setTradeConn("no");
           setPnlConn("no");
           setChecking(false);
@@ -302,6 +300,7 @@ export default function DashboardPage() {
         setPlatformEngineConn("no");
         setUserCoinbaseConn("no");
         setBalancesConn("no");
+        setAtlasBalancesConn("no");
         setTradeConn("no");
         setPnlConn("no");
         setChecking(false);
@@ -309,7 +308,6 @@ export default function DashboardPage() {
         return;
       }
 
-      // 2) Health probe
       try {
         const res = await fetch("/api/health", { cache: "no-store" });
         let json: any = null;
@@ -326,7 +324,6 @@ export default function DashboardPage() {
         setHealthConn("no");
       }
 
-      // 3) Plan entitlements
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
@@ -369,7 +366,6 @@ export default function DashboardPage() {
         setPlanConn("no");
       }
 
-      // 4) PLATFORM ENGINE keys probe (server env Coinbase auth)
       try {
         const r = await fetch("/api/pulse-heartbeat", { cache: "no-store" });
 
@@ -400,14 +396,14 @@ export default function DashboardPage() {
         setPlatformEngineMeta({ authOk: false });
       }
 
-      // ✅ 5) USER Coinbase status (multi-user, server-verified)
+      // Pulse key status only
       let userKeysOk = false;
       let userAlg: string | undefined = undefined;
 
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
-        const r = await fetch("/api/coinbase/status", {
+        const r = await fetch("/api/coinbase/status?product=pulse", {
           cache: "no-store",
           headers: { Authorization: `Bearer ${accessToken}` },
         });
@@ -436,7 +432,7 @@ export default function DashboardPage() {
         userKeysOk = false;
       }
 
-      // ✅ 5b) USER Balances (read-only, server-verified)
+      // Pulse balances
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
@@ -464,6 +460,7 @@ export default function DashboardPage() {
             error: j?.error || "balances_failed",
             status: j?.status || r.status,
             details: j?.details,
+            product_scope: "pulse",
           } as BalancesErr);
         }
       } catch (e: any) {
@@ -472,10 +469,51 @@ export default function DashboardPage() {
         setBalances({
           ok: false,
           error: e?.message || "balances_failed",
+          product_scope: "pulse",
         } as BalancesErr);
       }
 
-      // ✅ 6) Trading gates (USER-SCOPED; now shows YELLOW when locked)
+      // Atlas balances
+      try {
+        if (!accessToken) throw new Error("missing_access_token");
+
+        const r = await fetch("/api/coinbase/balances?product=atlas", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        let j: any = null;
+        try {
+          j = await r.json();
+        } catch {
+          j = null;
+        }
+
+        if (!mountedRef.current) return;
+
+        if (r.ok && j && j.ok === true) {
+          setAtlasBalancesConn("ok");
+          setAtlasBalances(j as BalancesOk);
+        } else {
+          setAtlasBalancesConn("no");
+          setAtlasBalances({
+            ok: false,
+            error: j?.error || "atlas_balances_failed",
+            status: j?.status || r.status,
+            details: j?.details,
+            product_scope: "atlas",
+          } as BalancesErr);
+        }
+      } catch (e: any) {
+        if (!mountedRef.current) return;
+        setAtlasBalancesConn("no");
+        setAtlasBalances({
+          ok: false,
+          error: e?.message || "atlas_balances_failed",
+          product_scope: "atlas",
+        } as BalancesErr);
+      }
+
       try {
         if (!sessionUserId) throw new Error("missing_user_id");
         if (!accessToken) throw new Error("missing_access_token");
@@ -523,8 +561,8 @@ export default function DashboardPage() {
           connState = "no";
         } else {
           if (!userKeysOk) {
-            blocking.push("No Coinbase keys found for your account.");
-            next_steps.push("Click “Connect Keys” and finish the Coinbase connection.");
+            blocking.push("No Pulse Coinbase keys found for your account.");
+            next_steps.push("Click “Connect Keys” and finish the Pulse Coinbase connection.");
             traffic = "red";
             connState = "no";
           } else if (!parsed.COINBASE_TRADING_ENABLED) {
@@ -568,7 +606,6 @@ export default function DashboardPage() {
         });
       }
 
-      // ✅ 7) PnL Snapshot (read-only, user-scoped)
       try {
         if (!accessToken) throw new Error("missing_access_token");
 
@@ -620,7 +657,6 @@ export default function DashboardPage() {
     };
   }, [runCheck]);
 
-  // ✅ Auto-refresh every 60s (paused when tab hidden)
   useEffect(() => {
     const clear = () => {
       if (intervalRef.current) {
@@ -716,6 +752,7 @@ export default function DashboardPage() {
   const platP = pill(platformEngineConn);
   const userKeysP = pill(userCoinbaseConn);
   const balP = pill(balancesConn);
+  const atlasBalP = pill(atlasBalancesConn);
   const tradeP = pill(tradeConn);
 
   const pnlPerfState = pnlPerfStateFromSnapshot(pnlSnapshot, pnlConn);
@@ -725,12 +762,10 @@ export default function DashboardPage() {
     ? {
         title: "HOT (Live Allowed)",
         tone: "text-rose-200",
-        badge: "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/25",
       }
     : {
         title: "LOCKED (Safe)",
         tone: "text-amber-200",
-        badge: "bg-amber-500/15 text-amber-200 ring-1 ring-amber-500/25",
       };
 
   const planText =
@@ -743,90 +778,197 @@ export default function DashboardPage() {
   const shownEmail = displayEmail ?? userEmail ?? null;
 
   const balancesBox = (() => {
-    if (userCoinbaseConn !== "ok") {
+    const pulseBox = (() => {
+      if (userCoinbaseConn !== "ok") {
+        return (
+          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
+            <p className="font-semibold text-slate-100">Pulse Coinbase</p>
+            <p className="mt-1 text-slate-400">Connect Pulse keys to view balances.</p>
+          </div>
+        );
+      }
+
+      if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
+        const msg =
+          (balances as any)?.error ||
+          (balances as any)?.details ||
+          "Unable to fetch Pulse balances.";
+
+        return (
+          <div className="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 p-4 text-xs text-rose-100">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">Pulse Coinbase</p>
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+                  balP.wrap,
+                ].join(" ")}
+              >
+                <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
+                PULSE: {balP.label}
+              </span>
+            </div>
+            <p className="mt-1 opacity-90">{String(msg)}</p>
+          </div>
+        );
+      }
+
+      const ok = balances as BalancesOk;
+
       return (
         <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
-          <p className="font-semibold text-slate-100">Coinbase Balances</p>
-          <p className="mt-1 text-slate-400">Connect keys to view balances.</p>
+          <div className="flex items-center justify-between">
+            <p className="font-semibold text-slate-100">Pulse Coinbase</p>
+            <button
+              type="button"
+              onClick={() => {
+                openPillModal({
+                  title: "PULSE BALANCES",
+                  tone: balancesConn === "ok" ? "green" : "red",
+                  body: [
+                    `Available USD: ${fmtMoney(ok.available_usd)}`,
+                    `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
+                    `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
+                    `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
+                    `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
+                  ],
+                  footer: ["Pulse balances are read-only and server-verified."],
+                });
+              }}
+              className={[
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+                balP.wrap,
+              ].join(" ")}
+              title="Click for details"
+            >
+              <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
+              PULSE: {balP.label}
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            <div className="flex justify-between">
+              <span className="text-slate-400">Available USD</span>
+              <span className="font-mono text-slate-100">{fmtMoney(ok.available_usd)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">BTC Balance</span>
+              <span className="font-mono text-slate-100">{fmtNum(ok.btc_balance, 8)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">BTC Price</span>
+              <span className="font-mono text-slate-100">{fmtMoney(ok.btc_price_usd)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">Equity (USD)</span>
+              <span className="font-mono text-slate-100">{fmtMoney(ok.equity_usd)}</span>
+            </div>
+
+            <p className="mt-2 text-[11px] text-slate-500">
+              Last check:{" "}
+              <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
+              <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
+            </p>
+          </div>
         </div>
       );
-    }
+    })();
 
-    if (balancesConn !== "ok" || !balances || (balances as any).ok !== true) {
-      const msg =
-        (balances as any)?.error ||
-        (balances as any)?.details ||
-        "Unable to fetch balances (check Coinbase key permissions).";
+    const atlasBox = (() => {
+      if (!entitlements.atlas && !isAdmin) return null;
+
+      if (atlasBalancesConn !== "ok" || !atlasBalances || (atlasBalances as any).ok !== true) {
+        const msg =
+          (atlasBalances as any)?.error ||
+          (atlasBalances as any)?.details ||
+          "Unable to fetch Atlas balances.";
+
+        return (
+          <div className="mt-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-4 text-xs text-indigo-100">
+            <div className="flex items-center justify-between">
+              <p className="font-semibold">Atlas Coinbase</p>
+              <span
+                className={[
+                  "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+                  atlasBalP.wrap,
+                ].join(" ")}
+              >
+                <span className={["h-2 w-2 rounded-full", atlasBalP.dot].join(" ")} />
+                ATLAS: {atlasBalP.label}
+              </span>
+            </div>
+            <p className="mt-1 opacity-90">{String(msg)}</p>
+            <p className="mt-2 text-indigo-200/80">Separate account. Uses its own Coinbase keys.</p>
+          </div>
+        );
+      }
+
+      const ok = atlasBalances as BalancesOk;
 
       return (
-        <div className="mt-4 rounded-2xl border border-rose-500/25 bg-rose-500/10 p-4 text-xs text-rose-100">
-          <p className="font-semibold">Coinbase Balances</p>
-          <p className="mt-1 opacity-90">{String(msg)}</p>
-          <p className="mt-2 text-rose-200/80">
-            Common cause: API key missing required scopes (View/Trade) or wrong portfolio.
-          </p>
+        <div className="mt-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/10 p-4 text-xs text-indigo-100">
+          <div className="flex items-center justify-between">
+            <p className="font-semibold">Atlas Coinbase</p>
+            <button
+              type="button"
+              onClick={() => {
+                openPillModal({
+                  title: "ATLAS BALANCES",
+                  tone: atlasBalancesConn === "ok" ? "green" : "red",
+                  body: [
+                    `Available USD: ${fmtMoney(ok.available_usd)}`,
+                    `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
+                    `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
+                    `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
+                    `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
+                  ],
+                  footer: ["Atlas balances are read-only and separate from Pulse."],
+                });
+              }}
+              className={[
+                "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
+                atlasBalP.wrap,
+              ].join(" ")}
+              title="Click for details"
+            >
+              <span className={["h-2 w-2 rounded-full", atlasBalP.dot].join(" ")} />
+              ATLAS: {atlasBalP.label}
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            <div className="flex justify-between">
+              <span className="text-indigo-200/80">Available USD</span>
+              <span className="font-mono text-indigo-50">{fmtMoney(ok.available_usd)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-indigo-200/80">BTC Balance</span>
+              <span className="font-mono text-indigo-50">{fmtNum(ok.btc_balance, 8)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-indigo-200/80">BTC Price</span>
+              <span className="font-mono text-indigo-50">{fmtMoney(ok.btc_price_usd)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-indigo-200/80">Equity (USD)</span>
+              <span className="font-mono text-indigo-50">{fmtMoney(ok.equity_usd)}</span>
+            </div>
+
+            <p className="mt-2 text-[11px] text-indigo-200/70">
+              Last check:{" "}
+              <span className="text-indigo-50">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
+              <span className="ml-2 text-indigo-200/50">· Auto-refresh: 60s</span>
+            </p>
+          </div>
         </div>
       );
-    }
-
-    const ok = balances as BalancesOk;
+    })();
 
     return (
-      <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-300">
-        <div className="flex items-center justify-between">
-          <p className="font-semibold text-slate-100">Coinbase Balances</p>
-          <button
-            type="button"
-            onClick={() => {
-              openPillModal({
-                title: "BALANCES",
-                tone: balancesConn === "ok" ? "green" : "red",
-                body: [
-                  `Available USD: ${fmtMoney(ok.available_usd)}`,
-                  `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
-                  `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
-                  `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
-                  `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
-                ],
-                footer: ["Balances are read-only and server-verified."],
-              });
-            }}
-            className={[
-              "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold",
-              balP.wrap,
-            ].join(" ")}
-            title="Click for details"
-          >
-            <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
-            BALANCES: {balP.label}
-          </button>
-        </div>
-
-        <div className="mt-3 space-y-2">
-          <div className="flex justify-between">
-            <span className="text-slate-400">Available USD</span>
-            <span className="font-mono text-slate-100">{fmtMoney(ok.available_usd)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-400">BTC Balance</span>
-            <span className="font-mono text-slate-100">{fmtNum(ok.btc_balance, 8)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-400">BTC Price</span>
-            <span className="font-mono text-slate-100">{fmtMoney(ok.btc_price_usd)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-slate-400">Equity (USD)</span>
-            <span className="font-mono text-slate-100">{fmtMoney(ok.equity_usd)}</span>
-          </div>
-
-          <p className="mt-2 text-[11px] text-slate-500">
-            Last check:{" "}
-            <span className="text-slate-300">{ok.last_checked_at ?? ok.updated_at ?? "—"}</span>
-            <span className="ml-2 text-slate-600">· Auto-refresh: 60s</span>
-          </p>
-        </div>
-      </div>
+      <>
+        {pulseBox}
+        {atlasBox}
+      </>
     );
   })();
 
@@ -993,15 +1135,15 @@ export default function DashboardPage() {
 
   const coinbaseClickMsg = () => {
     if (userCoinbaseConn === "ok")
-      return `✅ Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
+      return `✅ Pulse Coinbase connected.\nAlg: ${userCoinbaseMeta.alg ?? "unknown"}`;
 
     const r = coinbaseStatusRaw || {};
     const reason = r?.reason || r?.error || "unknown";
-    if (reason === "no_keys") return "❌ No keys saved yet.\n\nNext: Go to Connect Keys and click Verify & Continue.";
+    if (reason === "no_keys") return "❌ No Pulse keys saved yet.\n\nNext: Go to Connect Keys and click Verify & Continue.";
     if (reason === "invalid_keys")
-      return "❌ Keys saved but invalid.\n\nNext: Re-paste using Coinbase copy icons (don’t drag-select).";
+      return "❌ Pulse keys saved but invalid.\n\nNext: Re-paste using Coinbase copy icons (don’t drag-select).";
     if (reason === "not_authenticated") return "❌ Not signed in.\n\nNext: Log out and back in, then re-check.";
-    return `❌ Coinbase not connected.\nReason: ${reason}\n\nNext: Go to Connect Keys and click Verify & Continue.`;
+    return `❌ Pulse Coinbase not connected.\nReason: ${reason}\n\nNext: Go to Connect Keys and click Verify & Continue.`;
   };
 
   const tradingClickMsg = () => {
@@ -1148,7 +1290,7 @@ export default function DashboardPage() {
                     title: "YOUR COINBASE",
                     tone: userCoinbaseConn === "ok" ? "green" : "red",
                     body: lines,
-                    footer: ["This is your personal connection status (server-verified)."],
+                    footer: ["This is your Pulse connection status (server-verified)."],
                   });
                 }}
                 className={[
@@ -1168,16 +1310,13 @@ export default function DashboardPage() {
                     const msg =
                       (balances as any)?.error ||
                       (balances as any)?.details ||
-                      "Unable to fetch balances (check Coinbase key permissions).";
+                      "Unable to fetch Pulse balances.";
 
                     openPillModal({
-                      title: "BALANCES",
+                      title: "PULSE BALANCES",
                       tone: "red",
-                      body: [
-                        String(msg),
-                        "Common cause: API key missing required scopes (View/Trade) or wrong portfolio.",
-                      ],
-                      footer: ["Balances are read-only and server-verified."],
+                      body: [String(msg)],
+                      footer: ["Pulse balances are read-only and server-verified."],
                     });
                     return;
                   }
@@ -1185,7 +1324,7 @@ export default function DashboardPage() {
                   const ok = balances as BalancesOk;
 
                   openPillModal({
-                    title: "BALANCES",
+                    title: "PULSE BALANCES",
                     tone: "green",
                     body: [
                       `Available USD: ${fmtMoney(ok.available_usd)}`,
@@ -1194,7 +1333,7 @@ export default function DashboardPage() {
                       `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
                       `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
                     ],
-                    footer: ["Balances are read-only and server-verified."],
+                    footer: ["Pulse balances are read-only and server-verified."],
                   });
                 }}
                 className={[
@@ -1204,8 +1343,57 @@ export default function DashboardPage() {
                 title="Click for details"
               >
                 <span className={["h-2 w-2 rounded-full", balP.dot].join(" ")} />
-                BALANCES: {balP.label}
+                PULSE BALANCES: {balP.label}
               </button>
+
+              {(entitlements.atlas || isAdmin) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (
+                      atlasBalancesConn !== "ok" ||
+                      !atlasBalances ||
+                      (atlasBalances as any).ok !== true
+                    ) {
+                      const msg =
+                        (atlasBalances as any)?.error ||
+                        (atlasBalances as any)?.details ||
+                        "Unable to fetch Atlas balances.";
+
+                      openPillModal({
+                        title: "ATLAS BALANCES",
+                        tone: "red",
+                        body: [String(msg)],
+                        footer: ["Atlas balances are read-only and separate from Pulse."],
+                      });
+                      return;
+                    }
+
+                    const ok = atlasBalances as BalancesOk;
+
+                    openPillModal({
+                      title: "ATLAS BALANCES",
+                      tone: "green",
+                      body: [
+                        `Available USD: ${fmtMoney(ok.available_usd)}`,
+                        `BTC Balance: ${fmtNum(ok.btc_balance, 8)}`,
+                        `BTC Price: ${fmtMoney(ok.btc_price_usd)}`,
+                        `Equity (USD): ${fmtMoney(ok.equity_usd)}`,
+                        `Last check: ${ok.last_checked_at ?? ok.updated_at ?? "—"}`,
+                      ],
+                      footer: ["Atlas balances are read-only and separate from Pulse."],
+                    });
+                  }}
+                  className={[
+                    "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-semibold",
+                    atlasBalP.wrap,
+                  ].join(" ")}
+                  title="Click for details"
+                >
+                  <span className={["h-2 w-2 rounded-full", atlasBalP.dot].join(" ")} />
+                  ATLAS BALANCES: {atlasBalP.label}
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1361,16 +1549,16 @@ export default function DashboardPage() {
 
                 <div className="mt-5 flex flex-wrap items-center gap-3">
                   <Link
-                    href="/connect-keys"
+                    href="/connect-keys?product=pulse"
                     className="rounded-full bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-400/25 hover:bg-amber-300"
                   >
-                    Connect Keys
+                    Connect Pulse Keys
                   </Link>
                   <Link
-                    href="/quick-start"
+                    href="/atlas/quick-start"
                     className="rounded-full border border-slate-700 bg-slate-900/30 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-900/60"
                   >
-                    Quick Start
+                    Atlas Quick Start
                   </Link>
                   <Link
                     href="/pricing"
@@ -1400,8 +1588,9 @@ export default function DashboardPage() {
                   <p className="font-semibold text-slate-100">Important</p>
                   <p className="mt-1 text-slate-400">
                     “PLATFORM ENGINE” = server connectivity (us).<br />
-                    “YOUR COINBASE” = your personal setup completion (server-verified).<br />
-                    “BALANCES” = read-only account snapshot (server-verified).<br />
+                    “YOUR COINBASE” = your Pulse setup completion (server-verified).<br />
+                    “PULSE BALANCES” = read-only Pulse account snapshot (server-verified).<br />
+                    “ATLAS BALANCES” = read-only Atlas account snapshot (server-verified).<br />
                     “TRADING STATUS” = per-user pulse-trade status (server-verified).<br />
                     “PNL” = user-scoped snapshot (read-only; server computed).
                   </p>
