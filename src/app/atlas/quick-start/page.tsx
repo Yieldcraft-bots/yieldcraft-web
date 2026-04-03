@@ -36,6 +36,10 @@ export default function AtlasQuickStartPage() {
             Atlas only.
           </p>
 
+          <div className="mt-6 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+            ✅ Atlas is active — your account is connected and ready.
+          </div>
+
           <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 shadow-[0_0_60px_rgba(56,189,248,0.08)]">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
