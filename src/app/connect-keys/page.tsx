@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 
 type Status = "idle" | "checking" | "verifying" | "ok" | "error";
@@ -31,12 +31,11 @@ function normalizeScope(v: string | null): ProductScope {
 
 export default function ConnectKeysPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
-  const productScope = normalizeScope(searchParams.get("product"));
+  const [productScope, setProductScope] = useState<ProductScope>("pulse");
   const isAtlas = productScope === "atlas";
 
-  const [label, setLabel] = useState(isAtlas ? "Atlas Coinbase" : "Pulse Coinbase");
+  const [label, setLabel] = useState("Pulse Coinbase");
   const [apiKeyName, setApiKeyName] = useState("");
   const [privateKeyPem, setPrivateKeyPem] = useState("");
   const [showPem, setShowPem] = useState(false);
@@ -61,8 +60,13 @@ export default function ConnectKeysPage() {
   }, [apiKeyName, privateKeyPem]);
 
   useEffect(() => {
-    setLabel(isAtlas ? "Atlas Coinbase" : "Pulse Coinbase");
-  }, [isAtlas]);
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const scope = normalizeScope(params.get("product"));
+    setProductScope(scope);
+    setLabel(scope === "atlas" ? "Atlas Coinbase" : "Pulse Coinbase");
+  }, []);
 
   useEffect(() => {
     (async () => {
