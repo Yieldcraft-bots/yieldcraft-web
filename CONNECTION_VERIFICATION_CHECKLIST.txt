@@ -1,0 +1,14 @@
+PULSE = CONNECTED IF:
+- coinbase_keys row exists for user
+- product_scope = pulse
+- entitlements.pulse = true
+- connect page loads
+
+ATLAS = ACTIVE IF:
+- coinbase_keys row exists for user
+- product_scope = atlas
+- entitlements.atlas = true
+- Stripe shows active subscription/payment
+- atlas quick-start page loads
+
+DO NOT USE DASHBOARD PILLS AS SOURCE OF TRUTH

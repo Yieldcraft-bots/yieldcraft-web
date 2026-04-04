@@ -1,0 +1,8 @@
+SAFE MODE OPERATING RULE
+
+- Pulse onboarding lives at /connect-keys?product=pulse
+- Atlas onboarding lives at /atlas/quick-start
+- Do not use /dashboard pills as source of truth
+- Do not edit /dashboard, shared layout, or core routing
+- Do not touch Mission Control, Edge Hunter, Scout Watch, trading engine, or Edge Lab while onboarding work is underway
+- Any future Atlas or Pulse UX changes must happen on separate product pages only

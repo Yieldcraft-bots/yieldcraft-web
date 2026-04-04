@@ -1,0 +1,19 @@
+OPERATOR 60-SECOND CHECK
+
+FOR PULSE
+1. Supabase → coinbase_keys → confirm user row exists
+2. Confirm product_scope = pulse
+3. Supabase → entitlements → confirm pulse = true
+4. Pulse page loads: /connect-keys?product=pulse
+
+FOR ATLAS
+1. Supabase → coinbase_keys → confirm user row exists
+2. Confirm product_scope = atlas
+3. Supabase → entitlements → confirm atlas = true
+4. Stripe → confirm active payment/subscription
+5. Atlas page loads: /atlas/quick-start
+
+RULE
+- If all checks pass, onboarding is good
+- Ignore dashboard pills
+- Do not touch /dashboard

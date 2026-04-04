@@ -1,0 +1,28 @@
+ATLAS MESSAGE
+
+Go here:
+https://yieldcraft.co/atlas/quick-start
+
+1. Subscribe
+2. Follow the setup instructions
+3. Fund your Coinbase account
+
+Your Atlas onboarding is handled through the Atlas setup flow.
+
+
+PULSE MESSAGE
+
+Go here:
+https://yieldcraft.co/connect-keys?product=pulse
+
+1. Create a Coinbase API key with the required permissions
+2. Paste it into the setup form
+3. Click Verify
+
+Your Pulse onboarding is handled through the Pulse setup flow.
+
+
+INTERNAL NOTE
+
+Do not use dashboard pills as onboarding truth.
+Use the operator checklist and verification checklist.
