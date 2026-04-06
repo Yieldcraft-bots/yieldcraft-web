@@ -36,8 +36,9 @@ export default function AtlasQuickStartPage() {
             Atlas only.
           </p>
 
-          <div className="mt-6 rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-200">
-            ✅ Atlas is active — your account is connected and ready.
+          <div className="mt-6 rounded-xl border border-sky-500/25 bg-sky-500/10 p-4 text-sm text-sky-200">
+            Atlas setup checklist — complete the steps below in order. Green
+            lights appear after your plan and connection are actually complete.
           </div>
 
           <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 shadow-[0_0_60px_rgba(56,189,248,0.08)]">
@@ -88,7 +89,7 @@ export default function AtlasQuickStartPage() {
               <p className="text-sm text-slate-200">
                 <span className="font-semibold text-slate-50">Important:</span>{" "}
                 Atlas is a long-term accumulation system. It is normal to see{" "}
-                <span className="text-sky-300 font-semibold">
+                <span className="font-semibold text-sky-300">
                   no immediate trade
                 </span>
                 .
@@ -108,12 +109,12 @@ export default function AtlasQuickStartPage() {
               <p className="text-xs font-semibold tracking-[0.28em] text-sky-400 uppercase">
                 The Atlas Discipline System
               </p>
-              <h2 className="mt-3 text-2xl md:text-3xl font-bold">
+              <h2 className="mt-3 text-2xl font-bold md:text-3xl">
                 Build long-term positions with discipline — not emotion.
               </h2>
-              <p className="mt-3 text-sm md:text-base text-slate-300">
+              <p className="mt-3 text-sm text-slate-300 md:text-base">
                 Atlas is designed for slow, deliberate accumulation. It rewards{" "}
-                <span className="text-slate-50 font-semibold">
+                <span className="font-semibold text-slate-50">
                   consistency
                 </span>
                 , not impulsive action. Fund the account, keep it separate from
@@ -150,7 +151,7 @@ export default function AtlasQuickStartPage() {
               </span>{" "}
               Atlas uses your available exchange balances, exchange minimum order
               rules, and long-horizon discipline logic.{" "}
-              <span className="text-slate-50 font-semibold">
+              <span className="font-semibold text-slate-50">
                 No leverage. No forced sizing. No withdrawals.
               </span>
             </p>
@@ -244,7 +245,7 @@ export default function AtlasQuickStartPage() {
               "After login, come right back here to Atlas Quick Start",
               "This unlocks your Atlas plan + secure key storage",
             ]}
-            primary={{ label: "Join", internalHref: "/join" }}
+            primary={{ label: "Create account", internalHref: "/login" }}
             secondary={{ label: "Login", internalHref: "/login" }}
             comfort={{
               title: "Comfort check",
