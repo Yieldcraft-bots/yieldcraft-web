@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { runRangeBounceTest } from "@/lib/edge/rangeBounceTest";
 
 type Candle = {
   start: string;
@@ -132,6 +133,8 @@ export async function GET() {
       .map((c) => Number(c.close))
       .filter((n) => Number.isFinite(n));
 
+    const rangeTest = runRangeBounceTest(prices);
+
     if (prices.length < 20) {
       return NextResponse.json({
         ok: false,
@@ -180,6 +183,7 @@ export async function GET() {
       volatility_bps,
       sample: prices.length,
       note,
+      range_test: rangeTest,
     };
 
     await logEdgeHunterScan({
@@ -189,7 +193,11 @@ export async function GET() {
       structure: responsePayload.structure,
       volatility_bps: responsePayload.volatility_bps,
       sample: responsePayload.sample,
-      note: responsePayload.note,
+      note:
+        responsePayload.note +
+        (responsePayload.range_test?.signal
+          ? ` | range_signal=${responsePayload.range_test.signal}`
+          : ""),
     });
 
     return NextResponse.json(responsePayload);
