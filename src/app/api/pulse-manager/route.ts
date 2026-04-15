@@ -3,7 +3,7 @@ import jwt, { type SignOptions } from "jsonwebtoken";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { detectMarketRegime } from "@/lib/marketRegime";
-
+import { evaluatePolicies } from "@/lib/policies/evaluatePolicies";
 export const runtime = "nodejs";
 
 const PRODUCT_ID = "BTC-USD";
@@ -3082,7 +3082,22 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
         remainingUsdCap,
       };
     }
-
+const policyDecision = evaluatePolicies({
+  product_id: PRODUCT_ID,
+  regime: currentRegime,
+  structure: reconStatus?.regime || "unknown",
+  volatility_bps: Number((entryPlan as any)?.volatilityBps ?? 0),
+  confidence: typeof reconStatus?.confidence === "number" ? reconStatus.confidence : null,
+  price_position_pct: typeof (entryPlan as any)?.pricePositionPct === "number" ? (entryPlan as any).pricePositionPct : null,
+  near_lower_band: Boolean((entryPlan as any)?.nearLowerBand),
+  near_upper_band: Boolean((entryPlan as any)?.nearUpperBand),
+  range_width_bps: typeof (entryPlan as any)?.rangeWidthBps === "number" ? (entryPlan as any).rangeWidthBps : null,
+  has_position: Boolean(position?.has_position),
+  entry_locked: Boolean(entryLock?.openCycleBlocked),
+  cooldown_blocked: Boolean(cooldown?.reentryBlocked || !cooldown?.cooldownOk),
+  equity_defense: Boolean(gov?.defense),
+});
+// shadow only — not enforced
     if (!makerEntries || !refPrice) {
       const path = "/api/v3/brokerage/orders";
       const reqPayload = {
