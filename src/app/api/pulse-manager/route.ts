@@ -3168,6 +3168,7 @@ const policyDecision = evaluatePolicies({
         ok: buy.ok,
         mode: "ENTRY_BUY_IOC",
         gates,
+        policyDecision,
         position,
         cooldown,
         entryLock,
