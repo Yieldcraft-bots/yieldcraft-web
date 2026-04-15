@@ -4182,6 +4182,7 @@ async function runForAllUsers(masterRunId: string) {
         alg: algFor(ctx),
         ok: !!(out as any)?.ok,
         mode: (out as any)?.mode,
+        policyDecision: (out as any)?.policyDecision ?? null,
         gates: (out as any)?.gates,
         position: (out as any)?.position,
         cooldown: (out as any)?.cooldown,
