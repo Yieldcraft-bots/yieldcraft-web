@@ -2792,7 +2792,7 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return {
         ok: true,
         mode: "NO_POSITION_VOL_BLOCK",
-        policyDecision: null,
+        policyDecision: { skipped: "volatility_block" },
         gates,
         position,
         cooldown,
