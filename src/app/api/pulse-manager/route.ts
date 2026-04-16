@@ -3087,7 +3087,7 @@ const policyDecision = evaluatePolicies({
   product_id: PRODUCT_ID,
   regime: currentRegime,
   structure: reconStatus?.regime || "unknown",
-  volatility_bps: Number((entryPlan as any)?.volatilityBps ?? 0),
+  volatility_bps: measuredEntryVolBps ?? 0,
   confidence: typeof reconStatus?.confidence === "number" ? reconStatus.confidence : null,
   price_position_pct: typeof (entryPlan as any)?.pricePositionPct === "number" ? (entryPlan as any).pricePositionPct : null,
   near_lower_band: Boolean((entryPlan as any)?.nearLowerBand),
