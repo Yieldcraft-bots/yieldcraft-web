@@ -41,10 +41,10 @@ export const policyRegistry: PolicyDefinition[] = [
           hold_minutes: hold,
           pnl_bps: pnl,
           edge_basis:
-            'historical_loss_cluster_over_360_minutes_when_not_in_profit'
-        }
+            'historical_loss_cluster_over_360_minutes_when_not_in_profit',
+        },
       }
-    }
+    },
   },
 
   {
@@ -81,10 +81,10 @@ export const policyRegistry: PolicyDefinition[] = [
           volatility_bps,
           target_horizon_minutes: 30,
           edge_basis:
-            'stable_structure_low_volatility_positive_30m_outcomes'
-        }
+            'stable_structure_low_volatility_positive_30m_outcomes',
+        },
       }
-    }
+    },
   },
 
   {
@@ -102,9 +102,9 @@ export const policyRegistry: PolicyDefinition[] = [
         policy_version: 'v1',
         reason: 'not_implemented',
         telemetry: {
-          triggered: false
-        }
+          triggered: false,
+        },
       }
-    }
-  }
+    },
+  },
 ]
