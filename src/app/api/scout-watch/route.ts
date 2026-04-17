@@ -43,6 +43,7 @@ type ClosedTrade = {
   regime: string;
   confidence_bucket: string;
   confidence: number | null;
+  time_kill_360_flag: boolean;
 };
 
 function num(v: unknown, fallback = 0): number {
@@ -69,6 +70,10 @@ function round(n: number, digits = 2): number {
   return Math.round(n * p) / p;
 }
 
+function isTimeKill360(trade: Pick<ClosedTrade, "held_minutes" | "gross_bps">): boolean {
+  return trade.held_minutes > 360 && trade.gross_bps <= 0;
+}
+
 function summarize<T extends string>(rows: ClosedTrade[], key: (r: ClosedTrade) => T) {
   const map = new Map<
     T,
@@ -82,6 +87,7 @@ function summarize<T extends string>(rows: ClosedTrade[], key: (r: ClosedTrade) 
       avg_loss_bps: number;
       hard_stops: number;
       trail_stops: number;
+      time_kill_360_hits: number;
     }
   >();
 
@@ -97,6 +103,7 @@ function summarize<T extends string>(rows: ClosedTrade[], key: (r: ClosedTrade) 
       loss_bps_sum: number;
       hard_stops: number;
       trail_stops: number;
+      time_kill_360_hits: number;
     }
   >();
 
@@ -112,6 +119,7 @@ function summarize<T extends string>(rows: ClosedTrade[], key: (r: ClosedTrade) 
       loss_bps_sum: 0,
       hard_stops: 0,
       trail_stops: 0,
+      time_kill_360_hits: 0,
     };
 
     current.trades += 1;
@@ -128,6 +136,7 @@ function summarize<T extends string>(rows: ClosedTrade[], key: (r: ClosedTrade) 
 
     if (row.exit_reason === "hard_stop") current.hard_stops += 1;
     if (row.exit_reason === "trail_stop") current.trail_stops += 1;
+    if (row.time_kill_360_flag) current.time_kill_360_hits += 1;
 
     temp.set(k, current);
   }
@@ -143,6 +152,7 @@ function summarize<T extends string>(rows: ClosedTrade[], key: (r: ClosedTrade) 
       avg_loss_bps: round(v.loss_bps_sum / Math.max(v.losses, 1), 2),
       hard_stops: v.hard_stops,
       trail_stops: v.trail_stops,
+      time_kill_360_hits: v.time_kill_360_hits,
     });
   }
 
@@ -191,6 +201,7 @@ function pairClosedTrades(trades: TradeRow[], decisions: DecisionRow[]): ClosedT
       const entryPrice = num(openBuy.price);
       const exitPrice = num(trade.price);
       const baseSize = Math.max(num(openBuy.base_size), num(trade.base_size));
+
       if (!entryPrice || !exitPrice || !baseSize) {
         openBuy = null;
         continue;
@@ -198,18 +209,20 @@ function pairClosedTrades(trades: TradeRow[], decisions: DecisionRow[]): ClosedT
 
       const entryTs = new Date(openBuy.created_at).getTime();
       const exitTs = new Date(trade.created_at).getTime();
+
       const nearestDecision = userDecisions
         .filter((d) => new Date(d.created_at).getTime() <= entryTs)
         .slice(-1)[0];
 
       const grossPnlUsd = (exitPrice - entryPrice) * baseSize;
       const grossBps = ((exitPrice - entryPrice) / entryPrice) * 10000;
+      const heldMinutes = round((exitTs - entryTs) / 60000, 2);
 
-      closed.push({
+      const closedTrade: ClosedTrade = {
         user_id: userId,
         entry_at: openBuy.created_at,
         exit_at: trade.created_at,
-        held_minutes: round((exitTs - entryTs) / 60000, 2),
+        held_minutes: heldMinutes,
         entry_price: entryPrice,
         exit_price: exitPrice,
         base_size: baseSize,
@@ -220,12 +233,20 @@ function pairClosedTrades(trades: TradeRow[], decisions: DecisionRow[]): ClosedT
         entry_mode: String(openBuy.mode ?? "UNKNOWN"),
         exit_reason: String(trade.reason ?? "unknown"),
         regime: safeUpper(nearestDecision?.market_regime, "UNKNOWN"),
-        confidence: nearestDecision?.recon_confidence == null ? null : num(nearestDecision.recon_confidence, NaN),
+        confidence:
+          nearestDecision?.recon_confidence == null
+            ? null
+            : num(nearestDecision.recon_confidence, NaN),
         confidence_bucket: confidenceBucket(
-          nearestDecision?.recon_confidence == null ? null : num(nearestDecision.recon_confidence, NaN)
+          nearestDecision?.recon_confidence == null
+            ? null
+            : num(nearestDecision.recon_confidence, NaN)
         ),
-      });
+        time_kill_360_flag: false,
+      };
 
+      closedTrade.time_kill_360_flag = isTimeKill360(closedTrade);
+      closed.push(closedTrade);
       openBuy = null;
     }
   }
@@ -233,6 +254,54 @@ function pairClosedTrades(trades: TradeRow[], decisions: DecisionRow[]): ClosedT
   return closed.sort(
     (a, b) => new Date(b.exit_at).getTime() - new Date(a.exit_at).getTime()
   );
+}
+
+function buildTimeKillSummary(rows: ClosedTrade[]) {
+  const flagged = rows.filter((t) => t.time_kill_360_flag);
+  const kept = rows.filter((t) => !t.time_kill_360_flag);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayRows = rows.filter((t) => t.exit_at.slice(0, 10) === todayIso);
+  const todayFlagged = todayRows.filter((t) => t.time_kill_360_flag);
+
+  const status =
+    todayFlagged.length >= 2 ? "HIGH_RISK" : todayFlagged.length >= 1 ? "WARNING" : "CLEAN";
+
+  return {
+    rule: "time_kill_360",
+    definition: "held_minutes > 360 and gross_bps <= 0",
+    overall: {
+      total_trades: rows.length,
+      flagged_trades: flagged.length,
+      kept_trades: kept.length,
+      flagged_avg_edge_bps: round(
+        flagged.reduce((s, t) => s + t.gross_bps, 0) / Math.max(flagged.length, 1),
+        2
+      ),
+      kept_avg_edge_bps: round(
+        kept.reduce((s, t) => s + t.gross_bps, 0) / Math.max(kept.length, 1),
+        2
+      ),
+      flagged_pnl_usd: round(flagged.reduce((s, t) => s + t.gross_pnl_usd, 0), 6),
+      kept_pnl_usd: round(kept.reduce((s, t) => s + t.gross_pnl_usd, 0), 6),
+      flagged_avg_hold_minutes: round(
+        flagged.reduce((s, t) => s + t.held_minutes, 0) / Math.max(flagged.length, 1),
+        2
+      ),
+    },
+    today: {
+      date: todayIso,
+      total_trades_today: todayRows.length,
+      flagged_trades_today: todayFlagged.length,
+      avg_edge_bps_today: round(
+        todayRows.reduce((s, t) => s + t.gross_bps, 0) / Math.max(todayRows.length, 1),
+        2
+      ),
+      pnl_usd_today: round(todayRows.reduce((s, t) => s + t.gross_pnl_usd, 0), 6),
+      status,
+    },
+    recent_flagged_trades: flagged.slice(0, 15),
+  };
 }
 
 export async function GET(req: Request) {
@@ -259,18 +328,25 @@ export async function GET(req: Request) {
       .limit(lookback);
 
     if (tradesError) {
-      return NextResponse.json({ ok: false, error: tradesError.message, source: "trade_logs" }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: tradesError.message, source: "trade_logs" },
+        { status: 500 }
+      );
     }
 
     const minTradeTime = trades?.length
-      ? [...trades].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())[0]?.created_at
+      ? [...trades].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        )[0]?.created_at
       : null;
 
     let decisions: DecisionRow[] = [];
     if (minTradeTime) {
       const { data: decisionData } = await supabase
         .from("strategy_decisions")
-        .select("id,user_id,created_at,market_regime,recon_confidence,decision_mode,decision_reason,action_phase")
+        .select(
+          "id,user_id,created_at,market_regime,recon_confidence,decision_mode,decision_reason,action_phase"
+        )
         .gte("created_at", minTradeTime)
         .order("created_at", { ascending: true })
         .limit(lookback * 3);
@@ -279,28 +355,29 @@ export async function GET(req: Request) {
     }
 
     const closedTrades = pairClosedTrades((trades ?? []).reverse(), decisions);
+    const wins = closedTrades.filter((t) => t.gross_bps >= 0);
+    const losses = closedTrades.filter((t) => t.gross_bps < 0);
 
     const summary = {
       trades: closedTrades.length,
-      wins: closedTrades.filter((t) => t.gross_bps >= 0).length,
-      losses: closedTrades.filter((t) => t.gross_bps < 0).length,
+      wins: wins.length,
+      losses: losses.length,
       gross_pnl_usd: round(closedTrades.reduce((s, t) => s + t.gross_pnl_usd, 0), 6),
       avg_edge_bps: round(
         closedTrades.reduce((s, t) => s + t.gross_bps, 0) / Math.max(closedTrades.length, 1),
         2
       ),
       avg_win_bps: round(
-        closedTrades.filter((t) => t.gross_bps >= 0).reduce((s, t) => s + t.gross_bps, 0) /
-          Math.max(closedTrades.filter((t) => t.gross_bps >= 0).length, 1),
+        wins.reduce((s, t) => s + t.gross_bps, 0) / Math.max(wins.length, 1),
         2
       ),
       avg_loss_bps: round(
-        closedTrades.filter((t) => t.gross_bps < 0).reduce((s, t) => s + t.gross_bps, 0) /
-          Math.max(closedTrades.filter((t) => t.gross_bps < 0).length, 1),
+        losses.reduce((s, t) => s + t.gross_bps, 0) / Math.max(losses.length, 1),
         2
       ),
       hard_stops: closedTrades.filter((t) => t.exit_reason === "hard_stop").length,
       trail_stops: closedTrades.filter((t) => t.exit_reason === "trail_stop").length,
+      time_kill_360_hits: closedTrades.filter((t) => t.time_kill_360_flag).length,
     };
 
     return NextResponse.json({
@@ -308,6 +385,7 @@ export async function GET(req: Request) {
       scope: "read_only_edge_engine",
       lookback,
       summary,
+      time_kill_360: buildTimeKillSummary(closedTrades),
       by_entry_mode: summarize(closedTrades, (t) => t.entry_mode),
       by_regime: summarize(closedTrades, (t) => t.regime),
       by_confidence_bucket: summarize(closedTrades, (t) => t.confidence_bucket),
