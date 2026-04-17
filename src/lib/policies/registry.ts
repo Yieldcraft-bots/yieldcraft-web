@@ -94,15 +94,35 @@ export const policyRegistry: PolicyDefinition[] = [
     mode: 'shadow',
     priority: 200,
 
-    evaluate: () => {
+    evaluate: (ctx) => {
+      const pricePos = ctx.price_position_pct ?? null
+      const nearLower = ctx.near_lower_band ?? false
+      const nearUpper = ctx.near_upper_band ?? false
+      const regime =
+        typeof ctx.regime === 'string' ? ctx.regime.toUpperCase() : ''
+
+      const triggered =
+        regime === 'RANGING' &&
+        typeof pricePos === 'number' &&
+        (nearLower || nearUpper)
+
       return {
         // Shadow only — never influence execution
         allowed: true,
         policy_id: 'range_edge',
         policy_version: 'v1',
-        reason: 'not_implemented',
+        reason: triggered
+          ? nearLower
+            ? 'shadow_range_buy_lower_band'
+            : 'shadow_range_sell_upper_band'
+          : 'shadow_no_range_signal',
         telemetry: {
-          triggered: false,
+          triggered,
+          price_position_pct: pricePos,
+          near_lower_band: nearLower,
+          near_upper_band: nearUpper,
+          regime,
+          edge_basis: 'range_reversion_behavior',
         },
       }
     },
