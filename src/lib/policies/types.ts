@@ -22,6 +22,10 @@ export type MarketContext = {
   entry_locked: boolean
   cooldown_blocked: boolean
 
+  // Position / lifecycle context
+  hold_minutes?: number | null
+  pnl_bps?: number | null
+
   // Risk state
   equity_defense: boolean
 }

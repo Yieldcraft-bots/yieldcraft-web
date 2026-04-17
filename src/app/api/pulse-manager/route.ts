@@ -3097,6 +3097,8 @@ const policyDecision = evaluatePolicies({
   entry_locked: Boolean(entryLock?.openCycleBlocked),
   cooldown_blocked: Boolean(cooldown?.reentryBlocked || !cooldown?.cooldownOk),
   equity_defense: Boolean(gov?.defense),
+  hold_minutes: 0,
+  pnl_bps: 0,
 });
 // shadow only — not enforced
     if (!makerEntries || !refPrice) {

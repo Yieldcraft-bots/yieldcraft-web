@@ -9,6 +9,38 @@ import { PolicyDefinition } from './types'
 
 export const policyRegistry: PolicyDefinition[] = [
   {
+    id: 'time_kill_360',
+    version: 'v1',
+
+    // Start in SHADOW mode only
+    mode: 'shadow',
+
+    // Lower number = higher priority
+    priority: 10,
+
+    evaluate: (ctx) => {
+      const hold = ctx.hold_minutes ?? 0
+      const pnl = ctx.pnl_bps ?? 0
+
+      const should_block = hold > 360 && pnl <= 0
+
+      return {
+        allowed: !should_block,
+        policy_id: 'time_kill_360',
+        policy_version: 'v1',
+        reason: should_block
+          ? 'shadow_time_stop_loss_360'
+          : 'shadow_pass',
+        telemetry: {
+          hold_minutes: hold,
+          pnl_bps: pnl,
+          edge_basis: 'historical_loss_cluster_over_360_minutes_when_not_in_profit'
+        }
+      }
+    }
+  },
+
+  {
     id: 'stable_low_vol_30m_bias',
     version: 'v1',
 
