@@ -2792,7 +2792,26 @@ async function runManagerForUser(runId: string, ctx: Ctx) {
       return {
         ok: true,
         mode: "NO_POSITION_VOL_BLOCK",
-        policyDecision: { skipped: "volatility_block" },
+        policyDecision: evaluatePolicies({
+  product_id: PRODUCT_ID,
+  regime: currentRegime,
+  structure: reconStatus?.regime || "unknown",
+  volatility_bps: measuredEntryVolBps ?? 0,
+  confidence:
+    typeof reconStatus?.confidence === "number"
+      ? reconStatus.confidence
+      : null,
+  price_position_pct: null,
+  near_lower_band: false,
+  near_upper_band: false,
+  range_width_bps: null,
+  has_position: false,
+  entry_locked: false,
+  cooldown_blocked: false,
+  equity_defense: Boolean(gov?.defense),
+  hold_minutes: null,
+  pnl_bps: null,
+}),
         gates,
         position,
         cooldown,
@@ -3617,13 +3636,31 @@ const policyDecision = evaluatePolicies({
         : shouldTrailStop
           ? "trail_stop"
           : "hold";
-
+const shadowPolicyDecision = evaluatePolicies({
+  product_id: PRODUCT_ID,
+  regime: currentRegime,
+  structure: reconStatus?.regime || "unknown",
+  volatility_bps: peak.volBps ?? 0,
+  confidence:
+    typeof reconStatus?.confidence === "number" ? reconStatus.confidence : null,
+  price_position_pct: null,
+near_lower_band: false,
+near_upper_band: false,
+range_width_bps: null,
+  has_position: true,
+  entry_locked: Boolean(entryLock?.openCycleBlocked),
+  cooldown_blocked: Boolean(cooldown?.reentryBlocked || !cooldown?.cooldownOk),
+  equity_defense: Boolean(gov?.defense),
+  hold_minutes: Number.isFinite(heldMs) ? heldMs / 60000 : null,
+  pnl_bps: Number.isFinite(pnlBps) ? pnlBps : null,
+})
   const decision = {
     entryPrice,
     entryTime: lastBuy.entryTime,
     entryQty: Number.isFinite(lastBuy.entryQty) ? lastBuy.entryQty : null,
     entrySource: (lastBuy as any)?.source ?? "unknown",
     heldMs: Number.isFinite(heldMs) ? heldMs : null,
+    shadowPolicyDecision,
     candleWindow: { startTs: peak.startTs, endTs: peak.endTs },
     current,
     peakPrice,
