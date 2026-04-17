@@ -9,7 +9,7 @@ import { PolicyDefinition } from './types'
 
 export const policyRegistry: PolicyDefinition[] = [
   {
-    id: 'range_edge',
+    id: 'stable_low_vol_30m_bias',
     version: 'v1',
 
     // Start everything in SHADOW mode
@@ -18,7 +18,35 @@ export const policyRegistry: PolicyDefinition[] = [
     // Lower number = higher priority
     priority: 100,
 
-    // Placeholder logic (does nothing yet)
+    evaluate: (ctx) => {
+      const structure = ctx.structure.toLowerCase()
+      const volatility_bps = ctx.volatility_bps
+      const allowed = structure === 'stable' && volatility_bps < 10
+
+      return {
+        allowed,
+        policy_id: 'stable_low_vol_30m_bias',
+        policy_version: 'v1',
+        reason: allowed
+          ? 'shadow_match_stable_structure_low_volatility_30m_bias'
+          : 'shadow_no_match_not_stable_or_vol_too_high',
+        telemetry: {
+          structure: ctx.structure,
+          volatility_bps,
+          target_horizon_minutes: 30,
+          edge_basis: 'stable_structure_low_volatility_positive_30m_outcomes'
+        }
+      }
+    }
+  },
+
+  {
+    id: 'range_edge',
+    version: 'v1',
+
+    mode: 'shadow',
+    priority: 200,
+
     evaluate: () => {
       return {
         allowed: false,
