@@ -3373,6 +3373,7 @@ const policyDecision = evaluatePolicies({
       return {
         ok: true,
         mode: "ENTRY_BUY_MAKER",
+        policyDecision,
         gates,
         position,
         cooldown,
