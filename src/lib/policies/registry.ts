@@ -48,6 +48,45 @@ export const policyRegistry: PolicyDefinition[] = [
   },
 
   {
+    id: 'time_kill_200',
+    version: 'v1',
+
+    // SHADOW only — new edge candidate
+    mode: 'shadow',
+
+    // Slightly lower priority than 360 so both run
+    priority: 11,
+
+    evaluate: (ctx) => {
+      const hold = ctx.hold_minutes ?? null
+      const pnl = ctx.pnl_bps ?? null
+
+      const triggered =
+        typeof hold === 'number' &&
+        typeof pnl === 'number' &&
+        hold > 200 &&
+        pnl <= 0
+
+      return {
+        // Shadow only — never influence execution
+        allowed: true,
+        policy_id: 'time_kill_200',
+        policy_version: 'v1',
+        reason: triggered
+          ? 'shadow_time_kill_200_triggered'
+          : 'shadow_pass',
+        telemetry: {
+          triggered,
+          hold_minutes: hold,
+          pnl_bps: pnl,
+          edge_basis:
+            'historical_loss_cluster_over_200_minutes_when_not_in_profit',
+        },
+      }
+    },
+  },
+
+  {
     id: 'stable_low_vol_30m_bias',
     version: 'v1',
 
