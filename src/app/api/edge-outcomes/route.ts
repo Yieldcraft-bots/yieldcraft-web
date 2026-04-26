@@ -94,10 +94,12 @@ export async function POST() {
         if (!Number.isFinite(exitPrice) || exitPrice <= 0) continue;
 
         const direction = log.range_signal === "SELL_UPPER_BAND" ? -1 : 1;
-        const pnl_bps = ((exitPrice - entryPrice) / entryPrice) * 10000 * direction;
+        const pnl_bps =
+          ((exitPrice - entryPrice) / entryPrice) * 10000 * direction;
 
         results.push({
           log_id: log.id,
+          product_id: "BTC-USD",
           minutes,
           signal: log.range_signal,
           direction,
