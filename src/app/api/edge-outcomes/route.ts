@@ -26,11 +26,15 @@ export async function POST() {
   try {
     const supabase = getAdminClient();
 
+    // Only process logs old enough to have a valid 30-minute outcome.
+    const cutoff = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+
     const { data: logs, error: logsError } = await supabase
       .from("edge_hunter_logs")
       .select("id, created_at, note, regime, structure, volatility_bps")
+      .lte("created_at", cutoff)
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(1000);
 
     if (logsError) {
       return NextResponse.json({ ok: false, error: logsError.message });
@@ -59,6 +63,8 @@ export async function POST() {
         headers: { "cache-control": "no-cache" },
       });
 
+      if (!entryRes.ok) continue;
+
       const entryJson = await entryRes.json();
       const entryCandle = entryJson?.candles?.[0];
       const entryPrice = Number(entryCandle?.close);
@@ -66,13 +72,14 @@ export async function POST() {
       if (!Number.isFinite(entryPrice) || entryPrice <= 0) continue;
 
       for (const minutes of LOOKAHEAD_WINDOWS) {
-        const { data: existing } = await supabase
+        const { data: existing, error: existingError } = await supabase
           .from("edge_outcomes")
           .select("id")
           .eq("log_id", log.id)
           .eq("minutes", minutes)
           .limit(1);
 
+        if (existingError) continue;
         if (existing && existing.length > 0) continue;
 
         const futureStart = entryStart + minutes * 60;
@@ -87,6 +94,8 @@ export async function POST() {
           headers: { "cache-control": "no-cache" },
         });
 
+        if (!exitRes.ok) continue;
+
         const exitJson = await exitRes.json();
         const exitCandle = exitJson?.candles?.[0];
         const exitPrice = Number(exitCandle?.close);
@@ -94,6 +103,7 @@ export async function POST() {
         if (!Number.isFinite(exitPrice) || exitPrice <= 0) continue;
 
         const direction = log.range_signal === "SELL_UPPER_BAND" ? -1 : 1;
+
         const pnl_bps =
           ((exitPrice - entryPrice) / entryPrice) * 10000 * direction;
 
