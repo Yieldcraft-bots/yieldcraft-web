@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const LOOKAHEAD_WINDOWS = [5, 15, 30];
+const BATCH_LIMIT = 250;
 
 function getAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -22,11 +23,14 @@ function extractRangeSignal(note: string | null | undefined) {
   return match?.[1] || null;
 }
 
+export async function GET() {
+  return POST();
+}
+
 export async function POST() {
   try {
     const supabase = getAdminClient();
 
-    // Only process logs old enough to have a valid 30-minute outcome.
     const cutoff = new Date(Date.now() - 31 * 60 * 1000).toISOString();
 
     const { data: logs, error: logsError } = await supabase
@@ -34,10 +38,10 @@ export async function POST() {
       .select("id, created_at, note, regime, structure, volatility_bps")
       .lte("created_at", cutoff)
       .order("created_at", { ascending: false })
-      .limit(1000);
+      .limit(BATCH_LIMIT);
 
     if (logsError) {
-      return NextResponse.json({ ok: false, error: logsError.message });
+      return NextResponse.json({ ok: false, error: logsError.message }, { status: 500 });
     }
 
     const filteredLogs = (logs || [])
@@ -130,19 +134,20 @@ export async function POST() {
         .insert(results);
 
       if (insertError) {
-        return NextResponse.json({ ok: false, error: insertError.message });
+        return NextResponse.json({ ok: false, error: insertError.message }, { status: 500 });
       }
     }
 
     return NextResponse.json({
       ok: true,
+      batch_limit: BATCH_LIMIT,
       logs_scanned: filteredLogs.length,
       outcomes_inserted: results.length,
     });
   } catch (err: any) {
-    return NextResponse.json({
-      ok: false,
-      error: err?.message || "unknown_error",
-    });
+    return NextResponse.json(
+      { ok: false, error: err?.message || "unknown_error" },
+      { status: 500 }
+    );
   }
 }
