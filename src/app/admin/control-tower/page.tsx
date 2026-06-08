@@ -1,6 +1,100 @@
 import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
 
-export default function ControlTowerPage() {
+export const dynamic = "force-dynamic";
+
+type AtlasHealth = {
+  ok?: boolean;
+  total_entitlements?: number;
+  atlas_entitled?: number;
+  pulse_entitled?: number;
+  active_atlas_subscriptions?: number;
+  active_total_subscriptions?: number;
+  atlas_keys_connected?: number;
+  pulse_keys_connected?: number;
+  atlas_entitlement_subscription_gap?: number;
+  atlas_entitlement_key_gap?: number;
+};
+
+async function getAtlasHealth(): Promise<AtlasHealth | null> {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!url || !key) return null;
+
+    const supabase = createClient(url, key, {
+      auth: { persistSession: false },
+    });
+
+    const { data: entitlements } = await supabase
+      .from("entitlements")
+      .select("user_id, atlas, pulse");
+
+    const { data: subscriptions } = await supabase
+      .from("subscriptions")
+      .select("user_id, plan, status");
+
+    const { data: keys } = await supabase
+      .from("coinbase_keys")
+      .select("user_id, product_scope");
+
+    const entitlementRows = Array.isArray(entitlements) ? entitlements : [];
+    const subscriptionRows = Array.isArray(subscriptions) ? subscriptions : [];
+    const keyRows = Array.isArray(keys) ? keys : [];
+
+    const atlasEntitled = entitlementRows.filter(
+      (r: any) => r.atlas === true
+    ).length;
+
+    const pulseEntitled = entitlementRows.filter(
+      (r: any) => r.pulse === true
+    ).length;
+
+    const activeAtlasSubscriptions = subscriptionRows.filter((r: any) => {
+      const plan = String(r.plan || "").toLowerCase();
+      return plan.includes("atlas") && r.status === "active";
+    }).length;
+
+    const activeTotalSubscriptions = subscriptionRows.filter(
+      (r: any) => r.status === "active"
+    ).length;
+
+    const atlasKeysConnected = keyRows.filter(
+      (r: any) => r.product_scope === "atlas"
+    ).length;
+
+    const pulseKeysConnected = keyRows.filter(
+      (r: any) => r.product_scope === "pulse"
+    ).length;
+
+    return {
+      ok: true,
+      total_entitlements: entitlementRows.length,
+      atlas_entitled: atlasEntitled,
+      pulse_entitled: pulseEntitled,
+      active_atlas_subscriptions: activeAtlasSubscriptions,
+      active_total_subscriptions: activeTotalSubscriptions,
+      atlas_keys_connected: atlasKeysConnected,
+      pulse_keys_connected: pulseKeysConnected,
+      atlas_entitlement_subscription_gap:
+        atlasEntitled - activeAtlasSubscriptions,
+      atlas_entitlement_key_gap: atlasEntitled - atlasKeysConnected,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export default async function ControlTowerPage() {
+  const atlas = await getAtlasHealth();
+
+  const atlasEntitled = atlas?.atlas_entitled ?? 0;
+  const atlasSubs = atlas?.active_atlas_subscriptions ?? 0;
+  const atlasKeys = atlas?.atlas_keys_connected ?? 0;
+  const atlasSubGap = atlas?.atlas_entitlement_subscription_gap ?? 0;
+  const atlasKeyGap = atlas?.atlas_entitlement_key_gap ?? 0;
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
       <div className="mx-auto max-w-7xl">
@@ -19,7 +113,10 @@ export default function ControlTowerPage() {
         <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatusCard title="Launch Readiness" status="PASS" />
           <StatusCard title="Pulse Health" status="Read-only" />
-          <StatusCard title="Atlas Health" status="Read-only" />
+          <StatusCard
+            title="Atlas Health"
+            status={atlas ? `${atlasEntitled} enabled` : "Unavailable"}
+          />
           <StatusCard title="Edge Intelligence" status="Shadow-only" />
         </div>
 
@@ -58,7 +155,8 @@ export default function ControlTowerPage() {
             body="Pulse visibility lives in the operator roster. This page only links to it and summarizes the operational lane."
             items={[
               ["Roster", "Existing"],
-              ["Reconciliation", "Manual refresh only"],
+              ["Pulse entitled", String(atlas?.pulse_entitled ?? "—")],
+              ["Pulse keys", String(atlas?.pulse_keys_connected ?? "—")],
               ["Execution controls", "None"],
             ]}
             href="/admin/operators/pulse-roster"
@@ -68,11 +166,13 @@ export default function ControlTowerPage() {
           <TowerPanel
             title="Atlas Health"
             eyebrow="Launch lane"
-            body="Atlas visibility should track subscription, account connection, verification, and setup friction without touching execution."
+            body="Atlas visibility tracks entitlement, subscription, connected keys, and setup friction without touching execution."
             items={[
-              ["Subscribers", "Next"],
-              ["Connected", "Next"],
-              ["Needs help", "Next"],
+              ["Atlas entitled", String(atlasEntitled)],
+              ["Active Atlas subs", String(atlasSubs)],
+              ["Atlas keys connected", String(atlasKeys)],
+              ["Entitled vs subs gap", String(atlasSubGap)],
+              ["Entitled vs keys gap", String(atlasKeyGap)],
             ]}
             href="/atlas/quick-start"
             cta="Open Atlas Quick Start"
