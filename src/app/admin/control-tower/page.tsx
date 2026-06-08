@@ -12,6 +12,8 @@ type AtlasHealth = {
   active_total_subscriptions?: number;
   atlas_keys_connected?: number;
   pulse_keys_connected?: number;
+  atlas_launch_ready?: number;
+  atlas_needs_setup?: number;
   atlas_entitlement_subscription_gap?: number;
   atlas_entitlement_key_gap?: number;
 };
@@ -43,29 +45,32 @@ async function getAtlasHealth(): Promise<AtlasHealth | null> {
     const subscriptionRows = Array.isArray(subscriptions) ? subscriptions : [];
     const keyRows = Array.isArray(keys) ? keys : [];
 
-    const atlasEntitled = entitlementRows.filter(
-      (r: any) => r.atlas === true
-    ).length;
+    const atlasEntitled = entitlementRows.filter((r: any) => r.atlas === true).length;
+    const pulseEntitled = entitlementRows.filter((r: any) => r.pulse === true).length;
 
-    const pulseEntitled = entitlementRows.filter(
-      (r: any) => r.pulse === true
-    ).length;
+    const activeAtlasUserIds = new Set(
+      subscriptionRows
+        .filter((r: any) => {
+          const plan = String(r.plan || "").toLowerCase();
+          return plan.includes("atlas") && r.status === "active";
+        })
+        .map((r: any) => r.user_id)
+    );
 
-    const activeAtlasSubscriptions = subscriptionRows.filter((r: any) => {
-      const plan = String(r.plan || "").toLowerCase();
-      return plan.includes("atlas") && r.status === "active";
-    }).length;
+    const atlasKeyUserIds = new Set(
+      keyRows
+        .filter((r: any) => r.product_scope === "atlas")
+        .map((r: any) => r.user_id)
+    );
 
-    const activeTotalSubscriptions = subscriptionRows.filter(
-      (r: any) => r.status === "active"
-    ).length;
+    const pulseKeyUserIds = new Set(
+      keyRows
+        .filter((r: any) => r.product_scope === "pulse")
+        .map((r: any) => r.user_id)
+    );
 
-    const atlasKeysConnected = keyRows.filter(
-      (r: any) => r.product_scope === "atlas"
-    ).length;
-
-    const pulseKeysConnected = keyRows.filter(
-      (r: any) => r.product_scope === "pulse"
+    const atlasLaunchReady = [...activeAtlasUserIds].filter((userId) =>
+      atlasKeyUserIds.has(userId)
     ).length;
 
     return {
@@ -73,13 +78,14 @@ async function getAtlasHealth(): Promise<AtlasHealth | null> {
       total_entitlements: entitlementRows.length,
       atlas_entitled: atlasEntitled,
       pulse_entitled: pulseEntitled,
-      active_atlas_subscriptions: activeAtlasSubscriptions,
-      active_total_subscriptions: activeTotalSubscriptions,
-      atlas_keys_connected: atlasKeysConnected,
-      pulse_keys_connected: pulseKeysConnected,
-      atlas_entitlement_subscription_gap:
-        atlasEntitled - activeAtlasSubscriptions,
-      atlas_entitlement_key_gap: atlasEntitled - atlasKeysConnected,
+      active_atlas_subscriptions: activeAtlasUserIds.size,
+      active_total_subscriptions: subscriptionRows.filter((r: any) => r.status === "active").length,
+      atlas_keys_connected: atlasKeyUserIds.size,
+      pulse_keys_connected: pulseKeyUserIds.size,
+      atlas_launch_ready: atlasLaunchReady,
+      atlas_needs_setup: Math.max(0, activeAtlasUserIds.size - atlasLaunchReady),
+      atlas_entitlement_subscription_gap: atlasEntitled - activeAtlasUserIds.size,
+      atlas_entitlement_key_gap: atlasEntitled - atlasKeyUserIds.size,
     };
   } catch {
     return null;
@@ -92,6 +98,8 @@ export default async function ControlTowerPage() {
   const atlasEntitled = atlas?.atlas_entitled ?? 0;
   const atlasSubs = atlas?.active_atlas_subscriptions ?? 0;
   const atlasKeys = atlas?.atlas_keys_connected ?? 0;
+  const atlasLaunchReady = atlas?.atlas_launch_ready ?? 0;
+  const atlasNeedsSetup = atlas?.atlas_needs_setup ?? 0;
   const atlasSubGap = atlas?.atlas_entitlement_subscription_gap ?? 0;
   const atlasKeyGap = atlas?.atlas_entitlement_key_gap ?? 0;
 
@@ -115,7 +123,7 @@ export default async function ControlTowerPage() {
           <StatusCard title="Pulse Health" status="Read-only" />
           <StatusCard
             title="Atlas Health"
-            status={atlas ? `${atlasEntitled} enabled` : "Unavailable"}
+            status={atlas ? `${atlasLaunchReady} ready` : "Unavailable"}
           />
           <StatusCard title="Edge Intelligence" status="Shadow-only" />
         </div>
@@ -131,17 +139,9 @@ export default async function ControlTowerPage() {
             <ChecklistItem label="Homepage" status="PASS" href="/" />
             <ChecklistItem label="Pricing" status="PASS" href="/pricing" />
             <ChecklistItem label="Atlas Page" status="PASS" href="/atlas" />
-            <ChecklistItem
-              label="Atlas Quick Start"
-              status="PASS"
-              href="/atlas/quick-start"
-            />
+            <ChecklistItem label="Atlas Quick Start" status="PASS" href="/atlas/quick-start" />
             <ChecklistItem label="Success Page" status="PASS" href="/success" />
-            <ChecklistItem
-              label="Connect Keys"
-              status="PASS"
-              href="/connect-keys?product=atlas"
-            />
+            <ChecklistItem label="Connect Keys" status="PASS" href="/connect-keys?product=atlas" />
             <ChecklistItem label="Dashboard" status="PASS" href="/dashboard" />
             <ChecklistItem label="Login" status="PASS" href="/login" />
             <ChecklistItem label="Stripe Flow" status="VERIFY" href="/pricing" />
@@ -166,11 +166,13 @@ export default async function ControlTowerPage() {
           <TowerPanel
             title="Atlas Health"
             eyebrow="Launch lane"
-            body="Atlas visibility tracks entitlement, subscription, connected keys, and setup friction without touching execution."
+            body="Atlas visibility tracks entitlement, subscription, connected keys, launch readiness, and setup friction without touching execution."
             items={[
+              ["Launch Ready", String(atlasLaunchReady)],
               ["Atlas entitled", String(atlasEntitled)],
               ["Active Atlas subs", String(atlasSubs)],
               ["Atlas keys connected", String(atlasKeys)],
+              ["Needs setup", String(atlasNeedsSetup)],
               ["Entitled vs subs gap", String(atlasSubGap)],
               ["Entitled vs keys gap", String(atlasKeyGap)],
             ]}
@@ -196,10 +198,7 @@ export default async function ControlTowerPage() {
           <h2 className="text-xl font-semibold">Operator Links</h2>
 
           <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <TowerLink
-              href="/admin/operators/pulse-roster"
-              label="Pulse Roster"
-            />
+            <TowerLink href="/admin/operators/pulse-roster" label="Pulse Roster" />
             <TowerLink href="/admin/scout-watch" label="Scout Watch" />
             <TowerLink href="/admin/edge-lab" label="Edge Lab" />
             <TowerLink href="/admin/platform" label="Platform" />
@@ -210,13 +209,7 @@ export default async function ControlTowerPage() {
   );
 }
 
-function StatusCard({
-  title,
-  status,
-}: {
-  title: string;
-  status: string;
-}) {
+function StatusCard({ title, status }: { title: string; status: string }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
       <div className="text-sm text-slate-400">{title}</div>
@@ -299,13 +292,7 @@ function TowerPanel({
   );
 }
 
-function TowerLink({
-  href,
-  label,
-}: {
-  href: string;
-  label: string;
-}) {
+function TowerLink({ href, label }: { href: string; label: string }) {
   return (
     <Link
       href={href}
