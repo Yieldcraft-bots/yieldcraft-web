@@ -74,8 +74,11 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
 
     const coreUserId =
-      (url.searchParams.get("core_user_id") || process.env.CORE_FUND_USER_ID || "")
-        .trim() || null;
+      (
+        url.searchParams.get("core_user_id") ||
+        process.env.CORE_FUND_USER_ID ||
+        ""
+      ).trim() || null;
 
     const limitTrades = Math.max(
       1,
@@ -92,7 +95,77 @@ export async function GET(req: Request) {
       .limit(1)
       .maybeSingle();
 
-    // 2) CoreFund snapshot
+    // 2) Atlas launch health (read-only)
+    const entitlementsCount = await client
+      .from("entitlements")
+      .select("user_id, atlas, pulse", { count: "exact", head: false });
+
+    const subscriptionsCount = await client
+      .from("subscriptions")
+      .select("user_id, plan, status", { count: "exact", head: false });
+
+    const coinbaseKeysCount = await client
+      .from("coinbase_keys")
+      .select("user_id, product_scope", { count: "exact", head: false });
+
+    const entitlementRows = Array.isArray(entitlementsCount.data)
+      ? entitlementsCount.data
+      : [];
+
+    const subscriptionRows = Array.isArray(subscriptionsCount.data)
+      ? subscriptionsCount.data
+      : [];
+
+    const keyRows = Array.isArray(coinbaseKeysCount.data)
+      ? coinbaseKeysCount.data
+      : [];
+
+    const atlasEntitled = entitlementRows.filter((r: any) => r.atlas === true)
+      .length;
+
+    const pulseEntitled = entitlementRows.filter((r: any) => r.pulse === true)
+      .length;
+
+    const activeAtlasSubscriptions = subscriptionRows.filter((r: any) => {
+      const plan = String(r.plan || "").toLowerCase();
+      return plan.includes("atlas") && r.status === "active";
+    }).length;
+
+    const activeTotalSubscriptions = subscriptionRows.filter(
+      (r: any) => r.status === "active"
+    ).length;
+
+    const atlasKeysConnected = keyRows.filter(
+      (r: any) => r.product_scope === "atlas"
+    ).length;
+
+    const pulseKeysConnected = keyRows.filter(
+      (r: any) => r.product_scope === "pulse"
+    ).length;
+
+    const atlasHealth = {
+      ok:
+        !entitlementsCount.error &&
+        !subscriptionsCount.error &&
+        !coinbaseKeysCount.error,
+      error:
+        (entitlementsCount.error as any)?.message ||
+        (subscriptionsCount.error as any)?.message ||
+        (coinbaseKeysCount.error as any)?.message ||
+        null,
+      total_entitlements: entitlementRows.length,
+      atlas_entitled: atlasEntitled,
+      pulse_entitled: pulseEntitled,
+      active_atlas_subscriptions: activeAtlasSubscriptions,
+      active_total_subscriptions: activeTotalSubscriptions,
+      atlas_keys_connected: atlasKeysConnected,
+      pulse_keys_connected: pulseKeysConnected,
+      atlas_entitlement_subscription_gap:
+        atlasEntitled - activeAtlasSubscriptions,
+      atlas_entitlement_key_gap: atlasEntitled - atlasKeysConnected,
+    };
+
+    // 3) CoreFund snapshot
     let coreSnapshot: any = null;
     let coreSnapshotSource: string | null = null;
 
@@ -140,7 +213,7 @@ export async function GET(req: Request) {
       }
     }
 
-    // 3) Recent CoreFund trades
+    // 4) Recent CoreFund trades
     let coreTrades: any[] = [];
     let coreTradesSource: string | null = null;
 
@@ -177,6 +250,7 @@ export async function GET(req: Request) {
         error: inst.error ? (inst.error as any).message || inst.error : null,
         data: inst.data ?? null,
       },
+      atlas: atlasHealth,
       corefund: {
         core_user_id: coreUserId,
         snapshot_source: coreSnapshotSource,
