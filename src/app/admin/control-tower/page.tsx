@@ -17,7 +17,7 @@ export default function ControlTowerPage() {
         </p>
 
         <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatusCard title="Launch Readiness" status="Build first" />
+          <StatusCard title="Launch Readiness" status="PASS" />
           <StatusCard title="Pulse Health" status="Read-only" />
           <StatusCard title="Atlas Health" status="Read-only" />
           <StatusCard title="Edge Intelligence" status="Shadow-only" />
@@ -27,7 +27,10 @@ export default function ControlTowerPage() {
           <h2 className="text-xl font-semibold">Operator Links</h2>
 
           <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <TowerLink href="/admin/operators/pulse-roster" label="Pulse Roster" />
+            <TowerLink
+              href="/admin/operators/pulse-roster"
+              label="Pulse Roster"
+            />
             <TowerLink href="/admin/scout-watch" label="Scout Watch" />
             <TowerLink href="/admin/edge-lab" label="Edge Lab" />
             <TowerLink href="/admin/platform" label="Platform" />
@@ -38,7 +41,13 @@ export default function ControlTowerPage() {
   );
 }
 
-function StatusCard({ title, status }: { title: string; status: string }) {
+function StatusCard({
+  title,
+  status,
+}: {
+  title: string;
+  status: string;
+}) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
       <div className="text-sm text-slate-400">{title}</div>
@@ -47,7 +56,13 @@ function StatusCard({ title, status }: { title: string; status: string }) {
   );
 }
 
-function TowerLink({ href, label }: { href: string; label: string }) {
+function TowerLink({
+  href,
+  label,
+}: {
+  href: string;
+  label: string;
+}) {
   return (
     <Link
       href={href}
