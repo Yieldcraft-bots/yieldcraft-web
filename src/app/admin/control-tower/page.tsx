@@ -51,6 +51,47 @@ export default function ControlTowerPage() {
           </div>
         </section>
 
+        <section className="mt-8 grid gap-6 xl:grid-cols-3">
+          <TowerPanel
+            title="Pulse Health"
+            eyebrow="Read-only"
+            body="Pulse visibility lives in the operator roster. This page only links to it and summarizes the operational lane."
+            items={[
+              ["Roster", "Existing"],
+              ["Reconciliation", "Manual refresh only"],
+              ["Execution controls", "None"],
+            ]}
+            href="/admin/operators/pulse-roster"
+            cta="Open Pulse Roster"
+          />
+
+          <TowerPanel
+            title="Atlas Health"
+            eyebrow="Launch lane"
+            body="Atlas visibility should track subscription, account connection, verification, and setup friction without touching execution."
+            items={[
+              ["Subscribers", "Next"],
+              ["Connected", "Next"],
+              ["Needs help", "Next"],
+            ]}
+            href="/atlas/quick-start"
+            cta="Open Atlas Quick Start"
+          />
+
+          <TowerPanel
+            title="Edge Intelligence"
+            eyebrow="Shadow-only"
+            body="Edge research stays observational. Candidate edges, suppression attribution, and policy status remain separated from execution."
+            items={[
+              ["Time Kill", "Shadow"],
+              ["Offensive candidates", "Watch"],
+              ["Policy promotion", "Disabled here"],
+            ]}
+            href="/admin/edge-lab"
+            cta="Open Edge Lab"
+          />
+        </section>
+
         <section className="mt-8 rounded-3xl border border-white/10 bg-white/[0.03] p-6">
           <h2 className="text-xl font-semibold">Operator Links</h2>
 
@@ -110,6 +151,51 @@ function ChecklistItem({
         {status}
       </span>
     </Link>
+  );
+}
+
+function TowerPanel({
+  title,
+  eyebrow,
+  body,
+  items,
+  href,
+  cta,
+}: {
+  title: string;
+  eyebrow: string;
+  body: string;
+  items: [string, string][];
+  href: string;
+  cta: string;
+}) {
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6">
+      <div className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-400">
+        {eyebrow}
+      </div>
+      <h2 className="mt-3 text-xl font-semibold">{title}</h2>
+      <p className="mt-3 text-sm text-slate-400">{body}</p>
+
+      <div className="mt-5 space-y-3">
+        {items.map(([label, value]) => (
+          <div
+            key={label}
+            className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/60 p-3 text-sm"
+          >
+            <span className="text-slate-400">{label}</span>
+            <span className="font-semibold text-slate-100">{value}</span>
+          </div>
+        ))}
+      </div>
+
+      <Link
+        href={href}
+        className="mt-5 inline-flex rounded-full bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-300"
+      >
+        {cta}
+      </Link>
+    </div>
   );
 }
 
