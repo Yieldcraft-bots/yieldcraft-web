@@ -683,7 +683,7 @@ export default function AccountPage() {
                   Onboarding Checklist
                 </div>
                 <div className="mt-1 text-sm text-white/60">
-                  Three steps to a clean, green setup.
+                  Three steps to complete setup.
                 </div>
               </div>
               <Chip>Guided</Chip>
@@ -710,15 +710,15 @@ export default function AccountPage() {
 
               <StepRow
                 title="Connect Coinbase"
-                desc="Unlock live status checks and API onboarding."
+                desc="Connect your Coinbase API key so YieldCraft can verify account access."
                 state={onboarding.step2}
                 ctaLabel="Go to Connect Keys"
                 onCta={goConnectKeys}
               />
 
               <StepRow
-                title='Confirm "Your Coinbase" is green'
-                desc="We’ll guide users to a clean preflight state (no red flags)."
+                title="Confirm Coinbase connection is ready"
+                desc="Confirm your connection is verified before relying on account status."
                 state={onboarding.step3}
                 ctaLabel="Open Dashboard"
                 onCta={goDashboard}
@@ -732,9 +732,9 @@ export default function AccountPage() {
               </div>
 
               <div className="mt-2 text-sm text-white/60">
-                If something looks wrong (email not arriving, Coinbase not
-                green), it’s almost always permissions, a missing key field, or
-                a login token issue. We’ll keep it step-by-step.
+                If something looks wrong, it is usually a permission issue, a
+                missing key field, or a login session issue. We’ll keep it
+                step-by-step.
               </div>
 
               <div className="mt-4 flex flex-wrap gap-3">
@@ -763,10 +763,10 @@ export default function AccountPage() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-lg font-semibold text-white">
-                  Subscribed Bots
+                  Active Services
                 </div>
                 <div className="mt-1 text-sm text-white/60">
-                  Your current suite and availability.
+                  Services currently available on your account.
                 </div>
               </div>
               <Chip tone={activeCount > 0 ? "good" : "warn"}>
@@ -777,26 +777,26 @@ export default function AccountPage() {
             <div className="mt-6 space-y-4">
               <BotCard
                 name="Pulse"
-                tag="LIVE READY"
-                desc="Core execution bot (spot) with disciplined cadence."
+                tag="ACTIVE"
+                desc="Automated market participation with built-in risk controls."
                 status={pulseStatus}
               />
               <BotCard
                 name="Recon"
-                tag="SIGNALS"
-                desc="Signal intelligence layer (confidence + regime)."
+                tag="INTELLIGENCE"
+                desc="Market condition and confidence intelligence."
                 status={reconStatus}
               />
               <BotCard
                 name="Atlas"
-                tag="WEALTH"
-                desc="Long-term allocator for steady compounding (DCA)."
+                tag="ACCUMULATION"
+                desc="Long-term accumulation system designed for disciplined position building."
                 status={atlasStatus}
               />
               <BotCard
                 name="Ignition"
                 tag="PRO+"
-                desc="Momentum burst module (risk-aware)."
+                desc="Additional strategy module with separate risk controls."
                 status="Locked"
               />
             </div>
@@ -822,31 +822,26 @@ export default function AccountPage() {
                   </div>
                   <div className="mt-1">
                     <Chip tone={coinbaseConnected ? "good" : "warn"}>
-                      {coinbaseConnected ? "Green" : "Not set"}
+                      {coinbaseConnected ? "Connected" : "Not connected"}
                     </Chip>
                   </div>
                 </div>
 
                 <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                   <div className="text-[11px] uppercase tracking-wider text-white/45">
-                    Status
+                    Setup
                   </div>
                   <div className="mt-1">
                     <Chip tone={coinbaseGreen ? "good" : "warn"}>
-                      {coinbaseGreen ? "Green" : "Needs check"}
+                      {coinbaseGreen ? "Ready" : "Needs setup"}
                     </Chip>
                   </div>
                 </div>
               </div>
 
               <div className="mt-4 text-xs text-white/45">
-                *These are real checks now: Coinbase comes from{" "}
-                <span className="text-white/60">/api/coinbase/status</span> and
-                Status comes from{" "}
-                <span className="text-white/60">
-                  /api/pulse-trade (action=status)
-                </span>
-                .
+                These checks confirm account access and setup readiness. Funds
+                remain on your exchange.
               </div>
             </div>
           </div>
