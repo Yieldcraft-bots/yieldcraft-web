@@ -26,7 +26,7 @@ export default function AtlasQuickStartPage() {
 
           <h1 className="mt-4 text-4xl font-extrabold leading-tight md:text-5xl">
             Join → Subscribe → Coinbase (Atlas account) → Connect →{" "}
-            <span className="text-sky-300">Confirm green lights</span>.
+            <span className="text-sky-300">Confirm account status</span>.
           </h1>
 
           <p className="mt-6 text-lg text-slate-300">
@@ -37,8 +37,8 @@ export default function AtlasQuickStartPage() {
           </p>
 
           <div className="mt-6 rounded-xl border border-sky-500/25 bg-sky-500/10 p-4 text-sm text-sky-200">
-            Atlas setup checklist — complete the steps below in order. Green
-            lights appear after your plan and connection are actually complete.
+            Atlas setup checklist — complete the steps below in order. Setup
+            status appears after your plan and connection are actually complete.
           </div>
 
           <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 shadow-[0_0_60px_rgba(56,189,248,0.08)]">
@@ -95,8 +95,7 @@ export default function AtlasQuickStartPage() {
                 .
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Your proof is the green lights + connection confirmation — not
-                an instant order.
+                Your confirmation is successful account setup and connection verification — not an immediate trade.
               </p>
             </div>
           </div>
@@ -173,7 +172,7 @@ export default function AtlasQuickStartPage() {
         <section className="mb-10 rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
-              <h3 className="text-lg font-semibold">Atlas status lights</h3>
+              <h3 className="text-lg font-semibold">Atlas setup status</h3>
               <p className="mt-1 text-sm text-slate-400">
                 This is what “ready” looks like even if Atlas has not bought
                 yet.
@@ -191,12 +190,12 @@ export default function AtlasQuickStartPage() {
             <StatusItem
               color="green"
               title="Connected"
-              description="Atlas exchange auth is valid and responding."
+              description="Atlas account connection is verified and responding."
             />
             <StatusItem
               color="green"
               title="Plan Active"
-              description="Your Atlas plan is active and onboarding is complete."
+              description="Your Atlas subscription is active and setup is complete."
             />
             <StatusItem
               color="yellow"
@@ -349,7 +348,7 @@ export default function AtlasQuickStartPage() {
             comfort={{
               title: "Comfort check",
               lines: [
-                "Do not close Coinbase until YOUR COINBASE is GREEN in YieldCraft.",
+                "Do not close Coinbase until your Atlas connection shows as verified in YieldCraft.",
                 "If connection fails, re-copy using Coinbase copy icons.",
                 "Use the Atlas API key here — not the Pulse API key.",
               ],
@@ -359,10 +358,10 @@ export default function AtlasQuickStartPage() {
           <StepCard
             id="step-dashboard"
             number={6}
-            title="Go to Dashboard and confirm Atlas green lights"
+            title="Go to Dashboard and confirm Atlas account status"
             bullets={[
               "Open Dashboard",
-              "Confirm: Signed in + Atlas plan active + YOUR COINBASE green",
+              "Confirm: Signed in + Atlas plan active + Coinbase connection verified",
               "No immediate buy is normal — Atlas is a long-term system",
             ]}
             primary={{ label: "Go to Dashboard", internalHref: "/dashboard" }}
@@ -371,7 +370,7 @@ export default function AtlasQuickStartPage() {
               lines: [
                 "Connection check ≠ trade.",
                 "Atlas does not need to buy instantly to be working correctly.",
-                "Green lights mean Atlas is ready.",
+                "Verified status means Atlas is ready.",
               ],
             }}
           />
