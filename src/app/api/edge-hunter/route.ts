@@ -16,8 +16,13 @@ function average(values: number[]) {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
-function detectRegime(prices: number[]) {
-  if (prices.length < 20) return "UNKNOWN";
+function pctMoveBps(from: number, to: number) {
+  if (!Number.isFinite(from) || from <= 0) return 0;
+  return ((to - from) / from) * 10000;
+}
+
+function calcVolatilityBps(prices: number[]) {
+  if (prices.length < 2) return 0;
 
   const returns: number[] = [];
   for (let i = 1; i < prices.length; i++) {
@@ -28,11 +33,53 @@ function detectRegime(prices: number[]) {
   const variance =
     returns.reduce((sum, r) => sum + Math.pow(r - avg, 2), 0) / returns.length;
 
-  const volatilityBps = Math.sqrt(variance) * 10000;
+  return Math.sqrt(variance) * 10000;
+}
 
-  if (volatilityBps < 20) return "RANGING";
-  if (volatilityBps < 60) return "NORMAL";
-  return "VOLATILE";
+function detectRegime(prices: number[]) {
+  if (prices.length < 30) return "UNKNOWN";
+
+  const firstPrice = prices[0];
+  const lastPrice = prices[prices.length - 1];
+
+  const fullMoveBps = pctMoveBps(firstPrice, lastPrice);
+  const volatilityBps = calcVolatilityBps(prices);
+
+  const highs = Math.max(...prices);
+  const lows = Math.min(...prices);
+  const mid = (highs + lows) / 2;
+  const rangeWidthBps = mid > 0 ? ((highs - lows) / mid) * 10000 : 0;
+
+  const lastReturnBps = pctMoveBps(
+    prices[prices.length - 2],
+    prices[prices.length - 1]
+  );
+
+  if (Math.abs(lastReturnBps) >= 35 || volatilityBps >= 80) {
+    return "LIQUIDITY_SHOCK";
+  }
+
+  if (volatilityBps >= 40) {
+    return "HIGH_VOLATILITY";
+  }
+
+  if (rangeWidthBps >= 45 && Math.abs(fullMoveBps) >= 25) {
+    return "BREAKOUT";
+  }
+
+  if (fullMoveBps >= 20) {
+    return "TRENDING_UP";
+  }
+
+  if (fullMoveBps <= -20) {
+    return "TRENDING_DOWN";
+  }
+
+  if (volatilityBps < 20) {
+    return "RANGING";
+  }
+
+  return "NORMAL";
 }
 
 function detectStructure(prices: number[]) {
@@ -146,16 +193,8 @@ export async function GET() {
     const regime = detectRegime(prices);
     const structure = detectStructure(prices);
 
-    const returns: number[] = [];
-    for (let i = 1; i < prices.length; i++) {
-      returns.push((prices[i] - prices[i - 1]) / prices[i - 1]);
-    }
-
-    const avg = average(returns);
-    const variance =
-      returns.reduce((sum, r) => sum + Math.pow(r - avg, 2), 0) / returns.length;
-
-    const volatility_bps = Math.round(Math.sqrt(variance) * 10000 * 100) / 100;
+    const volatility_bps =
+      Math.round(calcVolatilityBps(prices) * 100) / 100;
 
     let status: "favorable" | "neutral" | "avoid" = "neutral";
     let note = "Mixed conditions. Stay selective.";
@@ -163,9 +202,21 @@ export async function GET() {
     if (regime === "RANGING" && structure !== "expanding") {
       status = "avoid";
       note = "Low-volatility chop. Historically poor edge environment.";
-    } else if (regime === "VOLATILE" && structure === "expanding") {
+    } else if (regime === "TRENDING_UP" && structure === "expanding") {
       status = "favorable";
-      note = "Expansion with movement. Better environment for edge discovery.";
+      note = "Upside trend expansion detected. Offensive telemetry only.";
+    } else if (regime === "TRENDING_DOWN") {
+      status = "avoid";
+      note = "Downside trend detected. Defensive telemetry only.";
+    } else if (regime === "HIGH_VOLATILITY") {
+      status = "avoid";
+      note = "High volatility detected. Risk telemetry only.";
+    } else if (regime === "BREAKOUT" && structure === "expanding") {
+      status = "favorable";
+      note = "Breakout expansion detected. Offensive telemetry only.";
+    } else if (regime === "LIQUIDITY_SHOCK") {
+      status = "avoid";
+      note = "Liquidity shock detected. Protective telemetry only.";
     } else if (regime === "NORMAL" && structure === "stable") {
       status = "neutral";
       note = "Moderate conditions. Selective entries only.";
@@ -195,6 +246,7 @@ export async function GET() {
       sample: responsePayload.sample,
       note:
         responsePayload.note +
+        " | classifier=edge_hunter_v2" +
         (responsePayload.range_test?.signal
           ? ` | range_signal=${responsePayload.range_test.signal}`
           : ""),
