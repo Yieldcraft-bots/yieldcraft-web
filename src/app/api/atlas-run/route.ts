@@ -711,6 +711,10 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
         const orderPath = "/api/v3/brokerage/orders";
         const orderRes = await cbPost(key, orderPath, orderPayload);
         const orderId = extractOrderId(orderRes.json);
+        const coinbaseOrderAccepted =
+  orderRes.ok &&
+  (orderRes.json as any)?.success === true &&
+  !!orderId;
 
         await sleep(1250);
 
@@ -722,24 +726,24 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
 
         const balancesAfter = acctAfter.ok ? summarizeBalances(accountsAfter) : null;
 
-        if (orderRes.ok) ordersPlaced += 1;
+        if (coinbaseOrderAccepted) ordersPlaced += 1;
 
         await upsertAtlasUserState(client, {
           user_id: key.user_id,
           last_cash_available_usd:
             balancesAfter?.cash_available_usd ?? balancesBefore.cash_available_usd,
           last_btc_available: balancesAfter?.btc_available ?? balancesBefore.btc_available,
-          last_buy_at: orderRes.ok ? nowIso() : memoryBefore?.last_buy_at || null,
-          last_buy_amount_usd: orderRes.ok
+          last_buy_at: coinbaseOrderAccepted ? nowIso() : memoryBefore?.last_buy_at || null,
+          last_buy_amount_usd: coinbaseOrderAccepted
             ? allocation.proposed_buy_usd
             : memoryBefore?.last_buy_amount_usd || null,
-          last_buy_order_id: orderRes.ok ? orderId : memoryBefore?.last_buy_order_id || null,
-                    cooldown_until: orderRes.ok
+          last_buy_order_id: coinbaseOrderAccepted ? orderId : memoryBefore?.last_buy_order_id || null,
+                    cooldown_until: coinbaseOrderAccepted
             ? addHoursIso(cooldownHours())
             : memoryBefore?.cooldown_until || null,
           market_state_used: state,
           notes: {
-            event: orderRes.ok ? "live_buy_submitted" : "live_buy_failed",
+            event: coinbaseOrderAccepted ? "live_buy_submitted" : "live_buy_failed",
             product_id: fundingPlan.product_id,
             proposed_buy_usd: allocation.proposed_buy_usd,
             coinbase_status: orderRes.status,
@@ -750,8 +754,8 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
         users.push({
           user_id: key.user_id,
           product_scope: "atlas",
-          status: orderRes.ok ? "live_order_submitted" : "live_order_failed",
-          action: orderRes.ok ? "live_buy_submitted" : "live_buy_failed",
+          status: coinbaseOrderAccepted ? "live_order_submitted" : "live_order_failed",
+          action: coinbaseOrderAccepted ? "live_buy_submitted" : "live_buy_failed",
           balances: {
             before: balancesBefore,
             after: balancesAfter,
