@@ -3,6 +3,10 @@
     {
       "path": "/api/pulse-manager?action=run%26cron=1",
       "schedule": "*/2 * * * *"
+    },
+    {
+      "path": "/api/atlas-run?cron=1",
+      "schedule": "*/15 * * * *"
     }
   ]
 }
