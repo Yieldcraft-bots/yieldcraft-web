@@ -517,6 +517,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           users.push({
             user_id: key.user_id,
             product_scope: "atlas",
+            api_key_name: key.api_key_name,
             status: "coinbase_accounts_failed",
             action: "no_order_placed",
             coinbase_status: acct.status,
@@ -602,6 +603,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           users.push({
             user_id: key.user_id,
             product_scope: "atlas",
+            api_key_name: key.api_key_name,
             status: "cooldown_active",
             action: "no_order_cooldown_active",
             balances: balancesBefore,
@@ -663,6 +665,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           users.push({
             user_id: key.user_id,
             product_scope: "atlas",
+            api_key_name: key.api_key_name,
             status: "balance_checked",
             action: "preview_only_no_order",
             balances: balancesBefore,
@@ -694,6 +697,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           users.push({
             user_id: key.user_id,
             product_scope: "atlas",
+            api_key_name: key.api_key_name,
             status: "balance_checked",
             action: "dry_run_order_payload_ready",
             balances: balancesBefore,
@@ -754,6 +758,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
         users.push({
           user_id: key.user_id,
           product_scope: "atlas",
+          api_key_name: key.api_key_name,
           status: coinbaseOrderAccepted ? "live_order_submitted" : "live_order_failed",
           action: coinbaseOrderAccepted ? "live_buy_submitted" : "live_buy_failed",
           balances: {
