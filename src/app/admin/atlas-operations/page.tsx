@@ -1,5 +1,6 @@
 import Link from "next/link";
 import AtlasSummaryCards from "./components/AtlasSummaryCards";
+import AtlasFunnel from "./components/AtlasFunnel";
 
 export default function AtlasOperationsPage() {
   return (
@@ -20,16 +21,9 @@ export default function AtlasOperationsPage() {
           <AtlasSummaryCards />
         </div>
 
-        <section className="mt-10 rounded-3xl border border-white/10 bg-slate-900/60 p-6">
-          <h2 className="text-xl font-bold">Atlas Funnel</h2>
-
-          <div className="mt-6 space-y-4">
-            <Row label="Atlas Entitled" value="17" />
-            <Row label="Launch Ready" value="6" />
-            <Row label="Needs Atlas Keys" value="2" />
-            <Row label="Needs Atlas Subscription" value="9" />
-          </div>
-        </section>
+        <div className="mt-10">
+          <AtlasFunnel />
+        </div>
 
         <div className="mt-10 flex flex-wrap gap-4">
           <Link
@@ -48,14 +42,5 @@ export default function AtlasOperationsPage() {
         </div>
       </div>
     </main>
-  );
-}
-
-function Row(props: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-      <span className="text-slate-400">{props.label}</span>
-      <span className="font-semibold">{props.value}</span>
-    </div>
   );
 }
