@@ -1,6 +1,7 @@
 import Link from "next/link";
 import AtlasSummaryCards from "./components/AtlasSummaryCards";
 import AtlasFunnel from "./components/AtlasFunnel";
+import AtlasExecutionStatus from "./components/AtlasExecutionStatus";
 
 export default function AtlasOperationsPage() {
   return (
@@ -10,7 +11,9 @@ export default function AtlasOperationsPage() {
           Atlas Operations
         </p>
 
-        <h1 className="mt-3 text-4xl font-bold">Atlas Operations Center</h1>
+        <h1 className="mt-3 text-4xl font-bold">
+          Atlas Operations Center
+        </h1>
 
         <p className="mt-3 max-w-3xl text-slate-400">
           Operational visibility for Atlas onboarding, activation,
@@ -23,6 +26,10 @@ export default function AtlasOperationsPage() {
 
         <div className="mt-10">
           <AtlasFunnel />
+        </div>
+
+        <div className="mt-10">
+          <AtlasExecutionStatus />
         </div>
 
         <div className="mt-10 flex flex-wrap gap-4">
