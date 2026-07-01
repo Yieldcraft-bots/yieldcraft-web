@@ -40,20 +40,45 @@ export async function GET() {
   try {
     const client = sbService();
 
-    const { data, error } = await client
-      .from("atlas_user_state")
-      .select("*")
-      .order("user_id", { ascending: true });
+    const [stateResult, entitlementResult, subscriptionResult, keyResult] =
+      await Promise.all([
+        client
+          .from("atlas_user_state")
+          .select("*")
+          .order("user_id", { ascending: true }),
 
-    if (error) {
+        client
+          .from("entitlements")
+          .select("user_id, atlas, pulse"),
+
+        client
+          .from("subscriptions")
+          .select("user_id, plan, status"),
+
+        client
+          .from("coinbase_keys")
+          .select("user_id, product_scope"),
+      ]);
+
+    if (stateResult.error) {
       return json(500, {
         ok: false,
         status: "ATLAS_OPS_STATUS_READ_ERROR",
-        error: error.message,
+        error: stateResult.error.message,
       });
     }
 
-    const rows = Array.isArray(data) ? data : [];
+    const rows = Array.isArray(stateResult.data) ? stateResult.data : [];
+
+    const entitlementRows = Array.isArray(entitlementResult.data)
+      ? entitlementResult.data
+      : [];
+
+    const subscriptionRows = Array.isArray(subscriptionResult.data)
+      ? subscriptionResult.data
+      : [];
+
+    const keyRows = Array.isArray(keyResult.data) ? keyResult.data : [];
 
     const summary = {
       total: rows.length,
@@ -111,11 +136,62 @@ export async function GET() {
       };
     });
 
+    const atlasEntitledUserIds = new Set(
+      entitlementRows
+        .filter((row: any) => row.atlas === true)
+        .map((row: any) => row.user_id)
+        .filter(Boolean)
+    );
+
+    const activeAtlasUserIds = new Set(
+      subscriptionRows
+        .filter((row: any) => {
+          const plan = String(row.plan || "").toLowerCase();
+          return plan.includes("atlas") && row.status === "active";
+        })
+        .map((row: any) => row.user_id)
+        .filter(Boolean)
+    );
+
+    const atlasKeyUserIds = new Set(
+      keyRows
+        .filter((row: any) => row.product_scope === "atlas")
+        .map((row: any) => row.user_id)
+        .filter(Boolean)
+    );
+
+    const launchReady = [...activeAtlasUserIds].filter((userId) =>
+      atlasKeyUserIds.has(userId)
+    ).length;
+
+    const funnel = {
+      atlas_entitled: atlasEntitledUserIds.size,
+      launch_ready: launchReady,
+      needs_atlas_keys: Math.max(0, activeAtlasUserIds.size - launchReady),
+      needs_atlas_subscription: Math.max(
+        0,
+        atlasEntitledUserIds.size - activeAtlasUserIds.size
+      ),
+      active_atlas_subscriptions: activeAtlasUserIds.size,
+      atlas_keys_connected: atlasKeyUserIds.size,
+      source: "entitlements_subscriptions_coinbase_keys",
+      ok:
+        !entitlementResult.error &&
+        !subscriptionResult.error &&
+        !keyResult.error,
+      error:
+        entitlementResult.error?.message ||
+        subscriptionResult.error?.message ||
+        keyResult.error?.message ||
+        null,
+    };
+
     return json(200, {
       ok: true,
       as_of: new Date().toISOString(),
       source: "atlas_user_state",
       summary,
+      funnel,
       users,
     });
   } catch (e: any) {
