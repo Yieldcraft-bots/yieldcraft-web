@@ -36,28 +36,43 @@ function isCooldownActive(cooldownUntil?: string | null) {
   return Number.isFinite(t) && t > Date.now();
 }
 
+function normalizeEmail(v: any) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function healthFor(args: {
+  status: string;
+  atlasEntitled: boolean;
+  atlasKeyConnected: boolean;
+  subscriptionStatus: string | null;
+  cash: number;
+}) {
+  if (!args.atlasEntitled) return "LOCKED";
+  if (args.subscriptionStatus !== "active") return "NEEDS_SUBSCRIPTION";
+  if (!args.atlasKeyConnected) return "NEEDS_KEYS";
+  if (args.cash <= 0 || args.status === "NEEDS_FUNDS") return "NEEDS_FUNDS";
+  if (args.status === "COOLDOWN") return "COOLDOWN";
+  return "HEALTHY";
+}
+
 export async function GET() {
   try {
     const client = sbService();
 
-    const [stateResult, entitlementResult, subscriptionResult, keyResult] =
+    const [stateResult, entitlementResult, subscriptionResult, keyResult, authUsersResult] =
       await Promise.all([
         client
           .from("atlas_user_state")
           .select("*")
           .order("user_id", { ascending: true }),
 
-        client
-          .from("entitlements")
-          .select("user_id, atlas, pulse"),
+        client.from("entitlements").select("user_id, atlas, pulse"),
 
-        client
-          .from("subscriptions")
-          .select("user_id, plan, status"),
+        client.from("subscriptions").select("user_id, plan, status"),
 
-        client
-          .from("coinbase_keys")
-          .select("user_id, product_scope"),
+        client.from("coinbase_keys").select("user_id, product_scope"),
+
+        client.auth.admin.listUsers({ page: 1, perPage: 1000 }),
       ]);
 
     if (stateResult.error) {
@@ -69,16 +84,44 @@ export async function GET() {
     }
 
     const rows = Array.isArray(stateResult.data) ? stateResult.data : [];
-
-    const entitlementRows = Array.isArray(entitlementResult.data)
-      ? entitlementResult.data
-      : [];
-
-    const subscriptionRows = Array.isArray(subscriptionResult.data)
-      ? subscriptionResult.data
-      : [];
-
+    const entitlementRows = Array.isArray(entitlementResult.data) ? entitlementResult.data : [];
+    const subscriptionRows = Array.isArray(subscriptionResult.data) ? subscriptionResult.data : [];
     const keyRows = Array.isArray(keyResult.data) ? keyResult.data : [];
+    const authUsers = Array.isArray(authUsersResult?.data?.users)
+      ? authUsersResult.data.users
+      : [];
+
+    const authByUserId = new Map(
+      authUsers.map((user: any) => [
+        user.id,
+        {
+          email: normalizeEmail(user.email),
+          display_name:
+            user.user_metadata?.full_name ||
+            user.user_metadata?.name ||
+            user.user_metadata?.display_name ||
+            null,
+          created_at: user.created_at || null,
+          last_sign_in_at: user.last_sign_in_at || null,
+          email_confirmed_at: user.email_confirmed_at || null,
+        },
+      ])
+    );
+
+    const entitlementByUserId = new Map(
+      entitlementRows.map((row: any) => [row.user_id, row])
+    );
+
+    const subscriptionByUserId = new Map(
+      subscriptionRows.map((row: any) => [row.user_id, row])
+    );
+
+    const atlasKeyUserIds = new Set(
+      keyRows
+        .filter((row: any) => row.product_scope === "atlas")
+        .map((row: any) => row.user_id)
+        .filter(Boolean)
+    );
 
     const summary = {
       total: rows.length,
@@ -121,8 +164,35 @@ export async function GET() {
         summary.ready += 1;
       }
 
+      const auth = authByUserId.get(row.user_id) || null;
+      const entitlement = entitlementByUserId.get(row.user_id) || null;
+      const subscription = subscriptionByUserId.get(row.user_id) || null;
+      const atlasEntitled = entitlement?.atlas === true;
+      const atlasKeyConnected = atlasKeyUserIds.has(row.user_id);
+
       return {
         user_id: row.user_id,
+        email: auth?.email || null,
+        display_name: auth?.display_name || null,
+        customer_label: auth?.display_name || auth?.email || row.user_id,
+        created_at: auth?.created_at || null,
+        last_sign_in_at: auth?.last_sign_in_at || null,
+        email_confirmed_at: auth?.email_confirmed_at || null,
+
+        plan: subscription?.plan || null,
+        subscription_status: subscription?.status || null,
+        atlas_entitled: atlasEntitled,
+        pulse_entitled: entitlement?.pulse === true,
+        atlas_key_connected: atlasKeyConnected,
+
+        health: healthFor({
+          status,
+          atlasEntitled,
+          atlasKeyConnected,
+          subscriptionStatus: subscription?.status || null,
+          cash,
+        }),
+
         status,
         reason,
         cash_available_usd: cash,
@@ -153,13 +223,6 @@ export async function GET() {
         .filter(Boolean)
     );
 
-    const atlasKeyUserIds = new Set(
-      keyRows
-        .filter((row: any) => row.product_scope === "atlas")
-        .map((row: any) => row.user_id)
-        .filter(Boolean)
-    );
-
     const launchReady = [...activeAtlasUserIds].filter((userId) =>
       atlasKeyUserIds.has(userId)
     ).length;
@@ -174,15 +237,17 @@ export async function GET() {
       ),
       active_atlas_subscriptions: activeAtlasUserIds.size,
       atlas_keys_connected: atlasKeyUserIds.size,
-      source: "entitlements_subscriptions_coinbase_keys",
+      source: "entitlements_subscriptions_coinbase_keys_auth_users",
       ok:
         !entitlementResult.error &&
         !subscriptionResult.error &&
-        !keyResult.error,
+        !keyResult.error &&
+        !authUsersResult.error,
       error:
         entitlementResult.error?.message ||
         subscriptionResult.error?.message ||
         keyResult.error?.message ||
+        authUsersResult.error?.message ||
         null,
     };
 

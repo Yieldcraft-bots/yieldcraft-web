@@ -2,6 +2,7 @@ import Link from "next/link";
 import AtlasSummaryCards from "./components/AtlasSummaryCards";
 import AtlasFunnel from "./components/AtlasFunnel";
 import AtlasExecutionStatus from "./components/AtlasExecutionStatus";
+import AtlasUserGrid from "./components/AtlasUserGrid";
 
 export default function AtlasOperationsPage() {
   return (
@@ -30,6 +31,10 @@ export default function AtlasOperationsPage() {
 
         <div className="mt-10">
           <AtlasExecutionStatus />
+        </div>
+
+        <div className="mt-10">
+          <AtlasUserGrid />
         </div>
 
         <div className="mt-10 flex flex-wrap gap-4">
