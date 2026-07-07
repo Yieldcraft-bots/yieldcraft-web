@@ -228,7 +228,7 @@ export default function QuickStartPage() {
               "After login, come right back here to Quick Start",
               "This unlocks your plan + secure key storage",
             ]}
-            primary={{ label: "Join", internalHref: "/join" }}
+            primary={{ label: "Create account", internalHref: "/login" }}
             secondary={{ label: "Login", internalHref: "/login" }}
             comfort={{
               title: "Comfort check",
