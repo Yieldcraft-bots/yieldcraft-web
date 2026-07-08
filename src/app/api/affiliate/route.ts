@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
-
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 export const runtime = "nodejs";
 
 function requireEnv(name: string) {
@@ -271,5 +272,101 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true });
+  try {
+    const supabaseUrl =
+      process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
+    const anonKey = requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+    const serviceKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
+
+    if (!supabaseUrl) throw new Error("Missing env: SUPABASE_URL");
+
+    const cookieStore = await cookies();
+
+    const authed = createServerClient(supabaseUrl, anonKey, {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll() {
+          // GET route: no cookie writes
+        },
+      },
+    });
+
+    const { data: userRes, error: userErr } = await authed.auth.getUser();
+    const user = userRes?.user;
+
+    if (userErr || !user?.email) {
+      return NextResponse.json(
+        { ok: false, error: "not_authenticated" },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const email = safeEmail(user.email);
+    if (!email) {
+      return NextResponse.json(
+        { ok: false, error: "missing_user_email" },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false },
+    });
+
+    const { data, error } = await admin
+      .from("affiliates")
+      .select(
+        "id,email,name,status,affiliate_code,commission_rate,stripe_account_id"
+      )
+      .eq("email", email)
+      .maybeSingle();
+
+    if (error) {
+      return NextResponse.json(
+        { ok: false, error: error.message },
+        { status: 500, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    if (!data?.affiliate_code) {
+      return NextResponse.json(
+        { ok: false, error: "affiliate_not_found", email },
+        { status: 404, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    const affiliateCode = String(data.affiliate_code);
+    const affiliateLink = `${getBaseUrl()}/pricing?ref=${encodeURIComponent(
+      affiliateCode
+    )}`;
+
+    return NextResponse.json(
+      {
+        ok: true,
+        source: "affiliate_api_get",
+        email,
+        status: data.status || "pending",
+        commission_rate: data.commission_rate ?? 30,
+        stripe_account_id: data.stripe_account_id || null,
+        affiliateCode,
+        affiliate_code: affiliateCode,
+        affiliateLink,
+        affiliate_link: affiliateLink,
+      },
+      { status: 200, headers: { "Cache-Control": "no-store" } }
+    );
+  } catch (err: any) {
+    console.error("Affiliate GET error:", err?.message || err);
+
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Unable to load affiliate record.",
+        detail: err?.message || "unknown_error",
+      },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
+  }
 }
