@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "../../../lib/supabaseClient";
 
 const AFFILIATE_CODE_KEY = "yc_affiliate_code";
 
@@ -52,9 +53,16 @@ export default function AffiliateDashboardPage() {
           return;
         }
 
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
         const res = await fetch("/api/affiliate", {
           method: "GET",
           cache: "no-store",
+          headers: session?.access_token
+            ? { Authorization: `Bearer ${session.access_token}` }
+            : {},
         });
 
         if (!res.ok) return;
@@ -273,7 +281,7 @@ export default function AffiliateDashboardPage() {
         </section>
 
         <div className="mt-6 text-xs text-white/35">
-          affiliate-dashboard-build: v2-api-code-lookup
+          affiliate-dashboard-build: v3-bearer-token-api-lookup
         </div>
       </div>
     </main>
