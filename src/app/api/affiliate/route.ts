@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
-import { cookies } from "next/headers";
-import { createServerClient } from "@supabase/ssr";
+
 export const runtime = "nodejs";
 
 function requireEnv(name: string) {
@@ -33,6 +32,13 @@ function safeEmail(v: any) {
   const s = String(v || "").trim().toLowerCase();
   if (!s || !s.includes("@")) return "";
   return s;
+}
+
+function noStore(status: number, body: any) {
+  return NextResponse.json(body, {
+    status,
+    headers: { "Cache-Control": "no-store" },
+  });
 }
 
 async function sendAffiliateEmails(args: {
@@ -118,10 +124,7 @@ export async function POST(req: Request) {
     const notes = String(body?.notes || "").trim();
 
     if (!fullName || !email) {
-      return NextResponse.json(
-        { ok: false, error: "Missing required fields" },
-        { status: 400 }
-      );
+      return noStore(400, { ok: false, error: "Missing required fields" });
     }
 
     const baseUrl = getBaseUrl();
@@ -191,6 +194,7 @@ export async function POST(req: Request) {
             status: existing?.status || "pending",
             affiliate_code: affiliateCode,
             commission_rate: existing?.commission_rate ?? 30,
+            stripe_account_id: stripeAccountId,
           })
           .eq("id", existing.id);
         if (upErr2) throw upErr2;
@@ -218,6 +222,7 @@ export async function POST(req: Request) {
             status: "pending",
             affiliate_code: affiliateCode,
             commission_rate: 30,
+            stripe_account_id: stripeAccountId,
           },
         ]);
         if (insErr2) throw insErr2;
@@ -248,7 +253,7 @@ export async function POST(req: Request) {
       emailStatus = { ok: false, error: e?.message || String(e) };
     }
 
-    return NextResponse.json({
+    return noStore(200, {
       ok: true,
       status: existing?.status || "pending",
       commission_rate: existing?.commission_rate ?? 30,
@@ -260,18 +265,15 @@ export async function POST(req: Request) {
     });
   } catch (err: any) {
     console.error("Affiliate onboarding error:", err?.message || err);
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Unable to start affiliate onboarding.",
-        detail: err?.message || "unknown_error",
-      },
-      { status: 500 }
-    );
+    return noStore(500, {
+      ok: false,
+      error: "Unable to start affiliate onboarding.",
+      detail: err?.message || "unknown_error",
+    });
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const supabaseUrl =
       process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
@@ -280,35 +282,33 @@ export async function GET() {
 
     if (!supabaseUrl) throw new Error("Missing env: SUPABASE_URL");
 
-    const cookieStore = await cookies();
+    const authHeader = req.headers.get("authorization") || "";
+    const token = authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
 
-    const authed = createServerClient(supabaseUrl, anonKey, {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll() {
-          // GET route: no cookie writes
-        },
+    if (!token) {
+      return noStore(401, { ok: false, error: "missing_bearer_token" });
+    }
+
+    const authed = createClient(supabaseUrl, anonKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
       },
     });
 
-    const { data: userRes, error: userErr } = await authed.auth.getUser();
+    const { data: userRes, error: userErr } = await authed.auth.getUser(token);
     const user = userRes?.user;
 
     if (userErr || !user?.email) {
-      return NextResponse.json(
-        { ok: false, error: "not_authenticated" },
-        { status: 401, headers: { "Cache-Control": "no-store" } }
-      );
+      return noStore(401, { ok: false, error: "not_authenticated" });
     }
 
     const email = safeEmail(user.email);
     if (!email) {
-      return NextResponse.json(
-        { ok: false, error: "missing_user_email" },
-        { status: 401, headers: { "Cache-Control": "no-store" } }
-      );
+      return noStore(401, { ok: false, error: "missing_user_email" });
     }
 
     const admin = createClient(supabaseUrl, serviceKey, {
@@ -324,17 +324,11 @@ export async function GET() {
       .maybeSingle();
 
     if (error) {
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500, headers: { "Cache-Control": "no-store" } }
-      );
+      return noStore(500, { ok: false, error: error.message });
     }
 
     if (!data?.affiliate_code) {
-      return NextResponse.json(
-        { ok: false, error: "affiliate_not_found", email },
-        { status: 404, headers: { "Cache-Control": "no-store" } }
-      );
+      return noStore(404, { ok: false, error: "affiliate_not_found", email });
     }
 
     const affiliateCode = String(data.affiliate_code);
@@ -342,31 +336,25 @@ export async function GET() {
       affiliateCode
     )}`;
 
-    return NextResponse.json(
-      {
-        ok: true,
-        source: "affiliate_api_get",
-        email,
-        status: data.status || "pending",
-        commission_rate: data.commission_rate ?? 30,
-        stripe_account_id: data.stripe_account_id || null,
-        affiliateCode,
-        affiliate_code: affiliateCode,
-        affiliateLink,
-        affiliate_link: affiliateLink,
-      },
-      { status: 200, headers: { "Cache-Control": "no-store" } }
-    );
+    return noStore(200, {
+      ok: true,
+      source: "affiliate_api_get_bearer",
+      email,
+      status: data.status || "pending",
+      commission_rate: data.commission_rate ?? 30,
+      stripe_account_id: data.stripe_account_id || null,
+      affiliateCode,
+      affiliate_code: affiliateCode,
+      affiliateLink,
+      affiliate_link: affiliateLink,
+    });
   } catch (err: any) {
     console.error("Affiliate GET error:", err?.message || err);
 
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Unable to load affiliate record.",
-        detail: err?.message || "unknown_error",
-      },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+    return noStore(500, {
+      ok: false,
+      error: "Unable to load affiliate record.",
+      detail: err?.message || "unknown_error",
+    });
   }
 }
