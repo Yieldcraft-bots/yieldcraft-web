@@ -1,8 +1,14 @@
 import AffiliateSummaryCards from "./components/AffiliateSummaryCards";
-import { getAffiliateSummaryPlaceholder } from "./lib/getAffiliateSummary";
+import AffiliateRosterTable from "./components/AffiliateRosterTable";
 
-export default function AffiliateOperationsPage() {
-  const summary = getAffiliateSummaryPlaceholder();
+import { getAffiliateSummary } from "./lib/getAffiliateSummary";
+import { getAffiliateRoster } from "./lib/getAffiliateRoster";
+
+export default async function AffiliateOperationsPage() {
+  const [summary, affiliates] = await Promise.all([
+    getAffiliateSummary(),
+    getAffiliateRoster(),
+  ]);
 
   return (
     <main className="min-h-screen bg-[#050B16] text-white">
@@ -24,14 +30,7 @@ export default function AffiliateOperationsPage() {
 
         <AffiliateSummaryCards summary={summary} />
 
-        <section className="mt-10 rounded-3xl border border-white/10 bg-white/5 p-8">
-          <h2 className="text-xl font-semibold">Affiliate Roster</h2>
-
-          <p className="mt-2 text-white/60">
-            Live affiliate roster will appear here after the read-only data layer
-            is connected.
-          </p>
-        </section>
+        <AffiliateRosterTable affiliates={affiliates} />
       </div>
     </main>
   );
