@@ -19,26 +19,67 @@ function normalizeCode(value: string | null | undefined) {
     .slice(0, 64);
 }
 
+type AffiliateApiResponse = {
+  ok?: boolean;
+  affiliateCode?: string;
+  affiliate_code?: string;
+  affiliateLink?: string;
+  affiliate_link?: string;
+};
+
 export default function AffiliateDashboardPage() {
   const [affiliateCode, setAffiliateCode] = useState("");
+  const [loadingCode, setLoadingCode] = useState(true);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const codeFromUrl = normalizeCode(params.get("code"));
+    let cancelled = false;
 
-      if (codeFromUrl) {
-        localStorage.setItem(AFFILIATE_CODE_KEY, codeFromUrl);
-        setAffiliateCode(codeFromUrl);
-        return;
+    async function loadAffiliateCode() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const codeFromUrl = normalizeCode(params.get("code"));
+
+        if (codeFromUrl) {
+          localStorage.setItem(AFFILIATE_CODE_KEY, codeFromUrl);
+          if (!cancelled) setAffiliateCode(codeFromUrl);
+          return;
+        }
+
+        const saved = normalizeCode(localStorage.getItem(AFFILIATE_CODE_KEY));
+        if (saved) {
+          if (!cancelled) setAffiliateCode(saved);
+          return;
+        }
+
+        const res = await fetch("/api/affiliate", {
+          method: "GET",
+          cache: "no-store",
+        });
+
+        if (!res.ok) return;
+
+        const data = (await res.json()) as AffiliateApiResponse;
+        const codeFromApi = normalizeCode(
+          data.affiliateCode || data.affiliate_code
+        );
+
+        if (codeFromApi) {
+          localStorage.setItem(AFFILIATE_CODE_KEY, codeFromApi);
+          if (!cancelled) setAffiliateCode(codeFromApi);
+        }
+      } catch {
+        // no-op
+      } finally {
+        if (!cancelled) setLoadingCode(false);
       }
-
-      const saved = normalizeCode(localStorage.getItem(AFFILIATE_CODE_KEY));
-      if (saved) setAffiliateCode(saved);
-    } catch {
-      // no-op
     }
+
+    loadAffiliateCode();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const referralLink = useMemo(() => {
@@ -84,7 +125,11 @@ export default function AffiliateDashboardPage() {
           <section className="rounded-3xl border border-white/10 bg-white/5 p-6">
             <h2 className="text-xl font-semibold">Your referral link</h2>
 
-            {!affiliateCode ? (
+            {loadingCode ? (
+              <div className="mt-4 rounded-2xl border border-sky-400/30 bg-sky-400/10 p-4 text-sm text-sky-100">
+                Loading your affiliate code...
+              </div>
+            ) : !affiliateCode ? (
               <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
                 No affiliate code found yet. Go through the affiliate onboarding
                 flow first, or open this page with <code>?code=YOURCODE</code>.
@@ -176,12 +221,16 @@ export default function AffiliateDashboardPage() {
             <MetricCard label="Referral Clicks" value="0" sub="tracking next" />
             <MetricCard label="Signups" value="0" sub="tracking next" />
             <MetricCard label="Active Members" value="0" sub="tracking next" />
-            <MetricCard label="Commission Earned" value="$0.00" sub="tracking next" />
+            <MetricCard
+              label="Commission Earned"
+              value="$0.00"
+              sub="tracking next"
+            />
           </div>
 
           <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-sm text-amber-100">
-            Affiliate metrics will populate after we wire Stripe sync and commission
-            logging. Your referral link is ready now.
+            Affiliate metrics will populate after we wire Stripe sync and
+            commission logging. Your referral link is ready now.
           </div>
         </section>
 
@@ -224,7 +273,7 @@ export default function AffiliateDashboardPage() {
         </section>
 
         <div className="mt-6 text-xs text-white/35">
-          affiliate-dashboard-build: v1
+          affiliate-dashboard-build: v2-api-code-lookup
         </div>
       </div>
     </main>
