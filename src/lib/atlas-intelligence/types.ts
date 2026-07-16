@@ -28,8 +28,23 @@ export type AssetStatus =
   | "COMING_SOON"
   | "DISABLED";
 
+export type SupportedAsset =
+  | "BTC"
+  | "ETH"
+  | "SOL"
+  | "XRP"
+  | "XLM"
+  | "SPACEX"
+  | "AAPL"
+  | "MSFT"
+  | "NVDA"
+  | "AMZN"
+  | "META"
+  | "GOOGL"
+  | "TSLA";
+
 export interface AtlasAssetDefinition {
-  symbol: string;
+  symbol: SupportedAsset;
   displayName: string;
   assetClass: AssetClass;
   enabled: boolean;
