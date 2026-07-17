@@ -20,3 +20,4 @@
 
 export * from "./operations-status";
 export * from "./operations-snapshot";
+export * from "./operations-metrics";
