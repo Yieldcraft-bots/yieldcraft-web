@@ -4,10 +4,11 @@
  * Admin Status API
  * ------------------------------------------------------------
  * PURPOSE
- * Return the current read-only Atlas Operations snapshot.
+ * Return the current read-only Atlas Operations snapshot and
+ * derived operational metrics.
  *
  * Single Responsibility:
- * Expose Atlas Operations status through an HTTP GET endpoint.
+ * Expose Atlas Operations data through an HTTP GET endpoint.
  *
  * This route performs NO business logic.
  * This route performs NO execution.
@@ -27,29 +28,39 @@
 
 import { NextResponse } from "next/server";
 
-import { buildAtlasOperationsSnapshot } from "@/lib/atlas-operations";
+import {
+  buildAtlasOperationsSnapshot,
+  getAtlasOperationsMetrics,
+} from "@/lib/atlas-operations";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     const snapshot = buildAtlasOperationsSnapshot();
+    const metrics = getAtlasOperationsMetrics();
 
-    return NextResponse.json(snapshot, {
-      status: 200,
-      headers: {
-        "Cache-Control": "no-store",
+    return NextResponse.json(
+      {
+        ...snapshot,
+        metrics,
       },
-    });
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-store",
+        },
+      }
+    );
   } catch (error) {
     console.error(
-      "[atlas-operations-status] Failed to build operations snapshot:",
+      "[atlas-operations-status] Failed to build operations response:",
       error
     );
 
     return NextResponse.json(
       {
-        error: "Failed to build Atlas Operations snapshot.",
+        error: "Failed to build Atlas Operations response.",
       },
       {
         status: 500,
