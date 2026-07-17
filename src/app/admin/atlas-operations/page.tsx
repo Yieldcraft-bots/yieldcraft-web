@@ -2,6 +2,7 @@ import Link from "next/link";
 import AtlasSummaryCards from "./components/AtlasSummaryCards";
 import AtlasFunnel from "./components/AtlasFunnel";
 import AtlasExecutionStatus from "./components/AtlasExecutionStatus";
+import AtlasIntelligenceHealth from "./components/AtlasIntelligenceHealth";
 import AtlasUserGrid from "./components/AtlasUserGrid";
 
 export default function AtlasOperationsPage() {
@@ -18,7 +19,8 @@ export default function AtlasOperationsPage() {
 
         <p className="mt-3 max-w-3xl text-slate-400">
           Operational visibility for Atlas onboarding, activation,
-          subscriptions, key connections, and launch readiness.
+          subscriptions, key connections, launch readiness, and read-only
+          intelligence health.
         </p>
 
         <div className="mt-8">
@@ -31,6 +33,10 @@ export default function AtlasOperationsPage() {
 
         <div className="mt-10">
           <AtlasExecutionStatus />
+        </div>
+
+        <div className="mt-10">
+          <AtlasIntelligenceHealth />
         </div>
 
         <div className="mt-10">
