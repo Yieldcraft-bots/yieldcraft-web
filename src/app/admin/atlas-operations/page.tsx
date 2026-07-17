@@ -3,6 +3,7 @@ import AtlasSummaryCards from "./components/AtlasSummaryCards";
 import AtlasFunnel from "./components/AtlasFunnel";
 import AtlasExecutionStatus from "./components/AtlasExecutionStatus";
 import AtlasIntelligenceHealth from "./components/AtlasIntelligenceHealth";
+import AtlasActivityFeed from "./components/AtlasActivityFeed";
 import AtlasUserGrid from "./components/AtlasUserGrid";
 
 export default function AtlasOperationsPage() {
@@ -37,6 +38,10 @@ export default function AtlasOperationsPage() {
 
         <div className="mt-10">
           <AtlasIntelligenceHealth />
+        </div>
+
+        <div className="mt-10">
+          <AtlasActivityFeed />
         </div>
 
         <div className="mt-10">
