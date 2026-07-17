@@ -9,7 +9,7 @@
  * Display read-only Atlas Intelligence and Atlas Labs health.
  *
  * Single Responsibility:
- * Fetch and render the Atlas Operations regression snapshot.
+ * Fetch and render Atlas Operations intelligence metrics.
  *
  * This component performs NO business logic.
  * This component performs NO execution.
@@ -29,20 +29,26 @@
 
 import { useEffect, useState } from "react";
 
-interface AtlasRegressionSummary {
-  totalScenarios: number;
-  passedScenarios: number;
-  failedScenarios: number;
-  passed: boolean;
+interface AtlasOperationsMetrics {
+  generatedAt: string;
+
+  totalHealthChecks: number;
+  healthyHealthChecks: number;
+  unhealthyHealthChecks: number;
+
+  healthPercentage: number;
+
+  regressionPassed: boolean;
+
+  totalRegressionScenarios: number;
+  passedRegressionScenarios: number;
+  failedRegressionScenarios: number;
 }
 
 interface AtlasOperationsSnapshot {
   generatedAt: string;
   overallHealthy: boolean;
-  status: {
-    generatedAt: string;
-    regression: AtlasRegressionSummary;
-  };
+  metrics: AtlasOperationsMetrics;
 }
 
 type LoadState =
@@ -112,7 +118,7 @@ export default function AtlasIntelligenceHealth() {
         </p>
 
         <p className="mt-3 text-sm text-slate-400">
-          Loading the read-only Atlas Labs regression snapshot...
+          Loading the read-only Atlas Operations metrics...
         </p>
       </section>
     );
@@ -133,7 +139,7 @@ export default function AtlasIntelligenceHealth() {
   }
 
   const { snapshot } = state;
-  const { regression } = snapshot.status;
+  const { metrics } = snapshot;
 
   return (
     <section className="rounded-2xl border border-white/10 bg-slate-900 p-6">
@@ -148,8 +154,8 @@ export default function AtlasIntelligenceHealth() {
           </h2>
 
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Structural and baseline validation status from the Atlas
-            Labs regression suite.
+            Derived operational metrics from the Atlas Labs regression
+            and health-validation services.
           </p>
         </div>
 
@@ -171,7 +177,7 @@ export default function AtlasIntelligenceHealth() {
           </p>
 
           <p className="mt-2 text-2xl font-bold text-slate-50">
-            {regression.passed ? "PASS" : "FAIL"}
+            {metrics.regressionPassed ? "PASS" : "FAIL"}
           </p>
         </div>
 
@@ -181,7 +187,7 @@ export default function AtlasIntelligenceHealth() {
           </p>
 
           <p className="mt-2 text-2xl font-bold text-slate-50">
-            {regression.totalScenarios}
+            {metrics.totalRegressionScenarios}
           </p>
         </div>
 
@@ -191,7 +197,7 @@ export default function AtlasIntelligenceHealth() {
           </p>
 
           <p className="mt-2 text-2xl font-bold text-emerald-300">
-            {regression.passedScenarios}
+            {metrics.passedRegressionScenarios}
           </p>
         </div>
 
@@ -202,19 +208,19 @@ export default function AtlasIntelligenceHealth() {
 
           <p
             className={`mt-2 text-2xl font-bold ${
-              regression.failedScenarios === 0
+              metrics.failedRegressionScenarios === 0
                 ? "text-slate-50"
                 : "text-rose-300"
             }`}
           >
-            {regression.failedScenarios}
+            {metrics.failedRegressionScenarios}
           </p>
         </div>
       </div>
 
       <p className="mt-5 text-xs text-slate-500">
-        Snapshot generated{" "}
-        {new Date(snapshot.generatedAt).toLocaleString()}.
+        Metrics generated{" "}
+        {new Date(metrics.generatedAt).toLocaleString()}.
       </p>
     </section>
   );
