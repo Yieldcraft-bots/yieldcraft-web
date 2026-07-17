@@ -21,4 +21,6 @@
 export * from "./scenario-catalog";
 export * from "./scenario-runner";
 export * from "./scenario-validator";
+export * from "./baseline-validator";
+export * from "./expected-results";
 export * from "./regression-suite";
