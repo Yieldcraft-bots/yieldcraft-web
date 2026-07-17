@@ -8,8 +8,8 @@
  * PURPOSE
  * Read-only operational health overview.
  *
- * Displays the current status of major Atlas platform
- * subsystems without executing or modifying anything.
+ * Fetches current Atlas health checks from the read-only
+ * Atlas Operations status API.
  *
  * SAFETY
  * - Read-only
@@ -20,52 +20,125 @@
  * ============================================================
  */
 
-type HealthStatus = "healthy" | "warning";
+import { useEffect, useState } from "react";
 
-type HealthItem = {
-  id: number;
+type AtlasHealthCheck = {
   name: string;
+  healthy: boolean;
   description: string;
-  status: HealthStatus;
 };
 
-const systems: HealthItem[] = [
-  {
-    id: 1,
-    name: "Atlas Operations API",
-    description: "Read-only operations endpoints available.",
-    status: "healthy",
-  },
-  {
-    id: 2,
-    name: "Atlas Labs",
-    description: "Regression framework loaded.",
-    status: "healthy",
-  },
-  {
-    id: 3,
-    name: "Regression Validation",
-    description: "Latest validation completed successfully.",
-    status: "healthy",
-  },
-  {
-    id: 4,
-    name: "Operations Snapshot",
-    description: "Latest operational snapshot available.",
-    status: "healthy",
-  },
-];
+type AtlasOperationsStatus = {
+  generatedAt: string;
+  health: AtlasHealthCheck[];
+};
 
-function badgeClasses(status: HealthStatus) {
-  return status === "healthy"
+type LoadState =
+  | { status: "loading" }
+  | { status: "success"; data: AtlasOperationsStatus }
+  | { status: "error"; message: string };
+
+function badgeClasses(healthy: boolean) {
+  return healthy
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
     : "border-amber-500/30 bg-amber-500/10 text-amber-300";
 }
 
 export default function AtlasSystemHealth() {
+  const [state, setState] = useState<LoadState>({
+    status: "loading",
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadHealth() {
+      try {
+        const response = await fetch(
+          "/api/admin/atlas-operations-status",
+          {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `Atlas Operations request failed with status ${response.status}.`
+          );
+        }
+
+        const data = (await response.json()) as AtlasOperationsStatus;
+
+        setState({
+          status: "success",
+          data,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unable to load Atlas system health.",
+        });
+      }
+    }
+
+    void loadHealth();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  if (state.status === "loading") {
+    return (
+      <section className="rounded-2xl border border-white/10 bg-slate-900 p-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-sky-400">
+          Read-Only Operations
+        </p>
+
+        <h2 className="mt-2 text-2xl font-bold text-slate-50">
+          Atlas System Health
+        </h2>
+
+        <p className="mt-3 text-sm text-slate-400">
+          Loading current Atlas operational health...
+        </p>
+      </section>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <section className="rounded-2xl border border-rose-500/30 bg-rose-950/20 p-6">
+        <p className="text-xs font-semibold uppercase tracking-[0.28em] text-rose-300">
+          Read-Only Operations
+        </p>
+
+        <h2 className="mt-2 text-2xl font-bold text-slate-50">
+          Atlas System Health
+        </h2>
+
+        <p className="mt-3 text-sm text-rose-200">
+          {state.message}
+        </p>
+      </section>
+    );
+  }
+
+  const systems = state.data.health;
   const healthyCount = systems.filter(
-    (system) => system.status === "healthy"
+    (system) => system.healthy
   ).length;
+  const allHealthy =
+    systems.length > 0 && healthyCount === systems.length;
 
   return (
     <section className="rounded-2xl border border-white/10 bg-slate-900 p-6">
@@ -85,8 +158,18 @@ export default function AtlasSystemHealth() {
           </p>
         </div>
 
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
-          <div className="text-xs uppercase tracking-wider text-emerald-300">
+        <div
+          className={`rounded-xl border px-4 py-3 ${
+            allHealthy
+              ? "border-emerald-500/30 bg-emerald-500/10"
+              : "border-amber-500/30 bg-amber-500/10"
+          }`}
+        >
+          <div
+            className={`text-xs uppercase tracking-wider ${
+              allHealthy ? "text-emerald-300" : "text-amber-300"
+            }`}
+          >
             Healthy Systems
           </div>
 
@@ -99,8 +182,8 @@ export default function AtlasSystemHealth() {
       <div className="mt-6 space-y-3">
         {systems.map((system) => (
           <div
-            key={system.id}
-            className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950 p-4"
+            key={system.name}
+            className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-slate-950 p-4"
           >
             <div>
               <h3 className="font-semibold text-slate-100">
@@ -113,15 +196,20 @@ export default function AtlasSystemHealth() {
             </div>
 
             <span
-              className={`rounded-full border px-3 py-1 text-xs font-semibold ${badgeClasses(
-                system.status
+              className={`shrink-0 rounded-full border px-3 py-1 text-xs font-semibold ${badgeClasses(
+                system.healthy
               )}`}
             >
-              {system.status === "healthy" ? "Healthy" : "Warning"}
+              {system.healthy ? "Healthy" : "Warning"}
             </span>
           </div>
         ))}
       </div>
+
+      <p className="mt-5 text-xs text-slate-500">
+        Health snapshot generated{" "}
+        {new Date(state.data.generatedAt).toLocaleString()}.
+      </p>
     </section>
   );
 }
