@@ -30,14 +30,45 @@
 import { runRegressionSuite } from "../atlas-labs";
 import type { AtlasRegressionSummary } from "../atlas-labs";
 
+export interface AtlasHealthCheck {
+  name: string;
+  healthy: boolean;
+  description: string;
+}
+
 export interface AtlasOperationsStatus {
   generatedAt: string;
   regression: AtlasRegressionSummary;
+  health: AtlasHealthCheck[];
 }
 
 export function getAtlasOperationsStatus(): AtlasOperationsStatus {
+  const regression = runRegressionSuite();
+
   return {
     generatedAt: new Date().toISOString(),
-    regression: runRegressionSuite(),
+    regression,
+    health: [
+      {
+        name: "Atlas Labs",
+        healthy: regression.passed,
+        description: "Regression framework",
+      },
+      {
+        name: "Regression Validation",
+        healthy: regression.passed,
+        description: "Latest validation results",
+      },
+      {
+        name: "Operations Snapshot",
+        healthy: true,
+        description: "Snapshot generated successfully",
+      },
+      {
+        name: "Operations API",
+        healthy: true,
+        description: "Read-only status service",
+      },
+    ],
   };
 }
