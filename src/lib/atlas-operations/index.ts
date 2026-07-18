@@ -19,5 +19,6 @@
  */
 
 export * from "./operations-status";
-export * from "./operations-snapshot";
 export * from "./operations-metrics";
+export * from "./operations-diagnostics";
+export * from "./operations-snapshot";
