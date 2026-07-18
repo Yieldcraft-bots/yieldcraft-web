@@ -5,6 +5,7 @@ import AtlasExecutionStatus from "./components/AtlasExecutionStatus";
 import AtlasIntelligenceHealth from "./components/AtlasIntelligenceHealth";
 import AtlasActivityFeed from "./components/AtlasActivityFeed";
 import AtlasSystemHealth from "./components/AtlasSystemHealth";
+import AtlasDiagnosticsPanel from "./components/AtlasDiagnosticsPanel";
 import AtlasUserGrid from "./components/AtlasUserGrid";
 
 export default function AtlasOperationsPage() {
@@ -43,6 +44,10 @@ export default function AtlasOperationsPage() {
 
         <div className="mt-10">
           <AtlasSystemHealth />
+        </div>
+
+        <div className="mt-10">
+          <AtlasDiagnosticsPanel />
         </div>
 
         <div className="mt-10">
