@@ -18,7 +18,10 @@
  * ============================================================
  */
 
-import { getAtlasOperationsStatus } from "./operations-status";
+import {
+  getAtlasOperationsStatus,
+  type AtlasOperationsStatus,
+} from "./operations-status";
 
 export interface AtlasOperationsMetrics {
   generatedAt: string;
@@ -32,9 +35,9 @@ export interface AtlasOperationsMetrics {
   failedRegressionScenarios: number;
 }
 
-export function getAtlasOperationsMetrics(): AtlasOperationsMetrics {
-  const status = getAtlasOperationsStatus();
-
+export function buildAtlasOperationsMetrics(
+  status: AtlasOperationsStatus
+): AtlasOperationsMetrics {
   const totalHealthChecks = status.health.length;
 
   const healthyHealthChecks = status.health.filter(
@@ -53,24 +56,22 @@ export function getAtlasOperationsMetrics(): AtlasOperationsMetrics {
 
   return {
     generatedAt: status.generatedAt,
-
     totalHealthChecks,
-
     healthyHealthChecks,
-
     unhealthyHealthChecks,
-
     healthPercentage,
-
     regressionPassed: status.regression.passed,
-
     totalRegressionScenarios:
       status.regression.totalScenarios,
-
     passedRegressionScenarios:
       status.regression.passedScenarios,
-
     failedRegressionScenarios:
       status.regression.failedScenarios,
   };
+}
+
+export function getAtlasOperationsMetrics(): AtlasOperationsMetrics {
+  const status = getAtlasOperationsStatus();
+
+  return buildAtlasOperationsMetrics(status);
 }

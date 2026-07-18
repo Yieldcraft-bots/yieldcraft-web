@@ -31,18 +31,26 @@ import {
   type AtlasOperationsStatus,
 } from "./operations-status";
 
+import {
+  buildAtlasOperationsMetrics,
+  type AtlasOperationsMetrics,
+} from "./operations-metrics";
+
 export interface AtlasOperationsSnapshot {
   generatedAt: string;
   overallHealthy: boolean;
   status: AtlasOperationsStatus;
+  metrics: AtlasOperationsMetrics;
 }
 
 export function buildAtlasOperationsSnapshot(): AtlasOperationsSnapshot {
   const status = getAtlasOperationsStatus();
+  const metrics = buildAtlasOperationsMetrics(status);
 
   return {
     generatedAt: status.generatedAt,
     overallHealthy: status.regression.passed,
     status,
+    metrics,
   };
 }
