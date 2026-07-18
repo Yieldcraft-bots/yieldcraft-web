@@ -36,21 +36,32 @@ import {
   type AtlasOperationsMetrics,
 } from "./operations-metrics";
 
+import {
+  buildAtlasOperationsDiagnostics,
+  type AtlasOperationsDiagnostics,
+} from "./operations-diagnostics";
+
 export interface AtlasOperationsSnapshot {
   generatedAt: string;
   overallHealthy: boolean;
   status: AtlasOperationsStatus;
   metrics: AtlasOperationsMetrics;
+  diagnostics: AtlasOperationsDiagnostics;
 }
 
 export function buildAtlasOperationsSnapshot(): AtlasOperationsSnapshot {
   const status = getAtlasOperationsStatus();
+
   const metrics = buildAtlasOperationsMetrics(status);
+
+  const diagnostics =
+    buildAtlasOperationsDiagnostics(status);
 
   return {
     generatedAt: status.generatedAt,
     overallHealthy: status.regression.passed,
     status,
     metrics,
+    diagnostics,
   };
 }
