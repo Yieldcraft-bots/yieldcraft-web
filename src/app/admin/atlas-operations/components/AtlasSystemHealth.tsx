@@ -30,7 +30,11 @@ type AtlasHealthCheck = {
 
 type AtlasOperationsStatus = {
   generatedAt: string;
-  health: AtlasHealthCheck[];
+  overallHealthy: boolean;
+  status: {
+    generatedAt: string;
+    health: AtlasHealthCheck[];
+  };
 };
 
 type LoadState =
@@ -133,7 +137,7 @@ export default function AtlasSystemHealth() {
     );
   }
 
-  const systems = state.data.health;
+  const systems = state.data.status.health;
   const healthyCount = systems.filter(
     (system) => system.healthy
   ).length;
@@ -208,7 +212,7 @@ export default function AtlasSystemHealth() {
 
       <p className="mt-5 text-xs text-slate-500">
         Health snapshot generated{" "}
-        {new Date(state.data.generatedAt).toLocaleString()}.
+        {new Date(state.data.status.generatedAt).toLocaleString()}.
       </p>
     </section>
   );
