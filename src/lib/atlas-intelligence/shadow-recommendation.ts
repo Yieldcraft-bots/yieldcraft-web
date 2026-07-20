@@ -22,9 +22,13 @@
  */
 
 import type { SupportedAsset } from "./types";
+import type {
+  AssetEligibility,
+} from "./asset-eligibility-engine";
 
 export interface ShadowRecommendation {
   eligible: boolean;
+  eligibility: AssetEligibility;
   asset: SupportedAsset | null;
   recommendedAmountUsd: number;
   reason: string;
@@ -35,10 +39,14 @@ export function buildShadowRecommendation(
   eligible: boolean,
   asset: SupportedAsset | null,
   amount: number,
-  reason: string
+  reason: string,
+  eligibility: AssetEligibility = eligible
+    ? "PRODUCTION"
+    : "INELIGIBLE"
 ): ShadowRecommendation {
   return {
     eligible,
+    eligibility,
     asset,
     recommendedAmountUsd: Number(amount.toFixed(2)),
     reason,
