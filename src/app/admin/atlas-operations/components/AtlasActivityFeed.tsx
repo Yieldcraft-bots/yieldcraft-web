@@ -6,72 +6,26 @@
  * Activity Feed
  * ------------------------------------------------------------
  * PURPOSE
- * Read-only operational activity timeline for Atlas.
+ * Read-only operational activity area for Atlas.
  *
- * This component displays recent Atlas operational events.
+ * This component does not fabricate operational events.
+ * It displays an explicit unavailable state until a verified
+ * read-only activity source is connected.
  *
- * NO execution.
- * NO trading.
- * NO policy updates.
- * NO writes.
- * NO mutations.
+ * SAFETY
+ * - Read-only
+ * - No execution
+ * - No trading
+ * - No policy updates
+ * - No writes
+ * - No mutations
  * ============================================================
  */
-
-type ActivityItem = {
-  id: number;
-  title: string;
-  description: string;
-  time: string;
-  status: "success" | "info" | "warning";
-};
-
-const activities: ActivityItem[] = [
-  {
-    id: 1,
-    title: "Regression Validation",
-    description: "Atlas Labs regression suite completed successfully.",
-    time: "Latest Snapshot",
-    status: "success",
-  },
-  {
-    id: 2,
-    title: "Operations Snapshot",
-    description: "Atlas Operations status snapshot generated.",
-    time: "Latest Snapshot",
-    status: "info",
-  },
-  {
-    id: 3,
-    title: "Dashboard Health",
-    description: "Read-only operational dashboard loaded.",
-    time: "Current Session",
-    status: "success",
-  },
-  {
-    id: 4,
-    title: "Execution Layer",
-    description: "Execution systems remain isolated from Operations.",
-    time: "Protected",
-    status: "info",
-  },
-];
-
-function statusClasses(status: ActivityItem["status"]) {
-  switch (status) {
-    case "success":
-      return "bg-emerald-500";
-    case "warning":
-      return "bg-amber-500";
-    default:
-      return "bg-sky-500";
-  }
-}
 
 export default function AtlasActivityFeed() {
   return (
     <section className="rounded-2xl border border-white/10 bg-slate-900 p-6">
-      <div className="mb-6">
+      <div>
         <p className="text-xs font-semibold uppercase tracking-[0.28em] text-sky-400">
           Read-Only Operations
         </p>
@@ -81,40 +35,32 @@ export default function AtlasActivityFeed() {
         </h2>
 
         <p className="mt-2 text-sm text-slate-400">
-          Recent Atlas operational events and intelligence updates.
+          Verified Atlas operational events and intelligence updates.
         </p>
       </div>
 
-      <div className="space-y-4">
-        {activities.map((activity) => (
-          <div
-            key={activity.id}
-            className="flex items-start gap-4 rounded-xl border border-white/10 bg-slate-950 p-4"
-          >
-            <div
-              className={`mt-1 h-3 w-3 rounded-full ${statusClasses(
-                activity.status
-              )}`}
-            />
+      <div className="mt-6 rounded-xl border border-sky-500/20 bg-slate-950/40 p-5">
+        <div className="flex items-start gap-4">
+          <div className="mt-1 h-3 w-3 shrink-0 rounded-full bg-sky-500" />
 
-            <div className="flex-1">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="font-semibold text-slate-100">
-                  {activity.title}
-                </h3>
+          <div>
+            <h3 className="font-semibold text-slate-100">
+              Activity source not connected
+            </h3>
 
-                <span className="text-xs text-slate-500">
-                  {activity.time}
-                </span>
-              </div>
-
-              <p className="mt-2 text-sm text-slate-400">
-                {activity.description}
-              </p>
-            </div>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              No verified read-only Atlas activity source is currently
+              connected to this panel. Operational events will appear here only
+              after they can be retrieved from an authoritative read-only API.
+            </p>
           </div>
-        ))}
+        </div>
       </div>
+
+      <p className="mt-4 text-xs text-slate-500">
+        No execution, trading, policy, or mutation controls are available from
+        this component.
+      </p>
     </section>
   );
 }
