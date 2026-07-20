@@ -245,3 +245,16 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
     supportsLimitOrders: true,
   },
 ] as const;
+
+const capabilityMap = new Map<SupportedAsset, AtlasAssetCapability>(
+  ATLAS_ASSET_CAPABILITIES.map((capability) => [
+    capability.symbol,
+    capability,
+  ])
+);
+
+export function getAssetCapability(
+  symbol: SupportedAsset
+): AtlasAssetCapability | undefined {
+  return capabilityMap.get(symbol);
+}
