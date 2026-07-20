@@ -23,6 +23,9 @@
  */
 
 import type { SupportedAsset } from "./types";
+import type {
+  AssetEligibility,
+} from "./asset-eligibility-engine";
 
 export interface RecommendationReportInput {
   asset: SupportedAsset | null;
@@ -31,11 +34,13 @@ export interface RecommendationReportInput {
   missingAssets: SupportedAsset[];
   reason: string;
   eligible: boolean;
+  eligibility?: AssetEligibility;
 }
 
 export interface RecommendationReport {
   generatedAt: string;
   eligible: boolean;
+  eligibility: AssetEligibility;
   recommendedAsset: SupportedAsset | null;
   recommendedAmountUsd: number;
   portfolioCompletionPct: number;
@@ -49,6 +54,11 @@ export function buildRecommendationReport(
   return {
     generatedAt: new Date().toISOString(),
     eligible: input.eligible,
+    eligibility:
+      input.eligibility ??
+      (input.eligible
+        ? "PRODUCTION"
+        : "INELIGIBLE"),
     recommendedAsset: input.asset,
     recommendedAmountUsd: Number(
       input.recommendedAmountUsd.toFixed(2)
