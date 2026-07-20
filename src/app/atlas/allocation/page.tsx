@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import ClientAllocationForm from "@/components/atlas/ClientAllocationForm";
+
 export default function AtlasAllocationPage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -29,16 +31,7 @@ export default function AtlasAllocationPage() {
         </div>
 
         <section className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-5">
-            <p className="text-sm font-semibold text-slate-100">
-              Allocation controls are being loaded.
-            </p>
-
-            <p className="mt-2 text-sm text-slate-400">
-              This page will read and save your Atlas allocation through the
-              protected client-allocation API.
-            </p>
-          </div>
+          <ClientAllocationForm />
 
           <div className="mt-6 rounded-2xl border border-amber-400/20 bg-amber-400/5 p-4">
             <p className="text-sm font-semibold text-amber-300">
