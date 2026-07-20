@@ -75,6 +75,17 @@ export default function AtlasSystemHealth() {
 
         const data = (await response.json()) as AtlasOperationsStatus;
 
+        if (
+          !data ||
+          !data.status ||
+          !Array.isArray(data.status.health) ||
+          typeof data.status.generatedAt !== "string"
+        ) {
+          throw new Error(
+            "Atlas system health payload was invalid."
+          );
+        }
+
         setState({
           status: "success",
           data,
