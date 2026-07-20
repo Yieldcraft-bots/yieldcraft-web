@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import AtlasCard from "./AtlasCard";
 
 type AtlasUser = {
@@ -13,7 +19,12 @@ type AtlasUser = {
   subscription_status: string | null;
   atlas_entitled: boolean;
   atlas_key_connected: boolean;
-  status: "READY" | "COOLDOWN" | "NEEDS_FUNDS" | "ERROR" | string;
+  status:
+    | "READY"
+    | "COOLDOWN"
+    | "NEEDS_FUNDS"
+    | "ERROR"
+    | string;
   reason: string;
   cash_available_usd: number;
   btc_available: number;
@@ -27,53 +38,109 @@ type AtlasOpsResponse = {
   users?: AtlasUser[];
 };
 
-type StatusFilter = "ALL" | "READY" | "COOLDOWN" | "NEEDS_FUNDS" | "ERROR";
+type StatusFilter =
+  | "ALL"
+  | "READY"
+  | "COOLDOWN"
+  | "NEEDS_FUNDS"
+  | "ERROR";
+
+const STATUS_FILTERS: StatusFilter[] = [
+  "ALL",
+  "READY",
+  "COOLDOWN",
+  "NEEDS_FUNDS",
+  "ERROR",
+];
 
 export default function AtlasUserGrid() {
   const [users, setUsers] = useState<AtlasUser[]>([]);
   const [filter, setFilter] = useState<StatusFilter>("ALL");
   const [loading, setLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(
+    null
+  );
+  const [lastUpdated, setLastUpdated] = useState<string | null>(
+    null
+  );
 
-  async function loadUsers() {
+  const activeRequestRef = useRef<AbortController | null>(null);
+
+  const loadUsers = useCallback(async () => {
+    activeRequestRef.current?.abort();
+
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+
     setLoading(true);
+    setErrorMessage(null);
 
-    const res = await fetch("/api/admin/atlas-ops-status", {
-      cache: "no-store",
-    });
+    try {
+      const response = await fetch(
+        "/api/admin/atlas-ops-status",
+        {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        }
+      );
 
-    const json: AtlasOpsResponse = await res.json();
+      if (!response.ok) {
+        throw new Error(
+          `Atlas Operations request failed with status ${response.status}.`
+        );
+      }
 
-    if (json.ok && Array.isArray(json.users)) {
-      setUsers(json.users);
+      const data = (await response.json()) as AtlasOpsResponse;
+
+      if (!data.ok || !Array.isArray(data.users)) {
+        throw new Error(
+          "Atlas user grid payload was unavailable or invalid."
+        );
+      }
+
+      setUsers(data.users);
       setLastUpdated(new Date().toLocaleTimeString());
-    }
+    } catch (error) {
+      if (controller.signal.aborted) {
+        return;
+      }
 
-    setLoading(false);
-  }
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to load Atlas users."
+      );
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
+
+      if (activeRequestRef.current === controller) {
+        activeRequestRef.current = null;
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-
-    async function safeLoad() {
-      if (!alive) return;
-      await loadUsers();
-    }
-
-    safeLoad().catch(console.error);
+    void loadUsers();
 
     const interval = window.setInterval(() => {
-      safeLoad().catch(console.error);
+      void loadUsers();
     }, 60_000);
 
     return () => {
-      alive = false;
       window.clearInterval(interval);
+      activeRequestRef.current?.abort();
+      activeRequestRef.current = null;
     };
-  }, []);
+  }, [loadUsers]);
 
   const filteredUsers = useMemo(() => {
-    if (filter === "ALL") return users;
+    if (filter === "ALL") {
+      return users;
+    }
+
     return users.filter((user) => user.status === filter);
   }, [filter, users]);
 
@@ -81,22 +148,21 @@ export default function AtlasUserGrid() {
     <AtlasCard title="Atlas User Grid">
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
         <div className="flex flex-wrap gap-2">
-          {(["ALL", "READY", "COOLDOWN", "NEEDS_FUNDS", "ERROR"] as StatusFilter[]).map(
-            (status) => (
-              <button
-                key={status}
-                type="button"
-                onClick={() => setFilter(status)}
-                className={
-                  filter === status
-                    ? "rounded-xl border border-sky-400 bg-sky-400/10 px-3 py-2 text-sm font-semibold text-sky-200"
-                    : "rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-300 hover:bg-slate-900"
-                }
-              >
-                {status}
-              </button>
-            )
-          )}
+          {STATUS_FILTERS.map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => setFilter(status)}
+              aria-pressed={filter === status}
+              className={
+                filter === status
+                  ? "rounded-xl border border-sky-400 bg-sky-400/10 px-3 py-2 text-sm font-semibold text-sky-200"
+                  : "rounded-xl border border-white/10 bg-slate-950 px-3 py-2 text-sm text-slate-300 hover:bg-slate-900"
+              }
+            >
+              {friendlyReason(status)}
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-3">
@@ -108,13 +174,36 @@ export default function AtlasUserGrid() {
 
           <button
             type="button"
-            onClick={() => loadUsers().catch(console.error)}
-            className="rounded-xl border border-white/10 bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900"
+            onClick={() => void loadUsers()}
+            disabled={loading}
+            className="rounded-xl border border-white/10 bg-slate-950 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {loading ? "Refreshing..." : "Refresh"}
           </button>
         </div>
       </div>
+
+      {errorMessage ? (
+        <div
+          role="alert"
+          className="mb-5 rounded-xl border border-rose-500/30 bg-rose-950/20 p-4"
+        >
+          <p className="font-semibold text-rose-300">
+            Atlas user data unavailable
+          </p>
+
+          <p className="mt-2 text-sm text-rose-200">
+            {errorMessage}
+          </p>
+
+          {lastUpdated ? (
+            <p className="mt-2 text-xs text-rose-300/70">
+              The table below shows the last successful snapshot from{" "}
+              {lastUpdated}.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="overflow-x-auto rounded-2xl border border-white/10">
         <table className="w-full min-w-[1300px] border-collapse text-left text-sm">
@@ -143,6 +232,7 @@ export default function AtlasUserGrid() {
                   <div className="font-semibold text-white">
                     {displayCustomer(user)}
                   </div>
+
                   <div className="font-mono text-xs text-slate-500">
                     {user.email || shortUser(user.user_id)}
                   </div>
@@ -165,7 +255,13 @@ export default function AtlasUserGrid() {
                 </td>
 
                 <td className="px-4 py-4">
-                  <SmallPill value={user.atlas_key_connected ? "Connected" : "Needed"} />
+                  <SmallPill
+                    value={
+                      user.atlas_key_connected
+                        ? "Connected"
+                        : "Needed"
+                    }
+                  />
                 </td>
 
                 <td className="px-4 py-4">
@@ -186,13 +282,39 @@ export default function AtlasUserGrid() {
               </tr>
             ))}
 
-            {!loading && filteredUsers.length === 0 ? (
+            {loading && users.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={10}
+                  className="px-4 py-10 text-center text-slate-500"
+                >
+                  Loading Atlas users...
+                </td>
+              </tr>
+            ) : null}
+
+            {!loading &&
+            !errorMessage &&
+            filteredUsers.length === 0 ? (
               <tr>
                 <td
                   colSpan={10}
                   className="px-4 py-10 text-center text-slate-500"
                 >
                   No users match this filter.
+                </td>
+              </tr>
+            ) : null}
+
+            {!loading &&
+            errorMessage &&
+            users.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={10}
+                  className="px-4 py-10 text-center text-rose-300"
+                >
+                  Atlas user data could not be loaded.
                 </td>
               </tr>
             ) : null}
@@ -214,7 +336,9 @@ function HealthPill(props: { health: string }) {
           : "border-rose-400/40 bg-rose-400/10 text-rose-200";
 
   return (
-    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${tone}`}>
+    <span
+      className={`rounded-full border px-3 py-1 text-xs font-semibold ${tone}`}
+    >
       {friendlyReason(props.health)}
     </span>
   );
@@ -245,11 +369,18 @@ function SmallPill(props: { value: string }) {
 }
 
 function displayCustomer(user: AtlasUser) {
-  return user.display_name || user.email || shortUser(user.user_id);
+  return (
+    user.display_name ||
+    user.email ||
+    shortUser(user.user_id)
+  );
 }
 
 function shortUser(userId: string) {
-  if (!userId) return "—";
+  if (!userId) {
+    return "—";
+  }
+
   return `${userId.slice(0, 8)}…${userId.slice(-4)}`;
 }
 
@@ -265,21 +396,29 @@ function formatBtc(value: number) {
 }
 
 function formatDateShort(value: string | null) {
-  if (!value) return "—";
+  if (!value) {
+    return "—";
+  }
 
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
+  const date = new Date(value);
 
-  return d.toLocaleDateString(undefined, {
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+
+  return date.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
   });
 }
 
 function friendlyReason(value: string | null) {
-  if (!value) return "—";
+  if (!value) {
+    return "—";
+  }
 
   const map: Record<string, string> = {
+    ALL: "All",
     HEALTHY: "Healthy",
     READY: "Ready",
     COOLDOWN: "Cooldown",
