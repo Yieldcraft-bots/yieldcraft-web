@@ -12,40 +12,114 @@ type AtlasOpsStatus = {
   };
 };
 
+type LoadState =
+  | { status: "loading" }
+  | { status: "success"; data: AtlasOpsStatus }
+  | { status: "error"; message: string };
+
 export default function AtlasExecutionStatus() {
-  const [data, setData] = useState<AtlasOpsStatus | null>(null);
+  const [state, setState] = useState<LoadState>({
+    status: "loading",
+  });
 
   useEffect(() => {
-    fetch("/api/admin/atlas-ops-status", { cache: "no-store" })
-      .then((res) => (res.ok ? res.json() : null))
-      .then(setData)
-      .catch(() => setData(null));
+    const controller = new AbortController();
+
+    async function loadStatus() {
+      try {
+        const response = await fetch("/api/admin/atlas-ops-status", {
+          method: "GET",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Atlas Operations request failed with status ${response.status}.`
+          );
+        }
+
+        const data = (await response.json()) as AtlasOpsStatus;
+
+        setState({
+          status: "success",
+          data,
+        });
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setState({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Unable to load Atlas execution status.",
+        });
+      }
+    }
+
+    void loadStatus();
+
+    return () => {
+      controller.abort();
+    };
   }, []);
 
-  const summary = data?.summary || {
-    ready: 0,
-    cooldown: 0,
-    needs_funds: 0,
-    error: 0,
-  };
+  if (state.status === "loading") {
+    return (
+      <AtlasCard title="Atlas Execution Status">
+        <p className="text-sm text-slate-400">
+          Loading read-only Atlas status...
+        </p>
+      </AtlasCard>
+    );
+  }
+
+  if (state.status === "error") {
+    return (
+      <AtlasCard title="Atlas Execution Status">
+        <div className="rounded-2xl border border-rose-500/30 bg-rose-950/20 p-4">
+          <p className="font-semibold text-rose-300">
+            Status unavailable
+          </p>
+
+          <p className="mt-2 text-sm text-rose-200">
+            {state.message}
+          </p>
+        </div>
+      </AtlasCard>
+    );
+  }
+
+  const summary = state.data.summary ?? {};
 
   return (
     <AtlasCard title="Atlas Execution Status">
       <div className="space-y-4">
-        <StatusRow status="READY" count={String(summary.ready)} />
-        <StatusRow status="COOLDOWN" count={String(summary.cooldown)} />
-        <StatusRow status="NEEDS_FUNDS" count={String(summary.needs_funds)} />
-        <StatusRow status="ERROR" count={String(summary.error)} />
+        <StatusRow status="READY" count={summary.ready ?? 0} />
+        <StatusRow status="COOLDOWN" count={summary.cooldown ?? 0} />
+        <StatusRow
+          status="NEEDS_FUNDS"
+          count={summary.needs_funds ?? 0}
+        />
+        <StatusRow status="ERROR" count={summary.error ?? 0} />
       </div>
     </AtlasCard>
   );
 }
 
-function StatusRow(props: { status: string; count: string }) {
+function StatusRow(props: { status: string; count: number }) {
   return (
     <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-      <span className="font-medium text-slate-300">{props.status}</span>
-      <span className="font-bold text-white">{props.count}</span>
+      <span className="font-medium text-slate-300">
+        {props.status}
+      </span>
+
+      <span className="font-bold text-white">
+        {props.count}
+      </span>
     </div>
   );
 }
