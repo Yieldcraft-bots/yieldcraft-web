@@ -40,7 +40,13 @@ import {
 } from "./portfolio-completion";
 
 import {
+  determineAssetEligibility,
+  type AssetEligibility,
+} from "./asset-eligibility-engine";
+
+import {
   rankOpportunities,
+  type OpportunityCandidate,
   type RankedOpportunity,
 } from "./opportunity-ranking-engine";
 
@@ -101,16 +107,35 @@ export function runAtlasIntelligencePipeline(
     ownedAssetCount: portfolioGap.owned.length,
   });
 
+  const opportunityCandidates: OpportunityCandidate[] =
+    portfolioGap.missing.map((asset) => {
+      const eligibilityResult =
+        determineAssetEligibility(asset);
+
+      return {
+        asset: eligibilityResult.asset,
+        eligibility: eligibilityResult.eligibility,
+      };
+    });
+
   const rankedOpportunities = rankOpportunities(
-    portfolioGap.missing
+    opportunityCandidates
   );
 
   const decision = makeAtlasDecision({
     rankedOpportunities,
   });
 
+  const selectedOpportunity =
+    rankedOpportunities[0] ?? null;
+
+  const selectedEligibility: AssetEligibility =
+    selectedOpportunity?.eligibility ?? "INELIGIBLE";
+
   const allocationPlan =
-    decision.eligible && decision.recommendedAsset
+    decision.eligible &&
+    decision.recommendedAsset &&
+    selectedEligibility === "PRODUCTION"
       ? buildAllocationPlan({
           asset: decision.recommendedAsset,
           availableCash: input.availableCash,
@@ -122,26 +147,34 @@ export function runAtlasIntelligencePipeline(
 
   const recommendationEligible =
     decision.eligible &&
+    selectedEligibility === "PRODUCTION" &&
     allocationPlan !== null &&
     allocationPlan.eligible;
 
-  const recommendedAsset = recommendationEligible
-    ? decision.recommendedAsset
-    : null;
+  const recommendedAsset =
+    selectedEligibility === "SHADOW_ONLY"
+      ? decision.recommendedAsset
+      : recommendationEligible
+        ? decision.recommendedAsset
+        : null;
 
   const recommendedAmountUsd = recommendationEligible
     ? allocationPlan.recommendedAmountUsd
     : 0;
 
-  const reason = recommendationEligible
-    ? `${decision.reason} ${allocationPlan.reason}`
-    : allocationPlan?.reason ?? decision.reason;
+  const reason =
+    selectedEligibility === "SHADOW_ONLY"
+      ? decision.reason
+      : recommendationEligible
+        ? `${decision.reason} ${allocationPlan.reason}`
+        : allocationPlan?.reason ?? decision.reason;
 
   const shadowRecommendation = buildShadowRecommendation(
     recommendationEligible,
     recommendedAsset,
     recommendedAmountUsd,
-    reason
+    reason,
+    selectedEligibility
   );
 
   const recommendationReport = buildRecommendationReport({
@@ -151,6 +184,7 @@ export function runAtlasIntelligencePipeline(
     missingAssets: portfolioGap.missing,
     reason,
     eligible: recommendationEligible,
+    eligibility: selectedEligibility,
   });
 
   return {

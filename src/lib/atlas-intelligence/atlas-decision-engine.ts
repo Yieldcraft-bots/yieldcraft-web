@@ -6,7 +6,10 @@
  * Produce a single accumulation recommendation from the
  * Atlas Intelligence layer.
  *
- * This file contains NO execution logic.
+ * This engine determines whether the highest-ranked
+ * opportunity is eligible for production allocation.
+ *
+ * It NEVER executes trades.
  *
  * SAFETY
  * - Read-only
@@ -45,9 +48,27 @@ export function makeAtlasDecision(
 
   const top = input.rankedOpportunities[0];
 
-  return {
-    eligible: true,
-    recommendedAsset: top.asset,
-    reason: "Highest-ranked eligible accumulation opportunity.",
-  };
+  switch (top.eligibility) {
+    case "PRODUCTION":
+      return {
+        eligible: true,
+        recommendedAsset: top.asset,
+        reason: "Highest-ranked production-ready opportunity.",
+      };
+
+    case "SHADOW_ONLY":
+      return {
+        eligible: false,
+        recommendedAsset: top.asset,
+        reason: "Highest-ranked opportunity is shadow-only.",
+      };
+
+    case "INELIGIBLE":
+    default:
+      return {
+        eligible: false,
+        recommendedAsset: null,
+        reason: "Highest-ranked opportunity is currently ineligible.",
+      };
+  }
 }

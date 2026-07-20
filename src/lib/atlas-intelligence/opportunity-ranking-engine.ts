@@ -3,11 +3,14 @@
  * Opportunity Ranking Engine
  * ------------------------------------------------------------
  * PURPOSE
- * Rank missing assets in a target portfolio.
+ * Rank eligible opportunities for future allocation planning.
  *
- * This engine does NOT decide trades.
- * It simply produces a prioritized list for future
- * allocation planning.
+ * This engine does NOT:
+ * - determine eligibility
+ * - make execution decisions
+ * - allocate capital
+ *
+ * It only assigns ranking priority.
  *
  * SAFETY
  * - Read-only
@@ -21,17 +24,25 @@
  */
 
 import type { SupportedAsset } from "./types";
+import type { AssetEligibility } from "./asset-eligibility-engine";
 
 export interface RankedOpportunity {
   asset: SupportedAsset;
+  eligibility: AssetEligibility;
   priority: number;
 }
 
+export interface OpportunityCandidate {
+  asset: SupportedAsset;
+  eligibility: AssetEligibility;
+}
+
 export function rankOpportunities(
-  missingAssets: SupportedAsset[]
+  opportunities: OpportunityCandidate[]
 ): RankedOpportunity[] {
-  return missingAssets.map((asset, index) => ({
-    asset,
+  return opportunities.map((opportunity, index) => ({
+    asset: opportunity.asset,
+    eligibility: opportunity.eligibility,
     priority: index + 1,
   }));
 }
