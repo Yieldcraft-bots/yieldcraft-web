@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { supabase } from "@/lib/supabaseClient";
+import { getAllocatableAtlasAssets } from "@/lib/atlas-intelligence/asset-catalog";
 import { ATLAS_ASSET_REGISTRY } from "@/lib/atlas-intelligence/asset-registry";
 import type { ClientAllocationItem } from "@/lib/atlas-intelligence/client-allocation";
+import { supabase } from "@/lib/supabaseClient";
 
 type ClientAllocationResponse = {
   ok: boolean;
@@ -14,8 +15,9 @@ type ClientAllocationResponse = {
 };
 
 export default function ClientAllocationForm() {
-  const activeAssets = ATLAS_ASSET_REGISTRY.filter(
-    (asset) => asset.enabled && asset.status === "ACTIVE"
+  const activeAssets = useMemo(
+    () => getAllocatableAtlasAssets(ATLAS_ASSET_REGISTRY),
+    []
   );
 
   const [allocations, setAllocations] = useState<ClientAllocationItem[]>([]);
@@ -71,18 +73,22 @@ export default function ClientAllocationForm() {
           return;
         }
 
-        const enabledAssets = ATLAS_ASSET_REGISTRY.filter(
-          (asset) => asset.enabled && asset.status === "ACTIVE"
-        );
-
-        if (enabledAssets.length === 1) {
+        if (activeAssets.length === 1) {
           setAllocations([
             {
-              symbol: enabledAssets[0].symbol,
+              symbol: activeAssets[0].symbol,
               targetPercent: 100,
             },
           ]);
+          return;
         }
+
+        setAllocations(
+          activeAssets.map((asset) => ({
+            symbol: asset.symbol,
+            targetPercent: 0,
+          }))
+        );
       } catch (error) {
         if (!cancelled) {
           setLoadError(
@@ -103,7 +109,7 @@ export default function ClientAllocationForm() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activeAssets]);
 
   const allocationBySymbol = new Map(
     allocations.map((allocation) => [
@@ -119,6 +125,44 @@ export default function ClientAllocationForm() {
     0
   );
 
+  const isTotalValid = totalPercent === 100;
+
+  function updateTargetPercent(symbol: string, value: string) {
+    const parsedValue = Number(value);
+
+    const targetPercent = Number.isFinite(parsedValue)
+      ? Math.max(0, Math.min(100, parsedValue))
+      : 0;
+
+    setAllocations((current) => {
+      const normalizedSymbol = symbol.toUpperCase();
+
+      const existingAllocation = current.some(
+        (allocation) =>
+          allocation.symbol.toUpperCase() === normalizedSymbol
+      );
+
+      if (!existingAllocation) {
+        return [
+          ...current,
+          {
+            symbol,
+            targetPercent,
+          },
+        ];
+      }
+
+      return current.map((allocation) =>
+        allocation.symbol.toUpperCase() === normalizedSymbol
+          ? {
+              ...allocation,
+              targetPercent,
+            }
+          : allocation
+      );
+    });
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -127,7 +171,7 @@ export default function ClientAllocationForm() {
         </h2>
 
         <p className="mt-1 text-sm text-slate-400">
-          Review the target percentage for each active Atlas asset.
+          Set the target percentage for each available Atlas asset.
         </p>
       </div>
 
@@ -179,10 +223,18 @@ export default function ClientAllocationForm() {
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
+                      min="0"
+                      max="100"
+                      step="1"
                       value={targetPercent}
-                      readOnly
+                      onChange={(event) =>
+                        updateTargetPercent(
+                          asset.symbol,
+                          event.target.value
+                        )
+                      }
                       aria-label={`${asset.displayName} target percentage`}
-                      className="w-24 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-right text-sm text-slate-100"
+                      className="w-24 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-right text-sm text-slate-100 outline-none transition focus:border-sky-500"
                     />
 
                     <span className="text-sm text-slate-400">%</span>
@@ -192,12 +244,41 @@ export default function ClientAllocationForm() {
             })}
           </div>
 
-          <div className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/50 p-4">
-            <span className="text-sm font-medium text-slate-300">
-              Total
-            </span>
+          <div
+            className={[
+              "flex items-center justify-between rounded-2xl border p-4",
+              isTotalValid
+                ? "border-emerald-900/60 bg-emerald-950/20"
+                : "border-amber-900/60 bg-amber-950/20",
+            ].join(" ")}
+          >
+            <div>
+              <span className="text-sm font-medium text-slate-300">
+                Total
+              </span>
 
-            <span className="text-sm font-semibold text-emerald-300">
+              <p
+                className={[
+                  "mt-1 text-xs",
+                  isTotalValid
+                    ? "text-emerald-300/80"
+                    : "text-amber-300/80",
+                ].join(" ")}
+              >
+                {isTotalValid
+                  ? "Allocation total is valid."
+                  : "Allocation percentages must total 100%."}
+              </p>
+            </div>
+
+            <span
+              className={[
+                "text-sm font-semibold",
+                isTotalValid
+                  ? "text-emerald-300"
+                  : "text-amber-300",
+              ].join(" ")}
+            >
               {totalPercent}%
             </span>
           </div>
