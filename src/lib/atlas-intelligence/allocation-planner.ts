@@ -43,17 +43,46 @@ function roundMoney(value: number): number {
 export function buildAllocationPlan(
   input: AllocationPlannerInput
 ): AllocationPlannerResult {
+  if (
+    input.availableCash < 0 ||
+    input.deployPct < 0 ||
+    input.minBuy < 0 ||
+    (input.maxBuy !== undefined && input.maxBuy < 0)
+  ) {
+    return {
+      asset: input.asset,
+      recommendedAmountUsd: 0,
+      eligible: false,
+      reason: "Atlas allocation policy contains an invalid negative value.",
+    };
+  }
+
+  if (
+    input.maxBuy !== undefined &&
+    input.maxBuy < input.minBuy
+  ) {
+    return {
+      asset: input.asset,
+      recommendedAmountUsd: 0,
+      eligible: false,
+      reason: "Maximum buy amount is below the minimum buy amount.",
+    };
+  }
+
   const rawAmount =
     input.availableCash * (input.deployPct / 100);
 
+  const minimumAppliedAmount = Math.max(
+    rawAmount,
+    input.minBuy
+  );
+
   const cappedAmount =
     input.maxBuy !== undefined
-      ? Math.min(rawAmount, input.maxBuy)
-      : rawAmount;
+      ? Math.min(minimumAppliedAmount, input.maxBuy)
+      : minimumAppliedAmount;
 
-  const recommendedAmount = roundMoney(
-    Math.max(cappedAmount, input.minBuy)
-  );
+  const recommendedAmount = roundMoney(cappedAmount);
 
   if (recommendedAmount > input.availableCash) {
     return {
