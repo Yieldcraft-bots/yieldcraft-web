@@ -24,6 +24,10 @@ export default function ClientAllocationForm() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -134,6 +138,9 @@ export default function ClientAllocationForm() {
       ? Math.max(0, Math.min(100, parsedValue))
       : 0;
 
+    setSaveError(null);
+    setSaveSuccess(null);
+
     setAllocations((current) => {
       const normalizedSymbol = symbol.toUpperCase();
 
@@ -161,6 +168,78 @@ export default function ClientAllocationForm() {
           : allocation
       );
     });
+  }
+
+  async function saveAllocationPlan() {
+    if (!isTotalValid || isSaving) {
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    try {
+      const { data, error: sessionError } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        throw new Error(sessionError.message);
+      }
+
+      const token = data.session?.access_token ?? "";
+
+      if (!token) {
+        throw new Error("Not signed in. Please log in again.");
+      }
+
+      const allocationsToSave = activeAssets
+        .map((asset) => ({
+          symbol: asset.symbol,
+          targetPercent:
+            allocationBySymbol.get(asset.symbol.toUpperCase()) ?? 0,
+        }))
+        .filter((allocation) => allocation.targetPercent > 0);
+
+      const response = await fetch("/api/client-allocation", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          allocations: allocationsToSave,
+        }),
+      });
+
+      const body =
+        (await response.json().catch(() => null)) as
+          | ClientAllocationResponse
+          | null;
+
+      if (!response.ok || !body?.ok) {
+        throw new Error(
+          body?.details ??
+            body?.error ??
+            "Unable to save the allocation plan."
+        );
+      }
+
+      if (body.allocations) {
+        setAllocations(body.allocations);
+      }
+
+      setSaveSuccess("Allocation plan saved.");
+    } catch (error) {
+      setSaveError(
+        error instanceof Error
+          ? error.message
+          : "Unable to save the allocation plan."
+      );
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
@@ -227,6 +306,7 @@ export default function ClientAllocationForm() {
                       max="100"
                       step="1"
                       value={targetPercent}
+                      disabled={isSaving}
                       onChange={(event) =>
                         updateTargetPercent(
                           asset.symbol,
@@ -234,7 +314,7 @@ export default function ClientAllocationForm() {
                         )
                       }
                       aria-label={`${asset.displayName} target percentage`}
-                      className="w-24 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-right text-sm text-slate-100 outline-none transition focus:border-sky-500"
+                      className="w-24 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-right text-sm text-slate-100 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
                     />
 
                     <span className="text-sm text-slate-400">%</span>
@@ -281,6 +361,43 @@ export default function ClientAllocationForm() {
             >
               {totalPercent}%
             </span>
+          </div>
+
+          {saveError ? (
+            <div
+              role="alert"
+              className="rounded-2xl border border-rose-900/60 bg-rose-950/30 p-4"
+            >
+              <p className="text-sm font-medium text-rose-200">
+                Save failed
+              </p>
+
+              <p className="mt-1 text-sm text-rose-300/80">
+                {saveError}
+              </p>
+            </div>
+          ) : null}
+
+          {saveSuccess ? (
+            <div
+              role="status"
+              className="rounded-2xl border border-emerald-900/60 bg-emerald-950/20 p-4"
+            >
+              <p className="text-sm font-medium text-emerald-300">
+                {saveSuccess}
+              </p>
+            </div>
+          ) : null}
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              disabled={!isTotalValid || isSaving}
+              onClick={() => void saveAllocationPlan()}
+              className="rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {isSaving ? "Saving..." : "Save Allocation"}
+            </button>
           </div>
         </>
       ) : null}
