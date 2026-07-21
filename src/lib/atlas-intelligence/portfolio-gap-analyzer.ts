@@ -1,21 +1,20 @@
 /**
  * ============================================================
+ * Atlas Intelligence
  * Portfolio Gap Analyzer
  * ------------------------------------------------------------
  * PURPOSE
- * Compare a client's current holdings against the desired
- * target portfolio and identify what is missing.
- *
- * This file contains NO execution logic.
+ * Compare the assets a client currently owns against the
+ * assets included in the Atlas target portfolio.
  *
  * SAFETY
  * - Read-only
- * - No Coinbase
- * - No Pulse
- * - No Atlas execution
- * - No Recon
- * - No API
- * - No Database
+ * - No trading
+ * - No Pulse imports
+ * - No Atlas execution imports
+ * - No Recon imports
+ * - No Coinbase imports
+ * - No database writes
  * ============================================================
  */
 
@@ -29,38 +28,25 @@ export interface PortfolioGapInput {
 export interface PortfolioGapResult {
   owned: SupportedAsset[];
   missing: SupportedAsset[];
-  completionPct: number;
 }
 
 export function analyzePortfolioGap(
   input: PortfolioGapInput
 ): PortfolioGapResult {
-  const ownedSet = new Set(input.currentHoldings);
+  const currentHoldingSet = new Set<SupportedAsset>(
+    input.currentHoldings
+  );
 
-  const owned: SupportedAsset[] = [];
-  const missing: SupportedAsset[] = [];
+  const owned = input.targetPortfolio.filter((asset) =>
+    currentHoldingSet.has(asset)
+  );
 
-  for (const asset of input.targetPortfolio) {
-    if (ownedSet.has(asset)) {
-      owned.push(asset);
-    } else {
-      missing.push(asset);
-    }
-  }
-
-  const completionPct =
-    input.targetPortfolio.length === 0
-      ? 100
-      : Number(
-          (
-            (owned.length / input.targetPortfolio.length) *
-            100
-          ).toFixed(1)
-        );
+  const missing = input.targetPortfolio.filter(
+    (asset) => !currentHoldingSet.has(asset)
+  );
 
   return {
     owned,
     missing,
-    completionPct,
   };
 }
