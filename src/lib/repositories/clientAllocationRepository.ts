@@ -42,33 +42,15 @@ export async function saveClientAllocationPlan(
 ): Promise<void> {
   const supabase = supabaseAdmin();
 
-  // Remove the user's existing allocation plan.
-  const { error: deleteError } = await supabase
-    .from(TABLE)
-    .delete()
-    .eq("user_id", userId);
+  const { error } = await supabase.rpc(
+    "replace_client_allocation_plan",
+    {
+      p_user_id: userId,
+      p_allocations: allocations,
+    }
+  );
 
-  if (deleteError) {
-    throw deleteError;
-  }
-
-  // Allow an empty plan (used if a client clears allocations).
-  if (allocations.length === 0) {
-    return;
-  }
-
-  const rows = allocations.map((allocation) => ({
-    user_id: userId,
-    asset_symbol: allocation.symbol,
-    target_percent: allocation.targetPercent,
-    enabled: true,
-  }));
-
-  const { error: insertError } = await supabase
-    .from(TABLE)
-    .insert(rows);
-
-  if (insertError) {
-    throw insertError;
+  if (error) {
+    throw error;
   }
 }
