@@ -30,22 +30,36 @@ export interface AtlasScenarioExpectation {
   scenarioId: string;
 
   /**
-   * Should Atlas produce an eligible recommendation?
+   * Should Atlas produce an eligible final recommendation?
    */
   expectedEligible?: boolean;
 
   /**
    * Expected recommended asset.
-   * Omitted when no recommendation is expected.
+   * Use null when no recommendation is expected.
    */
   expectedAsset?: string | null;
 
   /**
    * Expected portfolio completion percentage.
-   * Optional because some scenarios intentionally
-   * validate structure only.
    */
   expectedCompletionPct?: number;
+
+  /**
+   * Expected eligibility of the allocation plan.
+   * Use null when no allocation plan should exist.
+   */
+  expectedAllocationEligible?: boolean | null;
+
+  /**
+   * Expected final recommended dollar amount.
+   */
+  expectedRecommendedAmountUsd?: number;
+
+  /**
+   * Expected final recommendation reason.
+   */
+  expectedReason?: string;
 }
 
 export const ATLAS_EXPECTED_RESULTS: readonly AtlasScenarioExpectation[] = [
@@ -112,6 +126,28 @@ export const ATLAS_EXPECTED_RESULTS: readonly AtlasScenarioExpectation[] = [
   {
     scenarioId: "empty-selection",
     expectedEligible: false,
+  },
+
+  {
+    scenarioId: "negative-deploy-policy",
+    expectedEligible: false,
+    expectedAsset: null,
+    expectedCompletionPct: 0,
+    expectedAllocationEligible: false,
+    expectedRecommendedAmountUsd: 0,
+    expectedReason:
+      "Atlas allocation policy contains an invalid negative value.",
+  },
+
+  {
+    scenarioId: "maximum-below-minimum",
+    expectedEligible: false,
+    expectedAsset: null,
+    expectedCompletionPct: 0,
+    expectedAllocationEligible: false,
+    expectedRecommendedAmountUsd: 0,
+    expectedReason:
+      "Maximum buy amount is below the minimum buy amount.",
   },
 ];
 

@@ -51,6 +51,7 @@ export function validateScenarioBaseline(
   }
 
   const report = run.result.recommendationReport;
+  const allocationPlan = run.result.allocationPlan;
 
   if (
     expected.expectedEligible !== undefined &&
@@ -77,6 +78,41 @@ export function validateScenarioBaseline(
   ) {
     errors.push(
       `Expected completion=${expected.expectedCompletionPct}% but received ${run.result.portfolioCompletion.completionPct}%.`
+    );
+  }
+
+  if (
+    expected.expectedAllocationEligible !== undefined
+  ) {
+    const actualAllocationEligible =
+      allocationPlan?.eligible ?? null;
+
+    if (
+      actualAllocationEligible !==
+      expected.expectedAllocationEligible
+    ) {
+      errors.push(
+        `Expected allocation eligible=${expected.expectedAllocationEligible} but received allocation eligible=${actualAllocationEligible}.`
+      );
+    }
+  }
+
+  if (
+    expected.expectedRecommendedAmountUsd !== undefined &&
+    report.recommendedAmountUsd !==
+      expected.expectedRecommendedAmountUsd
+  ) {
+    errors.push(
+      `Expected recommended amount=${expected.expectedRecommendedAmountUsd} but received recommended amount=${report.recommendedAmountUsd}.`
+    );
+  }
+
+  if (
+    expected.expectedReason !== undefined &&
+    report.reason !== expected.expectedReason
+  ) {
+    errors.push(
+      `Expected reason="${expected.expectedReason}" but received reason="${report.reason}".`
     );
   }
 

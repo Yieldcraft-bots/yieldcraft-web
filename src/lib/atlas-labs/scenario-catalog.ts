@@ -280,6 +280,44 @@ export const ATLAS_SCENARIOS = [
       maxBuy: DEFAULT_MAX_BUY,
     },
   },
+
+  {
+    id: "negative-deploy-policy",
+    name: "Negative Deploy Policy",
+    description:
+      "Validates safe rejection when the deployment percentage is negative.",
+    category: "EDGE_CASE",
+    enabled: true,
+    input: {
+      clientSelection: {
+        assets: ["BTC"],
+      },
+      currentHoldings: [],
+      availableCash: 1_000,
+      deployPct: -20,
+      minBuy: DEFAULT_MIN_BUY,
+      maxBuy: DEFAULT_MAX_BUY,
+    },
+  },
+
+  {
+    id: "maximum-below-minimum",
+    name: "Maximum Below Minimum",
+    description:
+      "Validates safe rejection when the maximum buy is below the minimum buy.",
+    category: "EDGE_CASE",
+    enabled: true,
+    input: {
+      clientSelection: {
+        assets: ["BTC"],
+      },
+      currentHoldings: [],
+      availableCash: 1_000,
+      deployPct: DEFAULT_DEPLOY_PCT,
+      minBuy: 50,
+      maxBuy: 25,
+    },
+  },
 ] satisfies readonly AtlasScenario[];
 
 export function getEnabledAtlasScenarios(): readonly AtlasScenario[] {
