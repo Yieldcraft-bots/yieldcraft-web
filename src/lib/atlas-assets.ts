@@ -42,6 +42,58 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
 
     accumulationEnabled: true,
   },
+
+  {
+    id: "eth",
+    symbol: "ETH",
+    displayName: "Ethereum",
+
+    broker: "coinbase",
+
+    usdPair: "ETH-USD",
+    usdcPair: "ETH-USDC",
+
+    accumulationEnabled: true,
+  },
+
+  {
+    id: "sol",
+    symbol: "SOL",
+    displayName: "Solana",
+
+    broker: "coinbase",
+
+    usdPair: "SOL-USD",
+    usdcPair: "SOL-USDC",
+
+    accumulationEnabled: true,
+  },
+
+  {
+    id: "xrp",
+    symbol: "XRP",
+    displayName: "XRP",
+
+    broker: "coinbase",
+
+    usdPair: "XRP-USD",
+    usdcPair: "XRP-USDC",
+
+    accumulationEnabled: true,
+  },
+
+  {
+    id: "xlm",
+    symbol: "XLM",
+    displayName: "Stellar",
+
+    broker: "coinbase",
+
+    usdPair: "XLM-USD",
+    usdcPair: "XLM-USDC",
+
+    accumulationEnabled: true,
+  },
 ] as const;
 
 export function getAtlasAsset(
