@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 import AtlasCard from "./AtlasCard";
 
 type AtlasUser = {
@@ -76,7 +77,7 @@ export default function AtlasUserGrid() {
     setErrorMessage(null);
 
     try {
-      const response = await fetch(
+      const data = await adminFetch<AtlasOpsResponse>(
         "/api/admin/atlas-ops-status",
         {
           method: "GET",
@@ -84,14 +85,6 @@ export default function AtlasUserGrid() {
           signal: controller.signal,
         }
       );
-
-      if (!response.ok) {
-        throw new Error(
-          `Atlas Operations request failed with status ${response.status}.`
-        );
-      }
-
-      const data = (await response.json()) as AtlasOpsResponse;
 
       if (!data.ok || !Array.isArray(data.users)) {
         throw new Error(
@@ -245,8 +238,8 @@ export default function AtlasUserGrid() {
                 <td className="px-4 py-4">
                   <StatusPill status={user.status} />
                 </td>
-
-                <td className="px-4 py-4 capitalize">
+                                
+                                                <td className="px-4 py-4 capitalize">
                   {user.plan || "—"}
                 </td>
 

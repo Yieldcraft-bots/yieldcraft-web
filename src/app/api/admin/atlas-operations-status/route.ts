@@ -27,13 +27,32 @@
 
 import { NextResponse } from "next/server";
 
+import { isAuthorizedAdminRequest } from "@/lib/admin-auth";
 import { buildAtlasOperationsSnapshot } from "@/lib/atlas-operations";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const snapshot = buildAtlasOperationsSnapshot();
+    const authorized =
+      await isAuthorizedAdminRequest(request);
+
+    if (!authorized) {
+      return NextResponse.json(
+        {
+          error: "Admin authorization is required.",
+        },
+        {
+          status: 401,
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        }
+      );
+    }
+
+    const snapshot =
+      buildAtlasOperationsSnapshot();
 
     return NextResponse.json(snapshot, {
       status: 200,
@@ -49,7 +68,8 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        error: "Failed to build Atlas Operations response.",
+        error:
+          "Failed to build Atlas Operations response.",
       },
       {
         status: 500,

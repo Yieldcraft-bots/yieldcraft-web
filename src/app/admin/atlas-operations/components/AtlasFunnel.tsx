@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 import AtlasCard from "./AtlasCard";
 
 type AtlasFunnelData = {
@@ -30,19 +31,14 @@ export default function AtlasFunnel() {
 
     async function loadFunnel() {
       try {
-        const response = await fetch("/api/admin/atlas-ops-status", {
-          method: "GET",
-          cache: "no-store",
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(
-            `Atlas Operations request failed with status ${response.status}.`
-          );
-        }
-
-        const data = (await response.json()) as AtlasOpsResponse;
+        const data = await adminFetch<AtlasOpsResponse>(
+          "/api/admin/atlas-ops-status",
+          {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
 
         if (!data.ok || !data.funnel) {
           throw new Error("Atlas funnel data was unavailable.");

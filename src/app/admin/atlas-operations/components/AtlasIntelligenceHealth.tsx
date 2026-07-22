@@ -28,6 +28,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
 interface AtlasOperationsMetrics {
   generatedAt: string;
@@ -66,23 +67,15 @@ export default function AtlasIntelligenceHealth() {
 
     async function loadSnapshot() {
       try {
-        const response = await fetch(
-          "/api/admin/atlas-operations-status",
-          {
-            method: "GET",
-            cache: "no-store",
-            signal: controller.signal,
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            `Atlas Operations request failed with status ${response.status}.`
-          );
-        }
-
         const snapshot =
-          (await response.json()) as AtlasOperationsSnapshot;
+          await adminFetch<AtlasOperationsSnapshot>(
+            "/api/admin/atlas-operations-status",
+            {
+              method: "GET",
+              cache: "no-store",
+              signal: controller.signal,
+            }
+          );
 
         setState({
           status: "success",
@@ -166,7 +159,9 @@ export default function AtlasIntelligenceHealth() {
               : "border-rose-500/30 bg-rose-500/10 text-rose-300"
           }`}
         >
-          {snapshot.overallHealthy ? "Healthy" : "Attention Required"}
+          {snapshot.overallHealthy
+            ? "Healthy"
+            : "Attention Required"}
         </div>
       </div>
 

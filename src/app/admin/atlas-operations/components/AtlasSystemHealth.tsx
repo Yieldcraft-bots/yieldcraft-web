@@ -21,6 +21,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
 type AtlasHealthCheck = {
   name: string;
@@ -58,7 +59,7 @@ export default function AtlasSystemHealth() {
 
     async function loadHealth() {
       try {
-        const response = await fetch(
+        const data = await adminFetch<AtlasOperationsStatus>(
           "/api/admin/atlas-operations-status",
           {
             method: "GET",
@@ -66,14 +67,6 @@ export default function AtlasSystemHealth() {
             signal: controller.signal,
           }
         );
-
-        if (!response.ok) {
-          throw new Error(
-            `Atlas Operations request failed with status ${response.status}.`
-          );
-        }
-
-        const data = (await response.json()) as AtlasOperationsStatus;
 
         if (
           !data ||

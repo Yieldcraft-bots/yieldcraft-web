@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 import AtlasCard from "./AtlasCard";
 
 type AtlasOpsStatus = {
@@ -27,19 +28,14 @@ export default function AtlasExecutionStatus() {
 
     async function loadStatus() {
       try {
-        const response = await fetch("/api/admin/atlas-ops-status", {
-          method: "GET",
-          cache: "no-store",
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(
-            `Atlas Operations request failed with status ${response.status}.`
-          );
-        }
-
-        const data = (await response.json()) as AtlasOpsStatus;
+        const data = await adminFetch<AtlasOpsStatus>(
+          "/api/admin/atlas-ops-status",
+          {
+            method: "GET",
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        );
 
         setState({
           status: "success",

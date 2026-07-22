@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 
 type DiagnosticSeverity =
   | "info"
@@ -20,6 +21,12 @@ interface DiagnosticsState {
   error?: string;
 }
 
+interface AtlasOperationsSnapshot {
+  diagnostics?: {
+    diagnostics?: AtlasDiagnostic[];
+  };
+}
+
 export default function AtlasDiagnosticsPanel() {
   const [state, setState] = useState<DiagnosticsState>({
     loading: true,
@@ -29,14 +36,13 @@ export default function AtlasDiagnosticsPanel() {
   useEffect(() => {
     async function load() {
       try {
-        const response = await fetch(
-          "/api/admin/atlas-operations-status",
-          {
-            cache: "no-store",
-          }
-        );
-
-        const snapshot = await response.json();
+        const snapshot =
+          await adminFetch<AtlasOperationsSnapshot>(
+            "/api/admin/atlas-operations-status",
+            {
+              cache: "no-store",
+            }
+          );
 
         setState({
           loading: false,
