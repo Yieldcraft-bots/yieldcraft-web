@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import {
   buildPortfolioExecutionPlan,
 } from "@/lib/portfolio-execution-planner";
+import {
+  buildAtlasExecutionInstructions,
+} from "@/lib/atlas-execution-adapter";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,13 +76,15 @@ export async function POST(req: Request) {
     ],
   });
 
+  const execution = buildAtlasExecutionInstructions(plan);
+
   return json(200, {
     ok: true,
-    route: "atlas-multi-asset-run",
-    plannerLoaded: true,
     plannerValid: plan.valid,
-    allocationCount: 4,
-    orderCount: plan.orders.length,
-    orders: plan.orders,
+    executable: execution.executable,
+    instructionCount: execution.instructions.length,
+    blockedCount: execution.blocked.length,
+    instructions: execution.instructions,
+    blocked: execution.blocked,
   });
 }
