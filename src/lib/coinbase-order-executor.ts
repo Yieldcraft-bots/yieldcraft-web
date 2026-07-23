@@ -11,7 +11,8 @@ export async function executeCoinbaseOrder(
   return {
     success: true,
     response: {
-      simulated: true,
+      mode: "shadow",
+      submitted: false,
       broker: instruction.brokerId,
       productId: instruction.productId,
       quoteSizeUsd: instruction.quoteSizeUsd,
