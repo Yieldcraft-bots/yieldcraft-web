@@ -68,13 +68,18 @@ export function isAtlasAssetVisible(
  * Determines whether an asset may currently receive a client
  * allocation percentage.
  *
+ * Atlas multi-asset launch:
+ * Every registered asset except DISABLED assets may be configured.
+ *
  * This is catalog eligibility only. It does not imply that the
- * connected account or execution platform supports the asset.
+ * connected account, broker, or execution platform supports the
+ * asset. Planning and execution layers remain responsible for
+ * enforcing broker and execution eligibility.
  */
 export function isAtlasAssetAllocatable(
   asset: AtlasAssetDefinition
 ): boolean {
-  return asset.enabled && asset.status === "ACTIVE";
+  return asset.status !== "DISABLED";
 }
 
 /**

@@ -14,10 +14,48 @@ type ClientAllocationResponse = {
   details?: string;
 };
 
+type AssetGroupDefinition = {
+  key: "CRYPTO" | "PRIVATE" | "STOCK";
+  title: string;
+  description: string;
+};
+
+const ASSET_GROUPS: readonly AssetGroupDefinition[] = [
+  {
+    key: "CRYPTO",
+    title: "Crypto",
+    description:
+      "Digital assets available for Atlas portfolio configuration.",
+  },
+  {
+    key: "PRIVATE",
+    title: "Private Markets",
+    description:
+      "Private-market exposure represented within your Atlas strategy.",
+  },
+  {
+    key: "STOCK",
+    title: "Equities",
+    description:
+      "Public-company allocations across the Atlas equity universe.",
+  },
+];
+
 export default function ClientAllocationForm() {
   const activeAssets = useMemo(
     () => getAllocatableAtlasAssets(ATLAS_ASSET_REGISTRY),
     []
+  );
+
+  const groupedAssets = useMemo(
+    () =>
+      ASSET_GROUPS.map((group) => ({
+        ...group,
+        assets: activeAssets.filter(
+          (asset) => asset.assetClass === group.key
+        ),
+      })).filter((group) => group.assets.length > 0),
+    [activeAssets]
   );
 
   const [allocations, setAllocations] = useState<ClientAllocationItem[]>([]);
@@ -128,6 +166,20 @@ export default function ClientAllocationForm() {
       (allocationBySymbol.get(asset.symbol.toUpperCase()) ?? 0),
     0
   );
+
+  const allocatedAssetCount = activeAssets.filter(
+    (asset) =>
+      (allocationBySymbol.get(asset.symbol.toUpperCase()) ?? 0) > 0
+  ).length;
+
+  const allocatedClassCount = new Set(
+    activeAssets
+      .filter(
+        (asset) =>
+          (allocationBySymbol.get(asset.symbol.toUpperCase()) ?? 0) > 0
+      )
+      .map((asset) => asset.assetClass)
+  ).size;
 
   const isTotalValid = totalPercent === 100;
 
@@ -243,14 +295,19 @@ export default function ClientAllocationForm() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold text-slate-50">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-400">
+          Portfolio configuration
+        </p>
+
+        <h2 className="mt-2 text-xl font-semibold text-slate-50">
           Portfolio Targets
         </h2>
 
-        <p className="mt-1 text-sm text-slate-400">
-          Set the target percentage for each available Atlas asset.
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-400">
+          Build your target portfolio across the Atlas asset universe.
+          Allocations must total exactly 100% before they can be saved.
         </p>
       </div>
 
@@ -279,62 +336,189 @@ export default function ClientAllocationForm() {
 
       {!isLoading && !loadError ? (
         <>
-          <div className="space-y-3">
-            {activeAssets.map((asset) => {
-              const targetPercent =
-                allocationBySymbol.get(asset.symbol.toUpperCase()) ?? 0;
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Assets selected
+              </p>
 
-              return (
-                <div
-                  key={asset.symbol}
-                  className="flex items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-100">
-                      {asset.displayName}
-                    </p>
+              <p className="mt-2 text-2xl font-bold text-slate-50">
+                {allocatedAssetCount}
+              </p>
 
-                    <p className="text-xs text-slate-500">
-                      {asset.symbol} · {asset.assetClass}
-                    </p>
-                  </div>
+              <p className="mt-1 text-xs text-slate-500">
+                of {activeAssets.length} available assets
+              </p>
+            </div>
 
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="1"
-                      value={targetPercent}
-                      disabled={isSaving}
-                      onChange={(event) =>
-                        updateTargetPercent(
-                          asset.symbol,
-                          event.target.value
-                        )
-                      }
-                      aria-label={`${asset.displayName} target percentage`}
-                      className="w-24 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-right text-sm text-slate-100 outline-none transition focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
-                    />
+            <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Asset classes
+              </p>
 
-                    <span className="text-sm text-slate-400">%</span>
+              <p className="mt-2 text-2xl font-bold text-slate-50">
+                {allocatedClassCount}
+              </p>
+
+              <p className="mt-1 text-xs text-slate-500">
+                represented in your portfolio
+              </p>
+            </div>
+
+            <div
+              className={[
+                "rounded-2xl border p-4",
+                isTotalValid
+                  ? "border-emerald-900/60 bg-emerald-950/20"
+                  : "border-amber-900/60 bg-amber-950/20",
+              ].join(" ")}
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Allocation status
+              </p>
+
+              <p
+                className={[
+                  "mt-2 text-2xl font-bold",
+                  isTotalValid
+                    ? "text-emerald-300"
+                    : "text-amber-300",
+                ].join(" ")}
+              >
+                {totalPercent}%
+              </p>
+
+              <p
+                className={[
+                  "mt-1 text-xs",
+                  isTotalValid
+                    ? "text-emerald-300/80"
+                    : "text-amber-300/80",
+                ].join(" ")}
+              >
+                {isTotalValid
+                  ? "Portfolio ready to save"
+                  : "Must total exactly 100%"}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            {groupedAssets.map((group) => (
+              <section
+                key={group.key}
+                className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-950/30"
+              >
+                <div className="border-b border-slate-800 bg-slate-900/50 px-5 py-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-100">
+                        {group.title}
+                      </h3>
+
+                      <p className="mt-1 text-xs leading-5 text-slate-500">
+                        {group.description}
+                      </p>
+                    </div>
+
+                    <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs font-medium text-slate-400">
+                      {group.assets.length}{" "}
+                      {group.assets.length === 1 ? "asset" : "assets"}
+                    </span>
                   </div>
                 </div>
-              );
-            })}
+
+                <div className="divide-y divide-slate-800">
+                  {group.assets.map((asset) => {
+                    const targetPercent =
+                      allocationBySymbol.get(
+                        asset.symbol.toUpperCase()
+                      ) ?? 0;
+
+                    const hasAllocation = targetPercent > 0;
+
+                    return (
+                      <div
+                        key={asset.symbol}
+                        className={[
+                          "flex flex-col gap-4 px-5 py-4 transition md:flex-row md:items-center md:justify-between",
+                          hasAllocation
+                            ? "bg-sky-500/[0.04]"
+                            : "bg-transparent",
+                        ].join(" ")}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={[
+                              "flex h-10 w-10 items-center justify-center rounded-xl border text-xs font-bold",
+                              hasAllocation
+                                ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                                : "border-slate-800 bg-slate-900 text-slate-500",
+                            ].join(" ")}
+                          >
+                            {asset.symbol.slice(0, 3)}
+                          </div>
+
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-semibold text-slate-100">
+                                {asset.displayName}
+                              </p>
+
+                              {hasAllocation ? (
+                                <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-300">
+                                  Selected
+                                </span>
+                              ) : null}
+                            </div>
+
+                            <p className="mt-1 text-xs text-slate-500">
+                              {asset.symbol} · {asset.assetClass}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={targetPercent}
+                            disabled={isSaving}
+                            onChange={(event) =>
+                              updateTargetPercent(
+                                asset.symbol,
+                                event.target.value
+                              )
+                            }
+                            aria-label={`${asset.displayName} target percentage`}
+                            className="w-28 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2.5 text-right text-sm font-semibold text-slate-100 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+
+                          <span className="w-5 text-sm text-slate-400">
+                            %
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
           </div>
 
           <div
             className={[
-              "flex items-center justify-between rounded-2xl border p-4",
+              "flex flex-col gap-4 rounded-2xl border p-5 sm:flex-row sm:items-center sm:justify-between",
               isTotalValid
                 ? "border-emerald-900/60 bg-emerald-950/20"
                 : "border-amber-900/60 bg-amber-950/20",
             ].join(" ")}
           >
             <div>
-              <span className="text-sm font-medium text-slate-300">
-                Total
+              <span className="text-sm font-semibold text-slate-200">
+                Portfolio total
               </span>
 
               <p
@@ -346,14 +530,18 @@ export default function ClientAllocationForm() {
                 ].join(" ")}
               >
                 {isTotalValid
-                  ? "Allocation total is valid."
-                  : "Allocation percentages must total 100%."}
+                  ? "Your target allocation is complete and ready to save."
+                  : totalPercent < 100
+                    ? `${100 - totalPercent}% remains to be allocated.`
+                    : `Reduce the portfolio allocation by ${
+                        totalPercent - 100
+                      }%.`}
               </p>
             </div>
 
             <span
               className={[
-                "text-sm font-semibold",
+                "text-2xl font-bold",
                 isTotalValid
                   ? "text-emerald-300"
                   : "text-amber-300",
@@ -389,12 +577,17 @@ export default function ClientAllocationForm() {
             </div>
           ) : null}
 
-          <div className="flex justify-end">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs leading-5 text-slate-500">
+              Saving updates your portfolio configuration only. It does
+              not submit an order.
+            </p>
+
             <button
               type="button"
               disabled={!isTotalValid || isSaving}
               onClick={() => void saveAllocationPlan()}
-              className="rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              className="rounded-xl bg-sky-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
               {isSaving ? "Saving..." : "Save Allocation"}
             </button>

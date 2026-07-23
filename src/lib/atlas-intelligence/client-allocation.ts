@@ -37,6 +37,7 @@
  * ============================================================
  */
 
+import { isAtlasAssetAllocatable } from "./asset-catalog";
 import type { AtlasAssetDefinition } from "./types";
 
 export type ClientAllocationItem = {
@@ -58,7 +59,7 @@ export type ClientAllocationValidationErrorCode =
   | "INVALID_SYMBOL"
   | "DUPLICATE_SYMBOL"
   | "ASSET_NOT_REGISTERED"
-  | "ASSET_NOT_ENABLED"
+  | "ASSET_NOT_ALLOCATABLE"
   | "INVALID_TARGET_PERCENT"
   | "ALLOCATION_TOTAL_INVALID";
 
@@ -114,7 +115,7 @@ export function validateClientAllocationPlan(
         {
           code: "NO_ASSETS_SELECTED",
           message:
-            "Select at least one enabled asset for Atlas accumulation.",
+            "Select at least one allocatable asset for Atlas accumulation.",
         },
       ],
     };
@@ -129,71 +130,65 @@ export function validateClientAllocationPlan(
 
   const seenSymbols = new Set<string>();
 
-  const normalizedAllocations =
-    plan.allocations.map((allocation) => {
-      const symbol = normalizeSymbol(allocation.symbol);
-      const targetPercent = roundPercent(
-        allocation.targetPercent
-      );
+  const normalizedAllocations = plan.allocations.map((allocation) => {
+    const symbol = normalizeSymbol(allocation.symbol);
+    const targetPercent = roundPercent(allocation.targetPercent);
 
-      if (!symbol) {
-        errors.push({
-          code: "INVALID_SYMBOL",
-          message: "Every allocation must include a valid symbol.",
-        });
-
-        return {
-          symbol,
-          targetPercent,
-        };
-      }
-
-      if (seenSymbols.has(symbol)) {
-        errors.push({
-          code: "DUPLICATE_SYMBOL",
-          symbol,
-          message: `${symbol} appears more than once in the allocation plan.`,
-        });
-      } else {
-        seenSymbols.add(symbol);
-      }
-
-      const registeredAsset = registryBySymbol.get(symbol);
-
-      if (!registeredAsset) {
-        errors.push({
-          code: "ASSET_NOT_REGISTERED",
-          symbol,
-          message: `${symbol} is not registered in Atlas Intelligence.`,
-        });
-      } else if (
-        !registeredAsset.enabled ||
-        registeredAsset.status !== "ACTIVE"
-      ) {
-        errors.push({
-          code: "ASSET_NOT_ENABLED",
-          symbol,
-          message: `${symbol} is known by Atlas but is not currently enabled for accumulation.`,
-        });
-      }
-
-      if (
-        !Number.isFinite(targetPercent) ||
-        targetPercent <= 0 ||
-        targetPercent > REQUIRED_TOTAL_PERCENT
-      ) {
-        errors.push({
-          code: "INVALID_TARGET_PERCENT",
-          symbol,
-          message: `${symbol} must have a target percentage greater than 0 and no more than 100.`,
-        });
-      }
+    if (!symbol) {
+      errors.push({
+        code: "INVALID_SYMBOL",
+        message: "Every allocation must include a valid symbol.",
+      });
 
       return {
         symbol,
         targetPercent,
       };
-    });
+    }
+
+    if (seenSymbols.has(symbol)) {
+      errors.push({
+        code: "DUPLICATE_SYMBOL",
+        symbol,
+        message: `${symbol} appears more than once in the allocation plan.`,
+      });
+    } else {
+      seenSymbols.add(symbol);
+    }
+
+    const registeredAsset = registryBySymbol.get(symbol);
+
+    if (!registeredAsset) {
+      errors.push({
+        code: "ASSET_NOT_REGISTERED",
+        symbol,
+        message: `${symbol} is not registered in Atlas Intelligence.`,
+      });
+    } else if (!isAtlasAssetAllocatable(registeredAsset)) {
+      errors.push({
+        code: "ASSET_NOT_ALLOCATABLE",
+        symbol,
+        message: `${symbol} is registered in Atlas but is not available for portfolio configuration.`,
+      });
+    }
+
+    if (
+      !Number.isFinite(targetPercent) ||
+      targetPercent <= 0 ||
+      targetPercent > REQUIRED_TOTAL_PERCENT
+    ) {
+      errors.push({
+        code: "INVALID_TARGET_PERCENT",
+        symbol,
+        message: `${symbol} must have a target percentage greater than 0 and no more than 100.`,
+      });
+    }
+
+    return {
+      symbol,
+      targetPercent,
+    };
+  });
 
   const totalPercent = roundPercent(
     normalizedAllocations.reduce(
