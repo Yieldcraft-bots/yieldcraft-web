@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import {
+  buildPortfolioExecutionPlan,
+} from "@/lib/portfolio-execution-planner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,10 +50,23 @@ export async function POST(req: Request) {
     });
   }
 
+  const plan = buildPortfolioExecutionPlan({
+    deployableUsd: 100,
+    fundingCurrency: "USD",
+    allocations: [
+      {
+        symbol: "BTC",
+        targetPercent: 100,
+      },
+    ],
+  });
+
   return json(200, {
     ok: true,
     route: "atlas-multi-asset-run",
-    status: "ready",
-    message: "Multi-asset execution endpoint is online.",
+    plannerLoaded: true,
+    plannerValid: plan.valid,
+    orderCount: plan.orders.length,
+    firstOrder: plan.orders[0] ?? null,
   });
 }
