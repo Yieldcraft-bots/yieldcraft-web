@@ -5,6 +5,9 @@ import {
 import {
   buildAtlasExecutionInstructions,
 } from "@/lib/atlas-execution-adapter";
+import {
+  dispatchAtlasExecutionInstructions,
+} from "@/lib/atlas-multi-asset-dispatcher";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,34 +60,33 @@ export async function POST(req: Request) {
     deployableUsd: 100,
     fundingCurrency: "USD",
     allocations: [
-      {
-        symbol: "BTC",
-        targetPercent: 40,
-      },
-      {
-        symbol: "ETH",
-        targetPercent: 30,
-      },
-      {
-        symbol: "SOL",
-        targetPercent: 20,
-      },
-      {
-        symbol: "XRP",
-        targetPercent: 10,
-      },
+      { symbol: "BTC", targetPercent: 40 },
+      { symbol: "ETH", targetPercent: 30 },
+      { symbol: "SOL", targetPercent: 20 },
+      { symbol: "XRP", targetPercent: 10 },
     ],
   });
 
   const execution = buildAtlasExecutionInstructions(plan);
 
+  const dispatch = await dispatchAtlasExecutionInstructions(
+    execution.instructions,
+    async (instruction) => ({
+      instruction,
+      success: true,
+      response: {
+        simulated: true,
+      },
+    })
+  );
+
   return json(200, {
     ok: true,
     plannerValid: plan.valid,
     executable: execution.executable,
-    instructionCount: execution.instructions.length,
-    blockedCount: execution.blocked.length,
-    instructions: execution.instructions,
-    blocked: execution.blocked,
+    dispatchSuccess: dispatch.success,
+    executed: dispatch.executed,
+    failed: dispatch.failed,
+    results: dispatch.results,
   });
 }
