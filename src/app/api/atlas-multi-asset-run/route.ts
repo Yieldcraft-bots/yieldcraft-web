@@ -56,7 +56,19 @@ export async function POST(req: Request) {
     allocations: [
       {
         symbol: "BTC",
-        targetPercent: 100,
+        targetPercent: 40,
+      },
+      {
+        symbol: "ETH",
+        targetPercent: 30,
+      },
+      {
+        symbol: "SOL",
+        targetPercent: 20,
+      },
+      {
+        symbol: "XRP",
+        targetPercent: 10,
       },
     ],
   });
@@ -66,7 +78,8 @@ export async function POST(req: Request) {
     route: "atlas-multi-asset-run",
     plannerLoaded: true,
     plannerValid: plan.valid,
+    allocationCount: 4,
     orderCount: plan.orders.length,
-    firstOrder: plan.orders[0] ?? null,
+    orders: plan.orders,
   });
 }
