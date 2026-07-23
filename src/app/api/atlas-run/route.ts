@@ -3,6 +3,10 @@ import jwt, { type SignOptions } from "jsonwebtoken";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { calculateAtlasAllocation } from "@/lib/atlas-allocation-policy";
+import {
+  buildCoinbaseMarketBuyOrder,
+  extractCoinbaseOrderId,
+} from "@/lib/coinbase-order-builder";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -399,38 +403,9 @@ function buildFundingPlan(
   };
 }
 
-function buildOrderPayload(
-  userId: string,
-  productId: string,
-  proposedBuyUsd: number,
-  live: boolean
-) {
-  const quoteSize = money(proposedBuyUsd).toFixed(2);
-const mode =
-  live && process.env.ATLAS_LIVE_ARMED === "true"
-    ? "live"
-    : "dry_run";
-  return {
-    client_order_id: `yc_atlas_${mode}_${userId.slice(0, 8)}_${Date.now()}`,
-    product_id: productId,
-    side: "BUY",
-    order_configuration: {
-      market_market_ioc: {
-        quote_size: quoteSize,
-      },
-    },
-  };
-}
 
-function extractOrderId(parsed: any) {
-  const id =
-    parsed?.success_response?.order_id ||
-    parsed?.order_id ||
-    parsed?.order?.order_id ||
-    null;
 
-  return typeof id === "string" && id.trim() ? id.trim() : null;
-}
+
 
 export async function POST(req: Request) {
   try {
@@ -641,7 +616,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           allocation.eligible && fundingPlan.executable && fundingPlan.product_id;
 
         const orderPayload = canBuildOrder
-          ? buildOrderPayload(
+          ? buildCoinbaseMarketBuyOrder(
               key.user_id,
               fundingPlan.product_id as string,
               allocation.proposed_buy_usd,
@@ -714,7 +689,7 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
 
         const orderPath = "/api/v3/brokerage/orders";
         const orderRes = await cbPost(key, orderPath, orderPayload);
-        const orderId = extractOrderId(orderRes.json);
+        const orderId = extractCoinbaseOrderId(orderRes.json);
         const coinbaseOrderAccepted =
   orderRes.ok &&
   (orderRes.json as any)?.success === true &&
