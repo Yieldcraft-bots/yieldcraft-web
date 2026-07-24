@@ -36,6 +36,7 @@ export type BuildClientPortfolioPlanInput = {
 
 export type ClientPortfolioPlanResult = {
   userId: string;
+  portfolioPlanId: string | null;
   allocationRows: ClientAllocationRow[];
   allocationResult: AtlasAllocationResult;
   portfolioPlan: PortfolioExecutionPlan | null;
@@ -53,6 +54,7 @@ export async function buildClientPortfolioPlan(
   if (!allocationResult.eligible) {
     return {
       userId: input.userId,
+      portfolioPlanId: null,
       allocationRows,
       allocationResult,
       portfolioPlan: null,
@@ -71,6 +73,9 @@ export async function buildClientPortfolioPlan(
 
   return {
     userId: input.userId,
+    portfolioPlanId: portfolioPlan.valid
+      ? crypto.randomUUID()
+      : null,
     allocationRows,
     allocationResult,
     portfolioPlan,
