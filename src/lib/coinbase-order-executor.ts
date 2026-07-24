@@ -3,9 +3,6 @@ import {
   buildCoinbaseMarketBuyOrder,
 } from "./coinbase-order-builder";
 import {
-  cbPost,
-} from "./coinbase-client";
-import {
   createAtlasShadowExecutionLog,
 } from "./atlas-shadow-execution-log";
 
@@ -26,32 +23,24 @@ export async function executeCoinbaseOrder(
         false
       );
 
-    const response = await cbPost(
-      "/api/v3/brokerage/orders",
-      payload
-    );
-
-    const data = await response.json();
-
     const log =
       createAtlasShadowExecutionLog({
         mode: "SHADOW",
         symbol: instruction.symbol,
         productId: instruction.productId,
         quoteSizeUsd: instruction.quoteSizeUsd,
-        success: false,
-        responseSummary: "shadow_only_no_order_submitted",
+        success: true,
+        responseSummary: "shadow_order_created_no_submission",
       });
 
     return {
-      success: false,
+      success: true,
       response: {
         log,
         mode: "shadow",
         submitted: false,
         reason: "shadow_only",
         payload,
-        coinbaseResponse: data,
       },
     };
   } catch (error) {
