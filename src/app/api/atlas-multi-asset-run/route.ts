@@ -9,8 +9,8 @@ import {
   dispatchAtlasExecutionInstructions,
 } from "@/lib/atlas-multi-asset-dispatcher";
 import {
-  executeCoinbaseOrder,
-} from "@/lib/coinbase-order-executor";
+  routeAtlasExecution,
+} from "@/lib/atlas-execution-router";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,7 +76,7 @@ export async function POST(req: Request) {
     execution.instructions,
     async (instruction) => ({
       instruction,
-      ...(await executeCoinbaseOrder(instruction)),
+      ...(await routeAtlasExecution(instruction)),
     })
   );
 
