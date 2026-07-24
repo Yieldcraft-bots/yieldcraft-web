@@ -28,3 +28,4 @@ export * from "./atlas-approval-builder";
 export * from "./atlas-approval-validator";
 export * from "./atlas-approval-transition";
 export * from "./atlas-approval-service";
+export * from "./atlas-approval-gate";
