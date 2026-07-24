@@ -5,6 +5,9 @@ import {
 import {
   cbPost,
 } from "./coinbase-client";
+import {
+  createAtlasShadowExecutionLog,
+} from "./atlas-shadow-execution-log";
 
 export interface CoinbaseOrderExecutorResult {
   success: boolean;
@@ -30,23 +33,42 @@ export async function executeCoinbaseOrder(
 
     const data = await response.json();
 
+    const log =
+      createAtlasShadowExecutionLog({
+        mode: "SHADOW",
+        symbol: instruction.symbol,
+        productId: instruction.productId,
+        quoteSizeUsd: instruction.quoteSizeUsd,
+        success: false,
+        responseSummary: "shadow_only_no_order_submitted",
+      });
+
     return {
       success: false,
       response: {
+        log,
         mode: "shadow",
         submitted: false,
         reason: "shadow_only",
-        productId: instruction.productId,
-        quoteSizeUsd: instruction.quoteSizeUsd,
-        fundingCurrency: instruction.fundingCurrency,
         payload,
         coinbaseResponse: data,
       },
     };
   } catch (error) {
+    const log =
+      createAtlasShadowExecutionLog({
+        mode: "SHADOW",
+        symbol: instruction.symbol,
+        productId: instruction.productId,
+        quoteSizeUsd: instruction.quoteSizeUsd,
+        success: false,
+        responseSummary: "shadow_execution_error",
+      });
+
     return {
       success: false,
       response: {
+        log,
         mode: "shadow",
         submitted: false,
         error:
