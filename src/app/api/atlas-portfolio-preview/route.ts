@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { buildClientPortfolioPlan } from "@/lib/atlas-intelligence/portfolio-plan-service";
 import { buildAtlasExecutionInstructions } from "@/lib/atlas-execution-adapter";
+import { createAtlasApproval } from "@/lib/atlas-operations";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,6 +50,15 @@ export async function GET(req: Request) {
     },
   });
 
+  const approval =
+    plan.portfolioPlanId === null
+      ? null
+      : createAtlasApproval({
+          userId: plan.userId,
+          portfolioPlanId: plan.portfolioPlanId,
+          reason: "Portfolio preview approval required.",
+        });
+
   const execution =
     plan.portfolioPlan === null
       ? null
@@ -60,6 +70,7 @@ export async function GET(req: Request) {
     ok: true,
     preview: true,
     plan,
+    approval,
     execution,
   });
 }
