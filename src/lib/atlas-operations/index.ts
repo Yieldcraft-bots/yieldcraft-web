@@ -22,3 +22,9 @@ export * from "./operations-status";
 export * from "./operations-metrics";
 export * from "./operations-diagnostics";
 export * from "./operations-snapshot";
+
+export * from "./atlas-approval-contract";
+export * from "./atlas-approval-builder";
+export * from "./atlas-approval-validator";
+export * from "./atlas-approval-transition";
+export * from "./atlas-approval-service";
