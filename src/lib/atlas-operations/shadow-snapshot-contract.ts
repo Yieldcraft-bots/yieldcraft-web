@@ -4,13 +4,13 @@
  * Shadow Snapshot Contract
  * ------------------------------------------------------------
  * PURPOSE
- * Define the immutable contract for a persisted Atlas shadow
- * execution snapshot.
+ * Define the immutable data contract for a persisted Atlas
+ * shadow execution snapshot.
  *
  * This contract is shared by:
- * - future repository layer
+ * - repository implementations
  * - future admin API
- * - future Atlas Operations dashboard
+ * - Atlas Operations dashboard
  *
  * SAFETY
  * - Read only
@@ -28,8 +28,4 @@ import type { AtlasExecutionBridgeResult } from "@/lib/atlas-execution-bridge";
 export interface AtlasShadowSnapshot {
   generatedAt: string;
   report: AtlasExecutionBridgeResult;
-}
-
-export interface AtlasShadowSnapshotRepository {
-  latest(): Promise<AtlasShadowSnapshot | null>;
 }
