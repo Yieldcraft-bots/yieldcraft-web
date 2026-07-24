@@ -37,7 +37,7 @@ export function buildCdpJwt(
   );
 
   const privateKey = normalizePem(
-    requireEnv("COINBASE_API_PRIVATE_KEY")
+    requireEnv("COINBASE_PRIVATE_KEY")
   );
 
   const now = Math.floor(Date.now() / 1000);
