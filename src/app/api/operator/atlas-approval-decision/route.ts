@@ -24,6 +24,7 @@ import { NextResponse } from "next/server";
 import {
   transitionAtlasApproval,
   evaluateAtlasApprovalGate,
+  InMemoryAtlasApprovalRepository,
 } from "@/lib/atlas-operations";
 
 import type {
@@ -33,6 +34,9 @@ import type {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const approvalRepository =
+  new InMemoryAtlasApprovalRepository();
 
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
@@ -60,11 +64,31 @@ export async function POST(req: Request) {
       });
     }
 
+    await approvalRepository.save(
+      approval
+    );
+
+    const storedApproval =
+      await approvalRepository.load(
+        approval.approvalId
+      );
+
+    if (!storedApproval) {
+      return json(404, {
+        ok: false,
+        error: "approval_not_found",
+      });
+    }
+
     const transitioned =
       transitionAtlasApproval(
-        approval,
+        storedApproval,
         nextStatus
       );
+
+    await approvalRepository.save(
+      transitioned
+    );
 
     const gate =
       evaluateAtlasApprovalGate(
