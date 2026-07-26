@@ -4,19 +4,21 @@
  * Approval Service
  * ------------------------------------------------------------
  * PURPOSE
- * Orchestrate approval contract creation and validation.
+ * Orchestrate approval contract creation, validation,
+ * and persistence.
  *
  * This file contains NO execution logic.
  *
  * SAFETY
- * - Read only
  * - No Coinbase
  * - No orders
+ * - No execution
  * - No API
- * - No database
  * - No Pulse
  * - No Recon
  * - No trading
+ *
+ * Persistence occurs only through the repository boundary.
  * ============================================================
  */
 
@@ -32,6 +34,10 @@ import type {
   AtlasApprovalContract,
 } from "./atlas-approval-contract";
 
+import type {
+  AtlasApprovalRepository,
+} from "./atlas-approval-repository";
+
 export type CreateAtlasApprovalInput = {
   userId: string;
   portfolioPlanId: string;
@@ -44,9 +50,10 @@ export type CreateAtlasApprovalResult = {
   reason: string;
 };
 
-export function createAtlasApproval(
-  input: CreateAtlasApprovalInput
-): CreateAtlasApprovalResult {
+export async function createAtlasApproval(
+  input: CreateAtlasApprovalInput,
+  repository: AtlasApprovalRepository
+): Promise<CreateAtlasApprovalResult> {
   const approval =
     buildAtlasApprovalContract(
       input.userId,
@@ -57,9 +64,19 @@ export function createAtlasApproval(
   const validation =
     validateAtlasApproval(approval);
 
+  if (!validation.valid) {
+    return {
+      approval,
+      valid: false,
+      reason: validation.reason,
+    };
+  }
+
+  await repository.save(approval);
+
   return {
     approval,
-    valid: validation.valid,
-    reason: validation.reason,
+    valid: true,
+    reason: "Approval created and persisted.",
   };
 }
