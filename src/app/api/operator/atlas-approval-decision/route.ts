@@ -12,7 +12,7 @@
  * - No Coinbase
  * - No orders
  * - No execution
- * - No database
+ * - Database persistence only through repository boundary
  * - No Pulse
  * - No Recon
  * - No trading
@@ -24,8 +24,11 @@ import { NextResponse } from "next/server";
 import {
   transitionAtlasApproval,
   evaluateAtlasApprovalGate,
-  InMemoryAtlasApprovalRepository,
 } from "@/lib/atlas-operations";
+
+import {
+  SupabaseAtlasApprovalRepository,
+} from "@/lib/repositories/atlasApprovalRepository";
 
 import type {
   AtlasApprovalContract,
@@ -36,7 +39,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const approvalRepository =
-  new InMemoryAtlasApprovalRepository();
+  new SupabaseAtlasApprovalRepository();
 
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
