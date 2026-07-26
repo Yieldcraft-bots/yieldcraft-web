@@ -4,6 +4,8 @@ import { buildClientPortfolioPlan } from "@/lib/atlas-intelligence/portfolio-pla
 import { buildAtlasExecutionInstructions } from "@/lib/atlas-execution-adapter";
 import { createAtlasApproval } from "@/lib/atlas-operations";
 
+import { SupabaseAtlasApprovalRepository } from "@/lib/repositories/atlasApprovalRepository";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -50,14 +52,21 @@ export async function GET(req: Request) {
     },
   });
 
+  const approvalRepository =
+    new SupabaseAtlasApprovalRepository();
+
   const approval =
     plan.portfolioPlanId === null
       ? null
-      : createAtlasApproval({
-          userId: plan.userId,
-          portfolioPlanId: plan.portfolioPlanId,
-          reason: "Portfolio preview approval required.",
-        });
+      : await createAtlasApproval(
+          {
+            userId: plan.userId,
+            portfolioPlanId: plan.portfolioPlanId,
+            reason:
+              "Portfolio preview approval required.",
+          },
+          approvalRepository
+        );
 
   const execution =
     plan.portfolioPlan === null
