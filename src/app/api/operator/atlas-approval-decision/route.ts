@@ -104,6 +104,11 @@ export async function POST(req: Request) {
       gate,
     });
   } catch (error) {
+    console.error(
+      "ATLAS_APPROVAL_DECISION_ERROR",
+      error
+    );
+
     return json(500, {
       ok: false,
       error:
