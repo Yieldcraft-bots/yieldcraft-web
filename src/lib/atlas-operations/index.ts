@@ -34,3 +34,4 @@ export * from "./atlas-execution-authorization-contract";
 export * from "./atlas-execution-authorization-validator";
 export * from "./atlas-execution-authorization-service";
 export * from "./atlas-execution-authorization-repository";
+export * from "./atlas-execution-authorization-builder";
