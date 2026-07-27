@@ -30,3 +30,7 @@ export * from "./atlas-approval-transition";
 export * from "./atlas-approval-service";
 export * from "./atlas-approval-gate";
 export * from "./atlas-approval-repository";
+export * from "./atlas-execution-authorization-contract";
+export * from "./atlas-execution-authorization-validator";
+export * from "./atlas-execution-authorization-service";
+export * from "./atlas-execution-authorization-repository";
