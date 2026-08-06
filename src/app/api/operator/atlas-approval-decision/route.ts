@@ -4,9 +4,12 @@
  * Approval Decision Route
  * ------------------------------------------------------------
  * PURPOSE
- * Process an approval status decision.
+ * Process an operator decision for an EXISTING Atlas approval.
  *
- * This route ONLY transitions approval state.
+ * SECURITY
+ * - Caller supplies approvalId + nextStatus only
+ * - Existing approval is loaded from trusted persistence
+ * - Operator token is required in request header
  *
  * SAFETY
  * - No Coinbase
@@ -31,7 +34,6 @@ import {
 } from "@/lib/repositories/atlasApprovalRepository";
 
 import type {
-  AtlasApprovalContract,
   AtlasApprovalStatus,
 } from "@/lib/atlas-operations";
 
@@ -50,30 +52,86 @@ function json(status: number, body: unknown) {
   });
 }
 
+function getOperatorToken(req: Request): string {
+  return (
+    req.headers.get("x-atlas-operator-token") ?? ""
+  ).trim();
+}
+
+function isDecisionStatus(
+  value: unknown
+): value is AtlasApprovalStatus {
+  return (
+    value === "APPROVED" ||
+    value === "REJECTED"
+  );
+}
+
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
+    const configuredToken =
+      process.env.ATLAS_APPROVAL_OPERATOR_TOKEN;
 
-    const approval =
-      body.approval as AtlasApprovalContract;
-
-    const nextStatus =
-      body.nextStatus as AtlasApprovalStatus;
-
-    if (!approval || !nextStatus) {
-      return json(400, {
+    if (!configuredToken) {
+      return json(500, {
         ok: false,
-        error: "missing_approval_or_status",
+        error:
+          "missing_ATLAS_APPROVAL_OPERATOR_TOKEN",
       });
     }
 
-    await approvalRepository.save(
-      approval
-    );
+    const suppliedToken =
+      getOperatorToken(req);
+
+    if (
+      !suppliedToken ||
+      suppliedToken !== configuredToken
+    ) {
+      return json(401, {
+        ok: false,
+        error: "unauthorized",
+      });
+    }
+
+    const body: unknown =
+      await req.json().catch(() => null);
+
+    if (
+      typeof body !== "object" ||
+      body === null
+    ) {
+      return json(400, {
+        ok: false,
+        error: "invalid_request_body",
+      });
+    }
+
+    const approvalId =
+      Reflect.get(body, "approvalId");
+
+    const nextStatus =
+      Reflect.get(body, "nextStatus");
+
+    if (
+      typeof approvalId !== "string" ||
+      !approvalId.trim()
+    ) {
+      return json(400, {
+        ok: false,
+        error: "missing_approval_id",
+      });
+    }
+
+    if (!isDecisionStatus(nextStatus)) {
+      return json(400, {
+        ok: false,
+        error: "invalid_approval_status",
+      });
+    }
 
     const storedApproval =
       await approvalRepository.load(
-        approval.approvalId
+        approvalId.trim()
       );
 
     if (!storedApproval) {
