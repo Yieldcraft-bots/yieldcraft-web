@@ -2,12 +2,33 @@ import { NextResponse } from "next/server";
 
 import { buildClientPortfolioPlan } from "@/lib/atlas-intelligence/portfolio-plan-service";
 import { buildAtlasExecutionInstructions } from "@/lib/atlas-execution-adapter";
-import { createAtlasApproval } from "@/lib/atlas-operations";
-
-import { SupabaseAtlasApprovalRepository } from "@/lib/repositories/atlasApprovalRepository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * ============================================================
+ * Atlas Portfolio Preview
+ * ------------------------------------------------------------
+ * PURPOSE
+ * Build and return a read-only preview of the client's
+ * previously selected Atlas allocation plan.
+ *
+ * SAFETY
+ * - Preview only
+ * - No approval creation
+ * - No approval persistence
+ * - No authorization
+ * - No order submission
+ * - No Coinbase access
+ * - No Pulse
+ * - No Recon
+ * - No trading
+ *
+ * Execution instructions returned here are descriptive planning
+ * output only. They are NOT dispatched or submitted.
+ * ============================================================
+ */
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -52,22 +73,6 @@ export async function GET(req: Request) {
     },
   });
 
-  const approvalRepository =
-    new SupabaseAtlasApprovalRepository();
-
-  const approval =
-    plan.portfolioPlanId === null
-      ? null
-      : await createAtlasApproval(
-          {
-            userId: plan.userId,
-            portfolioPlanId: plan.portfolioPlanId,
-            reason:
-              "Portfolio preview approval required.",
-          },
-          approvalRepository
-        );
-
   const execution =
     plan.portfolioPlan === null
       ? null
@@ -79,7 +84,6 @@ export async function GET(req: Request) {
     ok: true,
     preview: true,
     plan,
-    approval,
     execution,
   });
 }
