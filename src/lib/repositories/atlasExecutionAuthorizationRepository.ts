@@ -37,8 +37,10 @@ export class SupabaseAtlasExecutionAuthorizationRepository
   async save(
     authorization: AtlasExecutionAuthorizationContract
   ): Promise<void> {
+    const supabase = supabaseAdmin();
+
     const { error } =
-      await supabaseAdmin
+      await supabase
         .from("atlas_execution_authorizations")
         .upsert({
           authorization_id:
@@ -74,8 +76,10 @@ export class SupabaseAtlasExecutionAuthorizationRepository
   async load(
     authorizationId: string
   ): Promise<AtlasExecutionAuthorizationContract | null> {
+    const supabase = supabaseAdmin();
+
     const { data, error } =
-      await supabaseAdmin
+      await supabase
         .from("atlas_execution_authorizations")
         .select("*")
         .eq(
