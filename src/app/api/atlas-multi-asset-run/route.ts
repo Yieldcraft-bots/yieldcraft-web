@@ -1,16 +1,39 @@
+/**
+ * ============================================================
+ * YieldCraft Atlas
+ * Multi Asset Governance Run
+ * ------------------------------------------------------------
+ * PURPOSE
+ * Build a client-selected Atlas portfolio plan and create the
+ * required approval boundary.
+ *
+ * SAFETY
+ * - Operator controlled
+ * - Client allocation driven
+ * - No automatic approval
+ * - No execution dispatch
+ * - No Coinbase
+ * - No Pulse
+ * - No Recon
+ * - No trading
+ *
+ * This route creates governance state only.
+ * ============================================================
+ */
+
 import { NextResponse } from "next/server";
+
 import {
-  buildPortfolioExecutionPlan,
-} from "@/lib/portfolio-execution-planner";
+  buildClientPortfolioPlan,
+} from "@/lib/atlas-intelligence/portfolio-plan-service";
+
 import {
-  buildAtlasExecutionInstructions,
-} from "@/lib/atlas-execution-adapter";
+  createAtlasApproval,
+} from "@/lib/atlas-operations";
+
 import {
-  dispatchAtlasExecutionInstructions,
-} from "@/lib/atlas-multi-asset-dispatcher";
-import {
-  routeAtlasExecution,
-} from "@/lib/atlas-execution-router";
+  SupabaseAtlasApprovalRepository,
+} from "@/lib/repositories/atlasApprovalRepository";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,34 +82,89 @@ export async function POST(req: Request) {
     });
   }
 
-  const plan = buildPortfolioExecutionPlan({
-    deployableUsd: 100,
-    fundingCurrency: "USD",
-    allocations: [
-      { symbol: "BTC", targetPercent: 40 },
-      { symbol: "ETH", targetPercent: 30 },
-      { symbol: "SOL", targetPercent: 20 },
-      { symbol: "XRP", targetPercent: 10 },
-    ],
-  });
+  const body = await req.json().catch(() => null);
 
-  const execution = buildAtlasExecutionInstructions(plan);
+  const userId =
+    typeof body?.userId === "string"
+      ? body.userId
+      : "";
 
-  const dispatch = await dispatchAtlasExecutionInstructions(
-    execution.instructions,
-    async (instruction) => ({
-      instruction,
-      ...(await routeAtlasExecution(instruction)),
-    })
-  );
+  const fundingCurrency =
+    body?.fundingCurrency === "USDC"
+      ? "USDC"
+      : "USD";
+
+  const availableCash =
+    typeof body?.availableCash === "number"
+      ? body.availableCash
+      : 0;
+
+  const deployPct =
+    typeof body?.deployPct === "number"
+      ? body.deployPct
+      : 20;
+
+  const minCash =
+    typeof body?.minCash === "number"
+      ? body.minCash
+      : 10;
+
+  const minBuy =
+    typeof body?.minBuy === "number"
+      ? body.minBuy
+      : 10;
+
+  if (!userId) {
+    return json(400, {
+      ok: false,
+      error: "missing_user_id",
+    });
+  }
+
+  const plan =
+    await buildClientPortfolioPlan({
+      userId,
+      fundingCurrency,
+      allocationPolicy: {
+        availableCash,
+        deployPct,
+        minCash,
+        minBuy,
+      },
+    });
+
+  if (
+    !plan.portfolioPlanId ||
+    !plan.portfolioPlan
+  ) {
+    return json(200, {
+      ok: true,
+      status: "blocked",
+      reason:
+        "portfolio_plan_not_ready",
+      plan,
+    });
+  }
+
+  const approvalRepository =
+    new SupabaseAtlasApprovalRepository();
+
+  const approval =
+    await createAtlasApproval(
+      {
+        userId: plan.userId,
+        portfolioPlanId:
+          plan.portfolioPlanId,
+        reason:
+          "Atlas multi-asset portfolio approval required.",
+      },
+      approvalRepository
+    );
 
   return json(200, {
     ok: true,
-    plannerValid: plan.valid,
-    executable: execution.executable,
-    dispatchSuccess: dispatch.success,
-    executed: dispatch.executed,
-    failed: dispatch.failed,
-    results: dispatch.results,
+    status: "approval_required",
+    plan,
+    approval,
   });
 }
