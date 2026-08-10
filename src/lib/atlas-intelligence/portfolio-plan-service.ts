@@ -3,9 +3,11 @@
  *
  * Single responsibility:
  * Load a client's saved allocation, calculate deployable capital,
- * and build a validated portfolio execution plan.
+ * build a validated portfolio execution plan, and persist the
+ * generated portfolio plan.
  *
  * This file knows NOTHING about:
+ *
  * - Coinbase API calls
  * - Order submission
  * - JWT
@@ -19,14 +21,20 @@ import {
   type AtlasAllocationInput,
   type AtlasAllocationResult,
 } from "../atlas-allocation-policy";
+
 import {
   buildPortfolioExecutionPlan,
   type PortfolioExecutionPlan,
 } from "../portfolio-execution-planner";
+
 import {
   getClientAllocationPlan,
   type ClientAllocationRow,
 } from "../repositories/clientAllocationRepository";
+
+import {
+  saveAtlasPortfolioPlan,
+} from "../repositories/atlasPortfolioPlanRepository";
 
 export type BuildClientPortfolioPlanInput = {
   userId: string;
@@ -45,11 +53,13 @@ export type ClientPortfolioPlanResult = {
 export async function buildClientPortfolioPlan(
   input: BuildClientPortfolioPlanInput
 ): Promise<ClientPortfolioPlanResult> {
-  const allocationRows = await getClientAllocationPlan(input.userId);
+  const allocationRows =
+    await getClientAllocationPlan(input.userId);
 
-  const allocationResult = calculateAtlasAllocation(
-    input.allocationPolicy
-  );
+  const allocationResult =
+    calculateAtlasAllocation(
+      input.allocationPolicy
+    );
 
   if (!allocationResult.eligible) {
     return {
@@ -61,21 +71,36 @@ export async function buildClientPortfolioPlan(
     };
   }
 
-  const portfolioPlan = buildPortfolioExecutionPlan({
-    allocations: allocationRows.map((row) => ({
-      symbol: row.asset_symbol,
-      targetPercent: row.target_percent,
-    })),
-    deployableUsd: allocationResult.proposedBuyUsd,
-    fundingCurrency: input.fundingCurrency,
-    minOrderUsd: input.allocationPolicy.minBuy,
-  });
+  const portfolioPlan =
+    buildPortfolioExecutionPlan({
+      allocations: allocationRows.map((row) => ({
+        symbol: row.asset_symbol,
+        targetPercent: row.target_percent,
+      })),
+      deployableUsd:
+        allocationResult.proposedBuyUsd,
+      fundingCurrency:
+        input.fundingCurrency,
+      minOrderUsd:
+        input.allocationPolicy.minBuy,
+    });
+
+  const portfolioPlanId =
+    portfolioPlan.valid
+      ? crypto.randomUUID()
+      : null;
+
+  if (portfolioPlanId) {
+    await saveAtlasPortfolioPlan({
+      portfolioPlanId,
+      userId: input.userId,
+      plan: portfolioPlan,
+    });
+  }
 
   return {
     userId: input.userId,
-    portfolioPlanId: portfolioPlan.valid
-      ? crypto.randomUUID()
-      : null,
+    portfolioPlanId,
     allocationRows,
     allocationResult,
     portfolioPlan,
