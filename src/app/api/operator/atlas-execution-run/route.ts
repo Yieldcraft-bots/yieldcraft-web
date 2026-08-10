@@ -2,11 +2,13 @@
  * ============================================================
  * YieldCraft Atlas
  * Protected Execution Run
- * ------------------------------------------------------------
+ *
+ * ---
  * PURPOSE
  * Execute only an already approved and authorized Atlas plan.
  *
  * SAFETY
+ *
  * - Operator controlled
  * - Approval required
  * - Authorization required
@@ -30,12 +32,12 @@ import {
 } from "@/lib/repositories/atlasExecutionAuthorizationRepository";
 
 import {
-  evaluateAtlasExecutionAuthorizationGate,
-} from "@/lib/atlas-operations";
+  loadAtlasPortfolioPlan,
+} from "@/lib/repositories/atlasPortfolioPlanRepository";
 
 import {
-  buildPortfolioExecutionPlan,
-} from "@/lib/portfolio-execution-planner";
+  evaluateAtlasExecutionAuthorizationGate,
+} from "@/lib/atlas-operations";
 
 import {
   buildAtlasExecutionInstructions,
@@ -183,16 +185,22 @@ export async function POST(req: Request) {
       });
     }
 
-    const plan =
-      buildPortfolioExecutionPlan({
-        deployableUsd: 100,
-        fundingCurrency: "USD",
-        allocations: [],
+    const storedPlan =
+      await loadAtlasPortfolioPlan(
+        authorization.portfolioPlanId
+      );
+
+    if (!storedPlan) {
+      return json(404, {
+        ok: false,
+        error:
+          "portfolio_plan_not_found",
       });
+    }
 
     const execution =
       buildAtlasExecutionInstructions(
-        plan
+        storedPlan.plan
       );
 
     const dispatch =
@@ -212,6 +220,8 @@ export async function POST(req: Request) {
       approval,
       authorization,
       gate,
+      portfolioPlan:
+        storedPlan,
       execution,
       dispatch,
     });
