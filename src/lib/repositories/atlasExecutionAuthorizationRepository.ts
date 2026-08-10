@@ -31,42 +31,76 @@ import type {
   AtlasExecutionAuthorizationContract,
 } from "../atlas-operations/atlas-execution-authorization-contract";
 
+
 export class SupabaseAtlasExecutionAuthorizationRepository
-  implements AtlasExecutionAuthorizationRepository
+implements AtlasExecutionAuthorizationRepository
 {
   async save(
     authorization: AtlasExecutionAuthorizationContract
   ): Promise<void> {
     const supabase = supabaseAdmin();
 
+    const { data: existing, error: lookupError } =
+      await supabase
+        .from("atlas_execution_authorizations")
+        .select("id")
+        .eq(
+          "authorization_id",
+          authorization.authorizationId
+        )
+        .maybeSingle();
+
+    if (lookupError) {
+      throw lookupError;
+    }
+
+    const payload = {
+      authorization_id:
+        authorization.authorizationId,
+
+      approval_id:
+        authorization.approvalId,
+
+      user_id:
+        authorization.userId,
+
+      portfolio_plan_id:
+        authorization.portfolioPlanId,
+
+      status:
+        authorization.status,
+
+      authorized_at:
+        authorization.authorizedAt,
+
+      reason:
+        authorization.reason,
+
+      created_at:
+        authorization.createdAt,
+    };
+
+    if (existing?.id) {
+      const { error } =
+        await supabase
+          .from("atlas_execution_authorizations")
+          .update(payload)
+          .eq(
+            "id",
+            existing.id
+          );
+
+      if (error) {
+        throw error;
+      }
+
+      return;
+    }
+
     const { error } =
       await supabase
         .from("atlas_execution_authorizations")
-        .upsert({
-          authorization_id:
-            authorization.authorizationId,
-
-          approval_id:
-            authorization.approvalId,
-
-          user_id:
-            authorization.userId,
-
-          portfolio_plan_id:
-            authorization.portfolioPlanId,
-
-          status:
-            authorization.status,
-
-          authorized_at:
-            authorization.authorizedAt,
-
-          reason:
-            authorization.reason,
-
-          created_at:
-            authorization.createdAt,
-        });
+        .insert(payload);
 
     if (error) {
       throw error;
