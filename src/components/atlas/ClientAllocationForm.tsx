@@ -282,7 +282,8 @@ export default function ClientAllocationForm() {
         setAllocations(body.allocations);
       }
 
-      setSaveSuccess("Allocation plan saved.");
+      setSaveSuccess("Allocation plan saved. Redirecting to preview...");
+window.location.href = "/atlas/preview";
     } catch (error) {
       setSaveError(
         error instanceof Error
