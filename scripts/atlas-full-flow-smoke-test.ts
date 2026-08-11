@@ -37,6 +37,14 @@ import {
   evaluateAtlasExecutionAuthorizationGate,
 } from "../src/lib/atlas-operations";
 
+import type {
+  AtlasApprovalContract,
+} from "../src/lib/atlas-operations";
+
+import type {
+  PortfolioExecutionPlan,
+} from "../src/lib/portfolio-execution-planner";
+
 config({
   path: ".env.local",
 });
@@ -61,9 +69,9 @@ async function main() {
 
   let authorizationId: string | null = null;
 
-  const plan = {
+  const plan: PortfolioExecutionPlan = {
     valid: true,
-    reason: "test",
+    reason: "plan_ready",
     deployableUsd: 100,
     allocationTotalPercent: 100,
     plannedUsd: 100,
@@ -71,7 +79,12 @@ async function main() {
     orders: [
       {
         symbol: "BTC",
-        usd: 100,
+        targetPercent: 100,
+        proposedBuyUsd: 100,
+        brokerId: "coinbase",
+        productId: "BTC-USD",
+        executable: true,
+        reason: "ready",
       },
     ],
   };
@@ -102,7 +115,7 @@ async function main() {
       "2. Portfolio plan load: PASS"
     );
 
-    const approval = {
+    const approval: AtlasApprovalContract = {
       approvalId,
       userId,
       portfolioPlanId,
