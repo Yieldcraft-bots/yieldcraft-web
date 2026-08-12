@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 
 import { buildClientPortfolioPlan } from "@/lib/atlas-intelligence/portfolio-plan-service";
 import { buildAtlasExecutionInstructions } from "@/lib/atlas-execution-adapter";
@@ -9,12 +11,13 @@ export const dynamic = "force-dynamic";
 /**
  * ============================================================
  * Atlas Portfolio Preview
- * ------------------------------------------------------------
+ *
  * PURPOSE
  * Build and return a read-only preview of the client's
  * previously selected Atlas allocation plan.
  *
  * SAFETY
+ *
  * - Preview only
  * - No approval creation
  * - No approval persistence
@@ -30,20 +33,63 @@ export const dynamic = "force-dynamic";
  * ============================================================
  */
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
+function json(status: number, body: unknown) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+    },
+  });
+}
 
-  const userId = url.searchParams.get("userId");
+async function authenticateRequest() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    throw new Error("Missing Supabase environment variables.");
+  }
+
+  const cookieStore = await cookies();
+
+  const supabase = createServerClient(
+    url,
+    anonKey,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll() {
+          // Preview route does not modify auth cookies.
+        },
+      },
+    }
+  );
+
+  const {
+    data,
+    error,
+  } = await supabase.auth.getUser();
+
+  if (error || !data.user) {
+    return null;
+  }
+
+  return data.user.id;
+}
+
+export async function GET(req: Request) {
+  const userId = await authenticateRequest();
 
   if (!userId) {
-    return NextResponse.json(
-      {
-        ok: false,
-        reason: "missing_user_id",
-      },
-      { status: 400 }
-    );
+    return json(401, {
+      ok: false,
+      reason: "not_authenticated",
+    });
   }
+
+  const url = new URL(req.url);
 
   const availableCash = Number(
     url.searchParams.get("availableCash") ?? "0"
