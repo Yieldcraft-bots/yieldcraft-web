@@ -57,6 +57,7 @@ function entitlementsFromPrice(priceId: string) {
   } else if (priceId === PRO) {
     pulse = true;
     recon = true;
+    atlas = true;
   }
 
   return { pulse, recon, atlas };
