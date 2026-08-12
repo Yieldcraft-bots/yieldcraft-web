@@ -79,6 +79,45 @@ async function authenticateRequest() {
   return data.user.id;
 }
 
+async function hasAtlasEntitlement(userId: string) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !anonKey) {
+    throw new Error("Missing Supabase environment variables.");
+  }
+
+  const cookieStore = await cookies();
+
+  const supabase = createServerClient(
+    url,
+    anonKey,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll();
+        },
+        setAll() {},
+      },
+    }
+  );
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from("entitlements")
+    .select("atlas")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error("atlas_entitlement_check_failed");
+  }
+
+  return data?.atlas === true;
+}
+
 export async function GET(req: Request) {
   const userId = await authenticateRequest();
 
@@ -86,6 +125,17 @@ export async function GET(req: Request) {
     return json(401, {
       ok: false,
       reason: "not_authenticated",
+    });
+  }
+
+  const atlasEnabled = await hasAtlasEntitlement(userId);
+
+  if (!atlasEnabled) {
+    return json(200, {
+      ok: true,
+      preview: true,
+      status: "blocked",
+      reason: "atlas_entitlement_required",
     });
   }
 

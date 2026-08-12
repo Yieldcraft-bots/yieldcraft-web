@@ -50,7 +50,7 @@ async function getPreview() {
 
   const url =
     `${process.env.NEXT_PUBLIC_SITE_URL ?? ""}` +
-    `/api/atlas-portfolio-preview`;
+    `/api/atlas-portfolio-preview?userId=${userId}`;
 
   const response = await fetch(url, {
     cache: "no-store",
