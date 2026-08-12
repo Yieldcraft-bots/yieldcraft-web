@@ -8,31 +8,6 @@ import { buildAtlasExecutionInstructions } from "@/lib/atlas-execution-adapter";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * ============================================================
- * Atlas Portfolio Preview
- *
- * PURPOSE
- * Build and return a read-only preview of the client's
- * previously selected Atlas allocation plan.
- *
- * SAFETY
- *
- * - Preview only
- * - No approval creation
- * - No approval persistence
- * - No authorization
- * - No order submission
- * - No Coinbase access
- * - No Pulse
- * - No Recon
- * - No trading
- *
- * Execution instructions returned here are descriptive planning
- * output only. They are NOT dispatched or submitted.
- * ============================================================
- */
-
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
     status,
@@ -60,17 +35,12 @@ async function authenticateRequest() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll() {
-          // Preview route does not modify auth cookies.
-        },
+        setAll() {},
       },
     }
   );
 
-  const {
-    data,
-    error,
-  } = await supabase.auth.getUser();
+  const { data, error } = await supabase.auth.getUser();
 
   if (error || !data.user) {
     return null;
@@ -102,10 +72,7 @@ async function hasAtlasEntitlement(userId: string) {
     }
   );
 
-  const {
-    data,
-    error,
-  } = await supabase
+  const { data, error } = await supabase
     .from("entitlements")
     .select("atlas")
     .eq("user_id", userId)
@@ -116,6 +83,38 @@ async function hasAtlasEntitlement(userId: string) {
   }
 
   return data?.atlas === true;
+}
+
+async function getAtlasAvailableCash(req: Request) {
+  const authHeader = req.headers.get("authorization");
+
+  if (!authHeader) {
+    return 0;
+  }
+
+  const balanceUrl = new URL(
+    "/api/coinbase/balances?product=atlas",
+    req.url
+  );
+
+  const response = await fetch(balanceUrl, {
+    cache: "no-store",
+    headers: {
+      Authorization: authHeader,
+    },
+  });
+
+  if (!response.ok) {
+    return 0;
+  }
+
+  const data = await response.json();
+
+  if (!data?.ok) {
+    return 0;
+  }
+
+  return Number(data.available_usd ?? 0);
 }
 
 export async function GET(req: Request) {
@@ -141,9 +140,7 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
 
-  const availableCash = Number(
-    url.searchParams.get("availableCash") ?? "0"
-  );
+  const availableCash = await getAtlasAvailableCash(req);
 
   const deployPct = Number(
     url.searchParams.get("deployPct") ?? "20"
