@@ -2,6 +2,8 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
+import RequestApprovalButton from "@/components/atlas/RequestApprovalButton";
+
 async function getUserId() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -133,6 +135,8 @@ export default async function AtlasPreviewPage() {
               Atlas does not execute from preview. A separate approval boundary
               is required before any protected execution workflow.
             </p>
+
+            <RequestApprovalButton />
           </div>
         </section>
       </div>
