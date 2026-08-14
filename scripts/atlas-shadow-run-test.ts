@@ -2,6 +2,7 @@
  * ============================================================
  * YieldCraft Atlas
  * Protected Shadow Run Test
+ *
  * ------------------------------------------------------------
  * PURPOSE
  * Verify:
@@ -39,9 +40,11 @@ import type {
   AtlasApprovalContract,
 } from "../src/lib/atlas-operations";
 
+
 config({
   path: ".env.local",
 });
+
 
 async function main() {
   const approvalRepository =
@@ -49,6 +52,7 @@ async function main() {
 
   const authorizationRepository =
     new SupabaseAtlasExecutionAuthorizationRepository();
+
 
   const approvalId =
     crypto.randomUUID();
@@ -59,10 +63,13 @@ async function main() {
   const portfolioPlanId =
     crypto.randomUUID();
 
+
   let authorizationId: string | null = null;
+
 
   const now =
     new Date().toISOString();
+
 
   const approval: AtlasApprovalContract = {
     approvalId,
@@ -75,21 +82,26 @@ async function main() {
       "Atlas protected shadow execution test.",
   };
 
+
   try {
     console.log(
       "ATLAS_SHADOW_RUN_TEST"
     );
+
     console.log(
       "----------------------------"
     );
+
 
     await approvalRepository.save(
       approval
     );
 
+
     console.log(
       "1. Approved approval save: PASS"
     );
+
 
     const result =
       await createExecutionAuthorizationFromApproval(
@@ -97,23 +109,29 @@ async function main() {
         authorizationRepository
       );
 
+
     if (!result.valid) {
       throw new Error(
         result.reason
       );
     }
 
+
     authorizationId =
       result.authorization.authorizationId;
+
 
     console.log(
       "2. Authorization creation: PASS"
     );
 
+
     const loadedAuthorization =
       await authorizationRepository.load(
-        authorizationId
+        authorizationId,
+        userId
       );
+
 
     if (!loadedAuthorization) {
       throw new Error(
@@ -121,24 +139,29 @@ async function main() {
       );
     }
 
+
     const authorized =
       transitionAtlasExecutionAuthorization(
         loadedAuthorization,
         "AUTHORIZED"
       );
 
+
     await authorizationRepository.save(
       authorized
     );
+
 
     console.log(
       "3. Authorization transition: PASS"
     );
 
+
     const gate =
       evaluateAtlasExecutionAuthorizationGate(
         authorized
       );
+
 
     if (!gate.authorized) {
       throw new Error(
@@ -146,9 +169,11 @@ async function main() {
       );
     }
 
+
     console.log(
       "4. Authorization gate: PASS"
     );
+
 
     console.log(
       "RESULT: PASS — Protected shadow execution boundary ready."
@@ -159,6 +184,7 @@ async function main() {
       (await import(
         "../src/lib/supabaseAdmin"
       )).supabaseAdmin();
+
 
     if (authorizationId) {
       await supabase
@@ -172,6 +198,7 @@ async function main() {
         );
     }
 
+
     await supabase
       .from(
         "atlas_approvals"
@@ -182,11 +209,13 @@ async function main() {
         approvalId
       );
 
+
     console.log(
       "5. Cleanup: PASS"
     );
   }
 }
+
 
 main().catch((error) => {
   console.error(

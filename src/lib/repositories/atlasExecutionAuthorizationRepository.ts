@@ -23,9 +23,11 @@ import {
   supabaseAdmin,
 } from "../supabaseAdmin";
 
+
 import type {
   AtlasExecutionAuthorizationRepository,
 } from "../atlas-operations/atlas-execution-authorization-repository";
+
 
 import type {
   AtlasExecutionAuthorizationContract,
@@ -40,6 +42,7 @@ implements AtlasExecutionAuthorizationRepository
   ): Promise<void> {
     const supabase = supabaseAdmin();
 
+
     const { data: existing, error: lookupError } =
       await supabase
         .from("atlas_execution_authorizations")
@@ -50,9 +53,11 @@ implements AtlasExecutionAuthorizationRepository
         )
         .maybeSingle();
 
+
     if (lookupError) {
       throw lookupError;
     }
+
 
     const payload = {
       authorization_id:
@@ -80,6 +85,7 @@ implements AtlasExecutionAuthorizationRepository
         authorization.createdAt,
     };
 
+
     if (existing?.id) {
       const { error } =
         await supabase
@@ -90,27 +96,34 @@ implements AtlasExecutionAuthorizationRepository
             existing.id
           );
 
+
       if (error) {
         throw error;
       }
 
+
       return;
     }
+
 
     const { error } =
       await supabase
         .from("atlas_execution_authorizations")
         .insert(payload);
 
+
     if (error) {
       throw error;
     }
   }
 
+
   async load(
-    authorizationId: string
+    authorizationId: string,
+    userId: string
   ): Promise<AtlasExecutionAuthorizationContract | null> {
     const supabase = supabaseAdmin();
+
 
     const { data, error } =
       await supabase
@@ -120,7 +133,12 @@ implements AtlasExecutionAuthorizationRepository
           "authorization_id",
           authorizationId
         )
+        .eq(
+          "user_id",
+          userId
+        )
         .single();
+
 
     if (error) {
       if (error.code === "PGRST116") {
@@ -129,6 +147,7 @@ implements AtlasExecutionAuthorizationRepository
 
       throw error;
     }
+
 
     return {
       authorizationId:

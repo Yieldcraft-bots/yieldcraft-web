@@ -29,29 +29,37 @@ import type {
   AtlasApprovalRepository,
 } from "../atlas-operations";
 
+
 const TABLE = "atlas_approvals";
+
 
 export class SupabaseAtlasApprovalRepository
   implements AtlasApprovalRepository
 {
   async load(
-    approvalId: string
+    approvalId: string,
+    userId: string
   ): Promise<AtlasApprovalContract | null> {
     const supabase = supabaseAdmin();
+
 
     const { data, error } = await supabase
       .from(TABLE)
       .select("*")
       .eq("approval_id", approvalId)
+      .eq("user_id", userId)
       .maybeSingle();
+
 
     if (error) {
       throw error;
     }
 
+
     if (!data) {
       return null;
     }
+
 
     return {
       approvalId: data.approval_id,
@@ -64,10 +72,12 @@ export class SupabaseAtlasApprovalRepository
     };
   }
 
+
   async save(
     approval: AtlasApprovalContract
   ): Promise<void> {
     const supabase = supabaseAdmin();
+
 
     const { error } = await supabase
       .from(TABLE)
@@ -90,6 +100,7 @@ export class SupabaseAtlasApprovalRepository
           onConflict: "approval_id",
         }
       );
+
 
     if (error) {
       throw error;

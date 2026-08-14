@@ -2,18 +2,19 @@
  * ============================================================
  * YieldCraft Atlas
  * Approval -> Execution Authorization Persistence Smoke Test
+ *
  * ------------------------------------------------------------
  * PURPOSE
  * Prove the governance persistence chain:
  *
  * APPROVED approval
- *   -> save
- *   -> load
- *   -> approval gate
- *   -> create authorization
- *   -> save
- *   -> load
- *   -> validate
+ * -> save
+ * -> load
+ * -> approval gate
+ * -> create authorization
+ * -> save
+ * -> load
+ * -> validate
  *
  * SAFETY
  * - Governance persistence only
@@ -22,7 +23,6 @@
  * - No Coinbase
  * - No Pulse
  * - No Recon
- * - No API routes
  *
  * Test records are deleted in cleanup.
  * ============================================================
@@ -44,10 +44,6 @@ import { validateAtlasExecutionAuthorization } from "../src/lib/atlas-operations
 
 import type { AtlasApprovalContract } from "../src/lib/atlas-operations/atlas-approval-contract";
 
-/*
- * Standalone tsx scripts do not automatically load Next.js .env.local.
- * Load the local server-side environment explicitly for this test.
- */
 config({
   path: ".env.local",
 });
@@ -100,7 +96,10 @@ async function main() {
     console.log("2. Approval save: PASS");
 
     const loadedApproval =
-      await approvalRepository.load(approvalId);
+      await approvalRepository.load(
+        approvalId,
+        userId
+      );
 
     if (!loadedApproval) {
       throw new Error(
@@ -143,7 +142,8 @@ async function main() {
 
     const loadedAuthorization =
       await authorizationRepository.load(
-        authorizationId
+        authorizationId,
+        userId
       );
 
     if (!loadedAuthorization) {
@@ -185,18 +185,20 @@ async function main() {
     console.log(
       "RESULT: PASS — Atlas approval -> authorization persistence chain is healthy."
     );
+
   } finally {
     if (authorizationId || approvalSaved) {
       const supabase = supabaseAdmin();
 
       if (authorizationId) {
-        const { error } = await supabase
-          .from("atlas_execution_authorizations")
-          .delete()
-          .eq(
-            "authorization_id",
-            authorizationId
-          );
+        const { error } =
+          await supabase
+            .from("atlas_execution_authorizations")
+            .delete()
+            .eq(
+              "authorization_id",
+              authorizationId
+            );
 
         if (error) {
           console.error(

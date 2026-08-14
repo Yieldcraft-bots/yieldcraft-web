@@ -2,6 +2,7 @@
  * ============================================================
  * YieldCraft Atlas
  * Execution Authorization Decision Route
+ *
  * ------------------------------------------------------------
  * PURPOSE
  * Process operator decisions for an existing execution
@@ -40,6 +41,7 @@ import type {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
     status,
@@ -49,11 +51,13 @@ function json(status: number, body: unknown) {
   });
 }
 
+
 function getOperatorToken(req: Request): string {
   return (
     req.headers.get("x-atlas-operator-token") ?? ""
   ).trim();
 }
+
 
 function isAuthorizationStatus(
   value: unknown
@@ -64,13 +68,16 @@ function isAuthorizationStatus(
   );
 }
 
+
 const authorizationRepository =
   new SupabaseAtlasExecutionAuthorizationRepository();
+
 
 export async function POST(req: Request) {
   try {
     const configuredToken =
       process.env.ATLAS_APPROVAL_OPERATOR_TOKEN;
+
 
     if (!configuredToken) {
       return json(500, {
@@ -80,8 +87,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const suppliedToken =
       getOperatorToken(req);
+
 
     if (
       !suppliedToken ||
@@ -93,8 +102,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const body: unknown =
       await req.json().catch(() => null);
+
 
     if (
       typeof body !== "object" ||
@@ -106,11 +117,18 @@ export async function POST(req: Request) {
       });
     }
 
+
     const authorizationId =
       Reflect.get(body, "authorizationId");
 
+
     const nextStatus =
       Reflect.get(body, "nextStatus");
+
+
+    const userId =
+      Reflect.get(body, "userId");
+
 
     if (
       typeof authorizationId !== "string" ||
@@ -122,6 +140,18 @@ export async function POST(req: Request) {
       });
     }
 
+
+    if (
+      typeof userId !== "string" ||
+      !userId.trim()
+    ) {
+      return json(400, {
+        ok: false,
+        error: "missing_user_id",
+      });
+    }
+
+
     if (!isAuthorizationStatus(nextStatus)) {
       return json(400, {
         ok: false,
@@ -129,10 +159,13 @@ export async function POST(req: Request) {
       });
     }
 
+
     const authorization =
       await authorizationRepository.load(
-        authorizationId.trim()
+        authorizationId.trim(),
+        userId.trim()
       );
+
 
     if (!authorization) {
       return json(404, {
@@ -141,26 +174,31 @@ export async function POST(req: Request) {
       });
     }
 
+
     const transitioned =
       transitionAtlasExecutionAuthorization(
         authorization,
         nextStatus
       );
 
+
     await authorizationRepository.save(
       transitioned
     );
+
 
     const gate =
       evaluateAtlasExecutionAuthorizationGate(
         transitioned
       );
 
+
     return json(200, {
       ok: true,
       authorization: transitioned,
       gate,
     });
+
   } catch (error) {
     return json(500, {
       ok: false,

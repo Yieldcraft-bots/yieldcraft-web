@@ -2,12 +2,13 @@
  * ============================================================
  * Atlas Operations
  * Approval Decision Route
+ *
  * ------------------------------------------------------------
  * PURPOSE
  * Process an operator decision for an EXISTING Atlas approval.
  *
  * SECURITY
- * - Caller supplies approvalId + nextStatus only
+ * - Caller supplies approvalId + nextStatus
  * - Existing approval is loaded from trusted persistence
  * - Operator token is required in request header
  *
@@ -43,6 +44,7 @@ export const dynamic = "force-dynamic";
 const approvalRepository =
   new SupabaseAtlasApprovalRepository();
 
+
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
     status,
@@ -52,11 +54,13 @@ function json(status: number, body: unknown) {
   });
 }
 
+
 function getOperatorToken(req: Request): string {
   return (
     req.headers.get("x-atlas-operator-token") ?? ""
   ).trim();
 }
+
 
 function isDecisionStatus(
   value: unknown
@@ -67,10 +71,12 @@ function isDecisionStatus(
   );
 }
 
+
 export async function POST(req: Request) {
   try {
     const configuredToken =
       process.env.ATLAS_APPROVAL_OPERATOR_TOKEN;
+
 
     if (!configuredToken) {
       return json(500, {
@@ -80,8 +86,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const suppliedToken =
       getOperatorToken(req);
+
 
     if (
       !suppliedToken ||
@@ -93,8 +101,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const body: unknown =
       await req.json().catch(() => null);
+
 
     if (
       typeof body !== "object" ||
@@ -106,11 +116,14 @@ export async function POST(req: Request) {
       });
     }
 
+
     const approvalId =
       Reflect.get(body, "approvalId");
 
+
     const nextStatus =
       Reflect.get(body, "nextStatus");
+
 
     if (
       typeof approvalId !== "string" ||
@@ -122,6 +135,7 @@ export async function POST(req: Request) {
       });
     }
 
+
     if (!isDecisionStatus(nextStatus)) {
       return json(400, {
         ok: false,
@@ -129,10 +143,16 @@ export async function POST(req: Request) {
       });
     }
 
+
     const storedApproval =
       await approvalRepository.load(
-        approvalId.trim()
+        approvalId.trim(),
+        Reflect.get(
+          body,
+          "userId"
+        )
       );
+
 
     if (!storedApproval) {
       return json(404, {
@@ -141,31 +161,37 @@ export async function POST(req: Request) {
       });
     }
 
+
     const transitioned =
       transitionAtlasApproval(
         storedApproval,
         nextStatus
       );
 
+
     await approvalRepository.save(
       transitioned
     );
+
 
     const gate =
       evaluateAtlasApprovalGate(
         transitioned
       );
 
+
     return json(200, {
       ok: true,
       approval: transitioned,
       gate,
     });
+
   } catch (error) {
     console.error(
       "ATLAS_APPROVAL_DECISION_ERROR",
       error
     );
+
 
     return json(500, {
       ok: false,

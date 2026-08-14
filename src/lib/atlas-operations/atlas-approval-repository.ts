@@ -23,15 +23,19 @@ import type {
   AtlasApprovalContract,
 } from "./atlas-approval-contract";
 
+
 export interface AtlasApprovalRepository {
   load(
-    approvalId: string
+    approvalId: string,
+    userId: string
   ): Promise<AtlasApprovalContract | null>;
+
 
   save(
     approval: AtlasApprovalContract
   ): Promise<void>;
 }
+
 
 export class InMemoryAtlasApprovalRepository
   implements AtlasApprovalRepository
@@ -39,13 +43,28 @@ export class InMemoryAtlasApprovalRepository
   private readonly store =
     new Map<string, AtlasApprovalContract>();
 
+
   async load(
-    approvalId: string
+    approvalId: string,
+    userId: string
   ): Promise<AtlasApprovalContract | null> {
-    return (
-      this.store.get(approvalId) ?? null
-    );
+    const approval =
+      this.store.get(approvalId);
+
+
+    if (!approval) {
+      return null;
+    }
+
+
+    if (approval.userId !== userId) {
+      return null;
+    }
+
+
+    return approval;
   }
+
 
   async save(
     approval: AtlasApprovalContract

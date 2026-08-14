@@ -41,18 +41,22 @@ async function getSession() {
   );
 
   const {
-    data,
-    error,
+    data: userData,
+    error: userError,
   } = await supabase.auth.getUser();
 
-  if (error || !data.user) {
+  if (userError || !userData.user) {
     return null;
   }
 
+  const {
+    data: sessionData,
+  } = await supabase.auth.getSession();
+
   return {
-    userId: data.user.id,
+    userId: userData.user.id,
     accessToken:
-      data.session?.access_token ?? null,
+      sessionData.session?.access_token ?? null,
   };
 }
 

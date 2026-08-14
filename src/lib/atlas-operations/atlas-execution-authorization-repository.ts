@@ -24,12 +24,15 @@ import type {
   AtlasExecutionAuthorizationContract,
 } from "./atlas-execution-authorization-contract";
 
+
 export interface AtlasExecutionAuthorizationRepository {
   save(
     authorization: AtlasExecutionAuthorizationContract
   ): Promise<void>;
 
+
   load(
-    authorizationId: string
+    authorizationId: string,
+    userId: string
   ): Promise<AtlasExecutionAuthorizationContract | null>;
 }

@@ -2,6 +2,7 @@
  * ============================================================
  * YieldCraft Atlas
  * Execution Authorization Route
+ *
  * ------------------------------------------------------------
  * PURPOSE
  * Create execution authorization state from an existing
@@ -36,8 +37,10 @@ import {
   SupabaseAtlasExecutionAuthorizationRepository,
 } from "@/lib/repositories/atlasExecutionAuthorizationRepository";
 
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
 
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
@@ -48,16 +51,19 @@ function json(status: number, body: unknown) {
   });
 }
 
+
 function getOperatorToken(req: Request): string {
   return (
     req.headers.get("x-atlas-operator-token") ?? ""
   ).trim();
 }
 
+
 export async function POST(req: Request) {
   try {
     const configuredToken =
       process.env.ATLAS_APPROVAL_OPERATOR_TOKEN;
+
 
     if (!configuredToken) {
       return json(500, {
@@ -67,8 +73,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const suppliedToken =
       getOperatorToken(req);
+
 
     if (
       !suppliedToken ||
@@ -80,8 +88,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const body: unknown =
       await req.json().catch(() => null);
+
 
     if (
       typeof body !== "object" ||
@@ -93,8 +103,14 @@ export async function POST(req: Request) {
       });
     }
 
+
     const approvalId =
       Reflect.get(body, "approvalId");
+
+
+    const userId =
+      Reflect.get(body, "userId");
+
 
     if (
       typeof approvalId !== "string" ||
@@ -106,16 +122,32 @@ export async function POST(req: Request) {
       });
     }
 
+
+    if (
+      typeof userId !== "string" ||
+      !userId.trim()
+    ) {
+      return json(400, {
+        ok: false,
+        error: "missing_user_id",
+      });
+    }
+
+
     const approvalRepository =
       new SupabaseAtlasApprovalRepository();
+
 
     const authorizationRepository =
       new SupabaseAtlasExecutionAuthorizationRepository();
 
+
     const approval =
       await approvalRepository.load(
-        approvalId.trim()
+        approvalId.trim(),
+        userId.trim()
       );
+
 
     if (!approval) {
       return json(404, {
@@ -124,16 +156,19 @@ export async function POST(req: Request) {
       });
     }
 
+
     const result =
       await createExecutionAuthorizationFromApproval(
         approval,
         authorizationRepository
       );
 
+
     return json(200, {
       ok: true,
       authorization: result,
     });
+
   } catch (error) {
     return json(500, {
       ok: false,

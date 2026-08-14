@@ -3,12 +3,11 @@
  * YieldCraft Atlas
  * Protected Execution Run
  *
- * ---
+ * ------------------------------------------------------------
  * PURPOSE
  * Execute only an already approved and authorized Atlas plan.
  *
  * SAFETY
- *
  * - Operator controlled
  * - Approval required
  * - Authorization required
@@ -51,8 +50,10 @@ import {
   routeAtlasExecution,
 } from "@/lib/atlas-execution-router";
 
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
 
 function json(status: number, body: unknown) {
   return NextResponse.json(body, {
@@ -63,16 +64,19 @@ function json(status: number, body: unknown) {
   });
 }
 
+
 function getOperatorToken(req: Request): string {
   return (
     req.headers.get("x-atlas-operator-token") ?? ""
   ).trim();
 }
 
+
 export async function POST(req: Request) {
   try {
     const configuredToken =
       process.env.ATLAS_APPROVAL_OPERATOR_TOKEN;
+
 
     if (!configuredToken) {
       return json(500, {
@@ -82,8 +86,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const suppliedToken =
       getOperatorToken(req);
+
 
     if (
       !suppliedToken ||
@@ -95,8 +101,10 @@ export async function POST(req: Request) {
       });
     }
 
+
     const body: unknown =
       await req.json().catch(() => null);
+
 
     if (
       typeof body !== "object" ||
@@ -108,11 +116,14 @@ export async function POST(req: Request) {
       });
     }
 
+
     const approvalId =
       Reflect.get(body, "approvalId");
 
+
     const authorizationId =
       Reflect.get(body, "authorizationId");
+
 
     if (
       typeof approvalId !== "string" ||
@@ -124,6 +135,7 @@ export async function POST(req: Request) {
       });
     }
 
+
     if (
       typeof authorizationId !== "string" ||
       !authorizationId.trim()
@@ -134,36 +146,21 @@ export async function POST(req: Request) {
       });
     }
 
+
     const approvalRepository =
       new SupabaseAtlasApprovalRepository();
+
 
     const authorizationRepository =
       new SupabaseAtlasExecutionAuthorizationRepository();
 
-    const approval =
-      await approvalRepository.load(
-        approvalId.trim()
-      );
-
-    if (!approval) {
-      return json(404, {
-        ok: false,
-        error: "approval_not_found",
-      });
-    }
-
-    if (approval.status !== "APPROVED") {
-      return json(403, {
-        ok: false,
-        error:
-          "approval_not_approved",
-      });
-    }
 
     const authorization =
       await authorizationRepository.load(
-        authorizationId.trim()
+        authorizationId.trim(),
+        Reflect.get(body, "userId")
       );
+
 
     if (!authorization) {
       return json(404, {
@@ -173,10 +170,36 @@ export async function POST(req: Request) {
       });
     }
 
+
+    const approval =
+      await approvalRepository.load(
+        approvalId.trim(),
+        authorization.userId
+      );
+
+
+    if (!approval) {
+      return json(404, {
+        ok: false,
+        error: "approval_not_found",
+      });
+    }
+
+
+    if (approval.status !== "APPROVED") {
+      return json(403, {
+        ok: false,
+        error:
+          "approval_not_approved",
+      });
+    }
+
+
     const gate =
       evaluateAtlasExecutionAuthorizationGate(
         authorization
       );
+
 
     if (!gate.authorized) {
       return json(403, {
@@ -185,10 +208,12 @@ export async function POST(req: Request) {
       });
     }
 
+
     const storedPlan =
       await loadAtlasPortfolioPlan(
         authorization.portfolioPlanId
       );
+
 
     if (!storedPlan) {
       return json(404, {
@@ -198,10 +223,12 @@ export async function POST(req: Request) {
       });
     }
 
+
     const execution =
       buildAtlasExecutionInstructions(
         storedPlan.plan
       );
+
 
     const dispatch =
       await dispatchAtlasExecutionInstructions(
@@ -213,6 +240,7 @@ export async function POST(req: Request) {
           )),
         })
       );
+
 
     return json(200, {
       ok: true,
