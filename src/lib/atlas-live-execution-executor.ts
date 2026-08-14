@@ -23,21 +23,31 @@ import type {
   AtlasExecutionInstruction,
 } from "./atlas-execution-adapter";
 
+
 import type {
   AtlasExecutionAuthorizationContract,
 } from "./atlas-operations/atlas-execution-authorization-contract";
+
 
 import {
   evaluateAtlasLiveExecutionGateway,
 } from "./atlas-live-execution-gateway";
 
+
 import {
   createAtlasExecutionFingerprint,
 } from "./atlas-live-execution-idempotency";
 
+
 import {
   submitAtlasLiveCoinbaseOrder,
 } from "./atlas-live-coinbase-adapter";
+
+
+import {
+  getAtlasLiveCoinbaseCredentials,
+} from "./atlas-live-coinbase-credentials";
+
 
 
 export interface AtlasLiveExecutionExecutorResult {
@@ -47,16 +57,19 @@ export interface AtlasLiveExecutionExecutorResult {
 }
 
 
+
 export async function executeAtlasLiveInstruction(
   instruction: AtlasExecutionInstruction,
   authorization: AtlasExecutionAuthorizationContract
 ): Promise<AtlasLiveExecutionExecutorResult> {
+
 
   const gateway =
     evaluateAtlasLiveExecutionGateway(
       authorization,
       instruction
     );
+
 
 
   if (!gateway.allowed) {
@@ -71,6 +84,7 @@ export async function executeAtlasLiveInstruction(
   }
 
 
+
   const fingerprint =
     createAtlasExecutionFingerprint({
       userId: authorization.userId,
@@ -83,17 +97,43 @@ export async function executeAtlasLiveInstruction(
     });
 
 
+
+  const credentials =
+    getAtlasLiveCoinbaseCredentials();
+
+
+
+  if (!credentials) {
+    return {
+      success: false,
+      submitted: false,
+      response: {
+        mode: "live",
+        fingerprint,
+        reason:
+          "coinbase_credentials_missing",
+      },
+    };
+  }
+
+
+
   const coinbaseResult =
     await submitAtlasLiveCoinbaseOrder(
-      instruction
+      instruction,
+      credentials,
+      authorization.userId
     );
+
 
 
   return {
     success:
       coinbaseResult.success,
+
     submitted:
       coinbaseResult.submitted,
+
     response: {
       mode: "live",
       fingerprint,

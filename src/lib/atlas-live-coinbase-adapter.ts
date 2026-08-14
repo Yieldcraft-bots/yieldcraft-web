@@ -4,10 +4,9 @@
  * Live Coinbase Adapter
  *
  * PURPOSE
- * Controlled Coinbase boundary for Atlas live execution.
+ * Controlled Coinbase communication boundary for Atlas live execution.
  *
  * SAFETY
- * - Receives only approved execution instructions
  * - No approval logic
  * - No authorization logic
  * - No UI access
@@ -16,13 +15,22 @@
  * - No policy mutation
  * - No order decisions
  *
- * This adapter owns Coinbase communication only.
+ * This adapter only communicates with Coinbase.
  * ============================================================
  */
 
 import type {
   AtlasExecutionInstruction,
 } from "./atlas-execution-adapter";
+
+import {
+  buildCoinbaseMarketBuyOrder,
+} from "./coinbase-order-builder";
+
+import {
+  atlasCoinbasePost,
+  type AtlasCoinbaseRequestContext,
+} from "./atlas-live-coinbase-client";
 
 
 export interface AtlasLiveCoinbaseAdapterResult {
@@ -33,16 +41,43 @@ export interface AtlasLiveCoinbaseAdapterResult {
 
 
 export async function submitAtlasLiveCoinbaseOrder(
-  instruction: AtlasExecutionInstruction
+  instruction: AtlasExecutionInstruction,
+  context: AtlasCoinbaseRequestContext,
+  userId: string
 ): Promise<AtlasLiveCoinbaseAdapterResult> {
 
+  const payload =
+    buildCoinbaseMarketBuyOrder(
+      userId,
+      instruction.productId,
+      instruction.quoteSizeUsd,
+      true
+    );
+
+
+  const result =
+    await atlasCoinbasePost(
+      context,
+      "/api/v3/brokerage/orders",
+      payload
+    );
+
+
   return {
-    success: false,
-    submitted: false,
+    success:
+      result.success,
+
+    submitted:
+      result.success,
+
     response: {
       mode: "live",
-      reason: "coinbase_live_adapter_not_connected",
-      instruction,
+      productId:
+        instruction.productId,
+      quoteSizeUsd:
+        instruction.quoteSizeUsd,
+      coinbase:
+        result.response,
     },
   };
 }
