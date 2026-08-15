@@ -19,6 +19,7 @@
  * ============================================================
  */
 
+
 import type {
   AtlasExecutionInstruction,
 } from "./atlas-execution-adapter";
@@ -49,11 +50,58 @@ import {
 } from "./atlas-live-coinbase-credentials";
 
 
+import {
+  createAtlasLiveOrderAudit,
+} from "./atlas-live-order-audit";
+
+
 
 export interface AtlasLiveExecutionExecutorResult {
   success: boolean;
   submitted: boolean;
   response: unknown;
+}
+
+
+
+function extractOrderId(
+  response: unknown
+): string | null {
+
+  if (
+    typeof response !== "object" ||
+    response === null
+  ) {
+    return null;
+  }
+
+
+  const coinbase =
+    Reflect.get(
+      response,
+      "coinbase"
+    );
+
+
+  if (
+    typeof coinbase !== "object" ||
+    coinbase === null
+  ) {
+    return null;
+  }
+
+
+  const orderId =
+    Reflect.get(
+      coinbase,
+      "orderId"
+    );
+
+
+  return typeof orderId === "string" &&
+    orderId.trim()
+    ? orderId.trim()
+    : null;
 }
 
 
@@ -69,7 +117,6 @@ export async function executeAtlasLiveInstruction(
       authorization,
       instruction
     );
-
 
 
   if (!gateway.allowed) {
@@ -104,12 +151,34 @@ export async function executeAtlasLiveInstruction(
 
 
   if (!credentials) {
+
+    const audit =
+      createAtlasLiveOrderAudit({
+        status: "BLOCKED",
+        userId:
+          authorization.userId,
+        authorizationId:
+          authorization.authorizationId,
+        portfolioPlanId:
+          authorization.portfolioPlanId,
+        productId:
+          instruction.productId,
+        quoteSizeUsd:
+          instruction.quoteSizeUsd,
+        coinbaseOrderId:
+          null,
+        responseSummary:
+          "coinbase_credentials_missing",
+      });
+
+
     return {
       success: false,
       submitted: false,
       response: {
         mode: "live",
         fingerprint,
+        audit,
         reason:
           "coinbase_credentials_missing",
       },
@@ -126,6 +195,44 @@ export async function executeAtlasLiveInstruction(
     );
 
 
+  const coinbaseOrderId =
+    extractOrderId(
+      coinbaseResult.response
+    );
+
+
+
+  const audit =
+    createAtlasLiveOrderAudit({
+      status:
+        coinbaseResult.submitted
+          ? "SUBMITTED"
+          : "FAILED",
+
+      userId:
+        authorization.userId,
+
+      authorizationId:
+        authorization.authorizationId,
+
+      portfolioPlanId:
+        authorization.portfolioPlanId,
+
+      productId:
+        instruction.productId,
+
+      quoteSizeUsd:
+        instruction.quoteSizeUsd,
+
+      coinbaseOrderId,
+
+      responseSummary:
+        coinbaseResult.submitted
+          ? "coinbase_order_submitted"
+          : "coinbase_order_failed",
+    });
+
+
 
   return {
     success:
@@ -139,6 +246,7 @@ export async function executeAtlasLiveInstruction(
       fingerprint,
       authorizationId:
         authorization.authorizationId,
+      audit,
       coinbase:
         coinbaseResult.response,
     },
