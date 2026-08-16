@@ -1,0 +1,186 @@
+/**
+ * ============================================================
+ * YieldCraft Atlas
+ * Supabase Live Order Audit Repository
+ *
+ * PURPOSE
+ * Supabase implementation for Atlas live audit persistence.
+ *
+ * SAFETY
+ * - No execution logic
+ * - No Coinbase calls
+ * - No order decisions
+ * - No approval logic
+ * - No authorization logic
+ * - No UI access
+ * - No Pulse
+ * - No Recon
+ *
+ * This file only persists audit records.
+ * ============================================================
+ */
+
+
+import type {
+  AtlasLiveOrderAuditRepository,
+} from "./atlas-live-order-audit-repository";
+
+
+import type {
+  AtlasLiveOrderAudit,
+} from "./atlas-live-order-audit";
+
+
+import {
+  createClient,
+} from "@supabase/supabase-js";
+
+
+
+function getSupabase() {
+
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+
+  if (!url || !key) {
+    throw new Error(
+      "Missing Supabase environment variables."
+    );
+  }
+
+
+  return createClient(
+    url,
+    key,
+    {
+      auth: {
+        persistSession: false,
+      },
+    }
+  );
+}
+
+
+
+export class SupabaseAtlasLiveOrderAuditRepository
+  implements AtlasLiveOrderAuditRepository {
+
+
+  async create(
+    audit: AtlasLiveOrderAudit
+  ): Promise<void> {
+
+    const supabase =
+      getSupabase();
+
+
+    const {
+      error,
+    } = await supabase
+      .from("atlas_live_execution_logs")
+      .insert({
+        created_at:
+          audit.createdAt,
+
+        status:
+          audit.status,
+
+        user_id:
+          audit.userId,
+
+        authorization_id:
+          audit.authorizationId,
+
+        portfolio_plan_id:
+          audit.portfolioPlanId,
+
+        product_id:
+          audit.productId,
+
+        quote_size_usd:
+          audit.quoteSizeUsd,
+
+        coinbase_order_id:
+          audit.coinbaseOrderId,
+
+        response_summary:
+          audit.responseSummary,
+      });
+
+
+    if (error) {
+      throw error;
+    }
+  }
+
+
+
+  async listByUser(
+    userId: string
+  ): Promise<AtlasLiveOrderAudit[]> {
+
+    const supabase =
+      getSupabase();
+
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("atlas_live_execution_logs")
+      .select("*")
+      .eq(
+        "user_id",
+        userId
+      )
+      .order(
+        "created_at",
+        {
+          ascending: false,
+        }
+      );
+
+
+    if (error) {
+      throw error;
+    }
+
+
+    return (data ?? []).map(
+      (row) => ({
+        createdAt:
+          row.created_at,
+
+        status:
+          row.status,
+
+        userId:
+          row.user_id,
+
+        authorizationId:
+          row.authorization_id,
+
+        portfolioPlanId:
+          row.portfolio_plan_id,
+
+        productId:
+          row.product_id,
+
+        quoteSizeUsd:
+          Number(
+            row.quote_size_usd
+          ),
+
+        coinbaseOrderId:
+          row.coinbase_order_id,
+
+        responseSummary:
+          row.response_summary,
+      })
+    );
+  }
+}
