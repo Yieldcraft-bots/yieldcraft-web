@@ -103,10 +103,10 @@ PASS
 
 Before activation:
 
-- [ ] Confirm production environment variables
-- [ ] Confirm live credential availability
-- [ ] Confirm rollback procedure
-- [ ] Confirm monitoring access
+- [x] Confirm production environment variables
+- [x] Confirm live credential availability
+- [x] Confirm rollback procedure
+- [x] Confirm monitoring access
 - [ ] Confirm database backups
 
 Status:
