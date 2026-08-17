@@ -212,3 +212,37 @@ Review in order:
 Status:
 
 READY
+
+---
+
+# 10. Controlled Activation Protocol
+
+## First Execution Rules
+
+- Internal account only
+- Single controlled execution
+- Minimal execution amount
+- Verify Coinbase response
+- Verify order ID capture
+- Verify audit persistence
+- Verify failure handling
+
+Status:
+
+PENDING
+
+---
+
+## Activation Requirements
+
+Before enabling live execution:
+
+- [ ] ATLAS_LIVE_ARMED reviewed
+- [ ] Internal account selected
+- [ ] Execution amount approved
+- [ ] Monitoring available
+- [ ] Rollback decision confirmed
+
+Status:
+
+PENDING
