@@ -137,11 +137,11 @@ PENDING
 
 Atlas live execution is not activated until:
 
-Authorization,
-Gateway,
-Credentials,
-Idempotency,
-Audit,
+Authorization,  
+Gateway,  
+Credentials,  
+Idempotency,  
+Audit,  
 and Monitoring
 
 are all verified.
@@ -151,3 +151,64 @@ Current state:
 Architecture: READY
 
 Activation: NOT YET ENABLED
+
+---
+
+# 9. Rollback Procedure
+
+## Immediate Safety Stop
+
+If unexpected behavior occurs:
+
+- Keep ATLAS_LIVE_ARMED disabled
+- Do not authorize additional live executions
+- Preserve audit records
+- Capture execution details before changes
+
+Status:
+
+READY
+
+---
+
+## Application Rollback
+
+If deployment issues occur:
+
+- Revert to the previous stable Vercel deployment
+- Verify application health
+- Confirm Atlas live execution remains disabled
+
+Status:
+
+READY
+
+---
+
+## Database Safety
+
+If telemetry or audit issues occur:
+
+- Preserve atlas_live_execution_logs history
+- Do not delete execution records
+- Review migration impact before rollback
+
+Status:
+
+READY
+
+---
+
+## Investigation Path
+
+Review in order:
+
+1. Authorization decision
+2. Gateway decision
+3. Execution fingerprint
+4. Coinbase response
+5. Audit persistence record
+
+Status:
+
+READY
