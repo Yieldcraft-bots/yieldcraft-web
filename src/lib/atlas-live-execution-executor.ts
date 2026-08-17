@@ -55,6 +55,12 @@ import {
 } from "./atlas-live-order-audit";
 
 
+import {
+  SupabaseAtlasLiveOrderAuditRepository,
+} from "./supabase-atlas-live-order-audit-repository";
+
+
+
 
 export interface AtlasLiveExecutionExecutorResult {
   success: boolean;
@@ -64,9 +70,11 @@ export interface AtlasLiveExecutionExecutorResult {
 
 
 
+
 function extractOrderId(
   response: unknown
 ): string | null {
+
 
   if (
     typeof response !== "object" ||
@@ -76,11 +84,13 @@ function extractOrderId(
   }
 
 
+
   const coinbase =
     Reflect.get(
       response,
       "coinbase"
     );
+
 
 
   if (
@@ -91,11 +101,13 @@ function extractOrderId(
   }
 
 
+
   const orderId =
     Reflect.get(
       coinbase,
       "orderId"
     );
+
 
 
   return typeof orderId === "string" &&
@@ -106,10 +118,28 @@ function extractOrderId(
 
 
 
+
+async function persistAtlasLiveAudit(
+  audit: ReturnType<typeof createAtlasLiveOrderAudit>
+): Promise<void> {
+
+  const repository =
+    new SupabaseAtlasLiveOrderAuditRepository();
+
+
+  await repository.create(
+    audit
+  );
+}
+
+
+
+
 export async function executeAtlasLiveInstruction(
   instruction: AtlasExecutionInstruction,
   authorization: AtlasExecutionAuthorizationContract
 ): Promise<AtlasLiveExecutionExecutorResult> {
+
 
 
   const gateway =
@@ -117,6 +147,7 @@ export async function executeAtlasLiveInstruction(
       authorization,
       instruction
     );
+
 
 
   if (!gateway.allowed) {
@@ -129,6 +160,7 @@ export async function executeAtlasLiveInstruction(
       },
     };
   }
+
 
 
 
@@ -145,12 +177,15 @@ export async function executeAtlasLiveInstruction(
 
 
 
+
   const credentials =
     getAtlasLiveCoinbaseCredentials();
 
 
 
+
   if (!credentials) {
+
 
     const audit =
       createAtlasLiveOrderAudit({
@@ -172,6 +207,13 @@ export async function executeAtlasLiveInstruction(
       });
 
 
+
+    await persistAtlasLiveAudit(
+      audit
+    );
+
+
+
     return {
       success: false,
       submitted: false,
@@ -187,6 +229,7 @@ export async function executeAtlasLiveInstruction(
 
 
 
+
   const coinbaseResult =
     await submitAtlasLiveCoinbaseOrder(
       instruction,
@@ -195,10 +238,12 @@ export async function executeAtlasLiveInstruction(
     );
 
 
+
   const coinbaseOrderId =
     extractOrderId(
       coinbaseResult.response
     );
+
 
 
 
@@ -209,22 +254,29 @@ export async function executeAtlasLiveInstruction(
           ? "SUBMITTED"
           : "FAILED",
 
+
       userId:
         authorization.userId,
+
 
       authorizationId:
         authorization.authorizationId,
 
+
       portfolioPlanId:
         authorization.portfolioPlanId,
+
 
       productId:
         instruction.productId,
 
+
       quoteSizeUsd:
         instruction.quoteSizeUsd,
 
+
       coinbaseOrderId,
+
 
       responseSummary:
         coinbaseResult.submitted
@@ -234,12 +286,23 @@ export async function executeAtlasLiveInstruction(
 
 
 
+  await persistAtlasLiveAudit(
+    audit
+  );
+
+
+
+
+
   return {
     success:
       coinbaseResult.success,
 
+
     submitted:
       coinbaseResult.submitted,
+
+
 
     response: {
       mode: "live",
