@@ -29,11 +29,8 @@ import {
 } from "./atlas-live-coinbase-jwt";
 
 
-let cachedJwt: string | null = null;
-
-
-export function getAtlasLiveCoinbaseCredentials():
-  AtlasCoinbaseRequestContext | null {
+export async function getAtlasLiveCoinbaseCredentials():
+  Promise<AtlasCoinbaseRequestContext | null> {
 
   const apiKey =
     process.env.ATLAS_COINBASE_API_KEY_NAME ?? "";
@@ -44,14 +41,16 @@ export function getAtlasLiveCoinbaseCredentials():
   }
 
 
-  if (!cachedJwt) {
-    return null;
-  }
+  const jwt =
+    await createAtlasCoinbaseJwt(
+      "POST",
+      "/api/v3/brokerage/orders"
+    );
 
 
   return {
     apiKey,
-    jwt: cachedJwt,
+    jwt,
   };
 }
 
@@ -70,9 +69,8 @@ export async function refreshAtlasLiveCoinbaseCredentials():
   }
 
 
-  cachedJwt =
-    await createAtlasCoinbaseJwt(
-      "POST",
-      "/api/v3/brokerage/orders"
-    );
+  await createAtlasCoinbaseJwt(
+    "POST",
+    "/api/v3/brokerage/orders"
+  );
 }
