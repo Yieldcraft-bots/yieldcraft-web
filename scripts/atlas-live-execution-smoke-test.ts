@@ -9,7 +9,7 @@
  * TESTS
  * - Authorization accepted
  * - Live gateway accepted
- * - Missing Coinbase credentials block safely
+ * - Missing Atlas Coinbase credentials block safely
  *
  * SAFETY
  * - No Coinbase submission
@@ -53,10 +53,12 @@ function assert(
 async function main() {
 
   process.env.ATLAS_LIVE_ARMED =
-    "true";
+    "false";
 
-  delete process.env.ATLAS_COINBASE_API_KEY;
-  delete process.env.ATLAS_COINBASE_JWT;
+
+  delete process.env.ATLAS_COINBASE_API_KEY_NAME;
+  delete process.env.ATLAS_COINBASE_PRIVATE_KEY;
+  delete process.env.ATLAS_COINBASE_KEY_ALG;
 
 
   const instruction:

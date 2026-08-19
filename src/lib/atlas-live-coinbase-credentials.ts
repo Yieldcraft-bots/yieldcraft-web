@@ -20,32 +20,59 @@
  * ============================================================
  */
 
-
 import type {
   AtlasCoinbaseRequestContext,
 } from "./atlas-live-coinbase-client";
+
+import {
+  createAtlasCoinbaseJwt,
+} from "./atlas-live-coinbase-jwt";
+
+
+let cachedJwt: string | null = null;
 
 
 export function getAtlasLiveCoinbaseCredentials():
   AtlasCoinbaseRequestContext | null {
 
   const apiKey =
-    process.env.ATLAS_COINBASE_API_KEY ?? "";
-
-  const jwt =
-    process.env.ATLAS_COINBASE_JWT ?? "";
+    process.env.ATLAS_COINBASE_API_KEY_NAME ?? "";
 
 
-  if (
-    !apiKey ||
-    !jwt
-  ) {
+  if (!apiKey) {
+    return null;
+  }
+
+
+  if (!cachedJwt) {
     return null;
   }
 
 
   return {
     apiKey,
-    jwt,
+    jwt: cachedJwt,
   };
+}
+
+
+export async function refreshAtlasLiveCoinbaseCredentials():
+  Promise<void> {
+
+  const apiKey =
+    process.env.ATLAS_COINBASE_API_KEY_NAME ?? "";
+
+
+  if (!apiKey) {
+    throw new Error(
+      "ATLAS_COINBASE_API_KEY_NAME missing"
+    );
+  }
+
+
+  cachedJwt =
+    await createAtlasCoinbaseJwt(
+      "POST",
+      "/api/v3/brokerage/orders"
+    );
 }
