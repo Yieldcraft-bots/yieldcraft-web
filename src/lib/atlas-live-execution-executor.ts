@@ -157,7 +157,7 @@ export async function executeAtlasLiveInstruction(
 
     await refreshAtlasLiveCoinbaseCredentials();
 
-  } catch {
+  } catch (error) {
 
     const audit =
       createAtlasLiveOrderAudit({
@@ -192,7 +192,9 @@ export async function executeAtlasLiveInstruction(
         fingerprint,
         audit,
         reason:
-          "coinbase_credentials_refresh_failed",
+          error instanceof Error
+            ? error.message
+            : String(error),
       },
     };
   }
