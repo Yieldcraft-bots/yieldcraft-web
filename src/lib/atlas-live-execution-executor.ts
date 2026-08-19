@@ -41,7 +41,6 @@ import {
 
 import {
   getAtlasLiveCoinbaseCredentials,
-  refreshAtlasLiveCoinbaseCredentials,
 } from "./atlas-live-coinbase-credentials";
 
 import {
@@ -144,36 +143,51 @@ export async function executeAtlasLiveInstruction(
     createAtlasExecutionFingerprint({
       userId:
         authorization.userId,
+
       authorizationId:
         authorization.authorizationId,
+
       productId:
         instruction.productId,
+
       quoteSizeUsd:
         instruction.quoteSizeUsd,
     });
 
 
+  let credentials;
+
+
   try {
 
-    await refreshAtlasLiveCoinbaseCredentials();
+    credentials =
+      await getAtlasLiveCoinbaseCredentials();
+
 
   } catch (error) {
 
     const audit =
       createAtlasLiveOrderAudit({
         status: "BLOCKED",
+
         userId:
           authorization.userId,
+
         authorizationId:
           authorization.authorizationId,
+
         portfolioPlanId:
           authorization.portfolioPlanId,
+
         productId:
           instruction.productId,
+
         quoteSizeUsd:
           instruction.quoteSizeUsd,
+
         coinbaseOrderId:
           null,
+
         responseSummary:
           "coinbase_credentials_refresh_failed",
       });
@@ -187,10 +201,12 @@ export async function executeAtlasLiveInstruction(
     return {
       success: false,
       submitted: false,
+
       response: {
         mode: "live",
         fingerprint,
         audit,
+
         reason:
           error instanceof Error
             ? error.message
@@ -200,27 +216,30 @@ export async function executeAtlasLiveInstruction(
   }
 
 
-  const credentials =
-    await getAtlasLiveCoinbaseCredentials();
-
-
   if (!credentials) {
 
     const audit =
       createAtlasLiveOrderAudit({
         status: "BLOCKED",
+
         userId:
           authorization.userId,
+
         authorizationId:
           authorization.authorizationId,
+
         portfolioPlanId:
           authorization.portfolioPlanId,
+
         productId:
           instruction.productId,
+
         quoteSizeUsd:
           instruction.quoteSizeUsd,
+
         coinbaseOrderId:
           null,
+
         responseSummary:
           "coinbase_credentials_missing",
       });
@@ -234,10 +253,12 @@ export async function executeAtlasLiveInstruction(
     return {
       success: false,
       submitted: false,
+
       response: {
         mode: "live",
         fingerprint,
         audit,
+
         reason:
           "coinbase_credentials_missing",
       },
@@ -304,10 +325,14 @@ export async function executeAtlasLiveInstruction(
 
     response: {
       mode: "live",
+
       fingerprint,
+
       authorizationId:
         authorization.authorizationId,
+
       audit,
+
       coinbase:
         coinbaseResult.response,
     },
