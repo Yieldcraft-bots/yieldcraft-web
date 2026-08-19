@@ -201,7 +201,7 @@ export async function executeAtlasLiveInstruction(
 
 
   const credentials =
-    getAtlasLiveCoinbaseCredentials();
+    await getAtlasLiveCoinbaseCredentials();
 
 
   if (!credentials) {
