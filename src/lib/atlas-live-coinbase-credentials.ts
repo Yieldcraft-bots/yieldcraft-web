@@ -30,14 +30,16 @@ import {
 
 
 export async function getAtlasLiveCoinbaseCredentials():
-  Promise<AtlasCoinbaseRequestContext | null> {
+  Promise<AtlasCoinbaseRequestContext> {
 
   const apiKey =
     process.env.ATLAS_COINBASE_API_KEY_NAME ?? "";
 
 
   if (!apiKey) {
-    return null;
+    throw new Error(
+      "ATLAS_COINBASE_API_KEY_NAME missing in runtime"
+    );
   }
 
 
@@ -64,7 +66,7 @@ export async function refreshAtlasLiveCoinbaseCredentials():
 
   if (!apiKey) {
     throw new Error(
-      "ATLAS_COINBASE_API_KEY_NAME missing"
+      "ATLAS_COINBASE_API_KEY_NAME missing in runtime"
     );
   }
 
