@@ -10,7 +10,10 @@
  * - Operator controlled
  * - Approval required
  * - Authorization required
+ * - Approval must belong to authorization
+ * - Approval and authorization must reference same plan
  * - Gate required
+ * - Executable instructions required
  * - Shadow execution default
  * - Live execution requires ATLAS_LIVE_ARMED
  * - No UI authority
@@ -56,25 +59,38 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function json(status: number, body: unknown) {
-  return NextResponse.json(body, {
-    status,
-    headers: {
-      "Cache-Control": "no-store",
-    },
-  });
+function json(
+  status: number,
+  body: unknown
+) {
+  return NextResponse.json(
+    body,
+    {
+      status,
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    }
+  );
 }
 
-function getOperatorToken(req: Request): string {
+function getOperatorToken(
+  req: Request
+): string {
   return (
-    req.headers.get("x-atlas-operator-token") ?? ""
+    req.headers.get(
+      "x-atlas-operator-token"
+    ) ?? ""
   ).trim();
 }
 
-export async function POST(req: Request) {
+export async function POST(
+  req: Request
+) {
   try {
     const configuredToken =
-      process.env.ATLAS_APPROVAL_OPERATOR_TOKEN;
+      process.env
+        .ATLAS_APPROVAL_OPERATOR_TOKEN;
 
     if (!configuredToken) {
       return json(500, {
@@ -98,7 +114,9 @@ export async function POST(req: Request) {
     }
 
     const body: unknown =
-      await req.json().catch(() => null);
+      await req
+        .json()
+        .catch(() => null);
 
     if (
       typeof body !== "object" ||
@@ -106,15 +124,28 @@ export async function POST(req: Request) {
     ) {
       return json(400, {
         ok: false,
-        error: "invalid_request_body",
+        error:
+          "invalid_request_body",
       });
     }
 
     const approvalId =
-      Reflect.get(body, "approvalId");
+      Reflect.get(
+        body,
+        "approvalId"
+      );
 
     const authorizationId =
-      Reflect.get(body, "authorizationId");
+      Reflect.get(
+        body,
+        "authorizationId"
+      );
+
+    const userId =
+      Reflect.get(
+        body,
+        "userId"
+      );
 
     if (
       typeof approvalId !== "string" ||
@@ -122,17 +153,31 @@ export async function POST(req: Request) {
     ) {
       return json(400, {
         ok: false,
-        error: "missing_approval_id",
+        error:
+          "missing_approval_id",
       });
     }
 
     if (
-      typeof authorizationId !== "string" ||
+      typeof authorizationId !==
+        "string" ||
       !authorizationId.trim()
     ) {
       return json(400, {
         ok: false,
-        error: "missing_authorization_id",
+        error:
+          "missing_authorization_id",
+      });
+    }
+
+    if (
+      typeof userId !== "string" ||
+      !userId.trim()
+    ) {
+      return json(400, {
+        ok: false,
+        error:
+          "missing_user_id",
       });
     }
 
@@ -145,7 +190,7 @@ export async function POST(req: Request) {
     const authorization =
       await authorizationRepository.load(
         authorizationId.trim(),
-        Reflect.get(body, "userId")
+        userId.trim()
       );
 
     if (!authorization) {
@@ -153,6 +198,22 @@ export async function POST(req: Request) {
         ok: false,
         error:
           "authorization_not_found",
+      });
+    }
+
+    /*
+     * Hard binding:
+     * the supplied approval must be the
+     * approval that created this authorization.
+     */
+    if (
+      authorization.approvalId !==
+      approvalId.trim()
+    ) {
+      return json(403, {
+        ok: false,
+        error:
+          "authorization_approval_mismatch",
       });
     }
 
@@ -165,15 +226,35 @@ export async function POST(req: Request) {
     if (!approval) {
       return json(404, {
         ok: false,
-        error: "approval_not_found",
+        error:
+          "approval_not_found",
       });
     }
 
-    if (approval.status !== "APPROVED") {
+    if (
+      approval.status !==
+      "APPROVED"
+    ) {
       return json(403, {
         ok: false,
         error:
           "approval_not_approved",
+      });
+    }
+
+    /*
+     * Hard binding:
+     * approval and authorization must
+     * reference the exact same plan.
+     */
+    if (
+      approval.portfolioPlanId !==
+      authorization.portfolioPlanId
+    ) {
+      return json(403, {
+        ok: false,
+        error:
+          "approval_authorization_plan_mismatch",
       });
     }
 
@@ -185,7 +266,8 @@ export async function POST(req: Request) {
     if (!gate.authorized) {
       return json(403, {
         ok: false,
-        error: gate.reason,
+        error:
+          gate.reason,
       });
     }
 
@@ -207,43 +289,69 @@ export async function POST(req: Request) {
         storedPlan.plan
       );
 
+    if (
+      !execution.executable ||
+      execution.instructions.length === 0
+    ) {
+      return json(403, {
+        ok: false,
+        error:
+          "no_executable_instructions",
+        execution,
+      });
+    }
+
     const liveEnabled =
-      process.env.ATLAS_LIVE_ARMED === "true";
+      process.env
+        .ATLAS_LIVE_ARMED ===
+      "true";
 
     const dispatch =
       await dispatchAtlasExecutionInstructions(
         execution.instructions,
-        async (instruction) => {
+        async (
+          instruction
+        ) => {
           if (liveEnabled) {
             return {
               instruction,
-              ...(await executeAtlasLiveInstruction(
-                instruction,
-                authorization
-              )),
+
+              ...(
+                await executeAtlasLiveInstruction(
+                  instruction,
+                  authorization
+                )
+              ),
             };
           }
 
           return {
             instruction,
-            ...(await routeAtlasExecution(
-              instruction
-            )),
+
+            ...(
+              await routeAtlasExecution(
+                instruction
+              )
+            ),
           };
         }
       );
 
     return json(200, {
       ok: true,
+
       mode:
         liveEnabled
           ? "live"
           : "shadow",
+
       approval,
       authorization,
       gate,
+
       portfolioPlan:
         storedPlan,
+
       execution,
       dispatch,
     });
@@ -251,6 +359,7 @@ export async function POST(req: Request) {
   } catch (error) {
     return json(500, {
       ok: false,
+
       error:
         error instanceof Error
           ? error.message

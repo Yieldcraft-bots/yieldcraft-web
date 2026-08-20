@@ -9,7 +9,9 @@
  * SAFETY
  * - Requires authorization proof
  * - Requires live gateway approval
- * - Requires idempotency fingerprint
+ * - Requires deterministic execution fingerprint
+ * - Atomically reserves execution before Coinbase submission
+ * - Finalizes the same reservation after Coinbase response
  * - No UI access
  * - No Pulse
  * - No Recon
@@ -51,6 +53,10 @@ import {
   SupabaseAtlasLiveOrderAuditRepository,
 } from "./supabase-atlas-live-order-audit-repository";
 
+import {
+  extractCoinbaseOrderId,
+} from "./coinbase-order-builder";
+
 
 export interface AtlasLiveExecutionExecutorResult {
   success: boolean;
@@ -59,7 +65,7 @@ export interface AtlasLiveExecutionExecutorResult {
 }
 
 
-function extractOrderId(
+function extractAtlasCoinbaseOrderId(
   response: unknown
 ): string | null {
 
@@ -70,43 +76,26 @@ function extractOrderId(
     return null;
   }
 
-
-  const coinbase =
+  const rawCoinbaseResponse =
     Reflect.get(
       response,
       "coinbase"
     );
 
-
-  if (
-    typeof coinbase !== "object" ||
-    coinbase === null
-  ) {
-    return null;
-  }
-
-
-  const orderId =
-    Reflect.get(
-      coinbase,
-      "orderId"
-    );
-
-
-  return typeof orderId === "string" &&
-    orderId.trim()
-    ? orderId.trim()
-    : null;
+  return extractCoinbaseOrderId(
+    rawCoinbaseResponse
+  );
 }
 
 
 async function persistAtlasLiveAudit(
-  audit: ReturnType<typeof createAtlasLiveOrderAudit>
+  audit: ReturnType<
+    typeof createAtlasLiveOrderAudit
+  >
 ): Promise<void> {
 
   const repository =
     new SupabaseAtlasLiveOrderAuditRepository();
-
 
   await repository.create(
     audit
@@ -119,7 +108,6 @@ export async function executeAtlasLiveInstruction(
   authorization: AtlasExecutionAuthorizationContract
 ): Promise<AtlasLiveExecutionExecutorResult> {
 
-
   const gateway =
     evaluateAtlasLiveExecutionGateway(
       authorization,
@@ -131,9 +119,12 @@ export async function executeAtlasLiveInstruction(
     return {
       success: false,
       submitted: false,
+
       response: {
         mode: "live",
-        reason: gateway.reason,
+
+        reason:
+          gateway.reason,
       },
     };
   }
@@ -155,6 +146,12 @@ export async function executeAtlasLiveInstruction(
     });
 
 
+  /*
+   * Credentials are obtained before reservation.
+   *
+   * A credential failure does not consume the execution
+   * reservation because no Coinbase submission was possible.
+   */
   let credentials;
 
 
@@ -162,7 +159,6 @@ export async function executeAtlasLiveInstruction(
 
     credentials =
       await getAtlasLiveCoinbaseCredentials();
-
 
   } catch (error) {
 
@@ -204,7 +200,9 @@ export async function executeAtlasLiveInstruction(
 
       response: {
         mode: "live",
+
         fingerprint,
+
         audit,
 
         reason:
@@ -256,7 +254,9 @@ export async function executeAtlasLiveInstruction(
 
       response: {
         mode: "live",
+
         fingerprint,
+
         audit,
 
         reason:
@@ -266,6 +266,64 @@ export async function executeAtlasLiveInstruction(
   }
 
 
+  /*
+   * Atomic execution reservation.
+   *
+   * The database UNIQUE constraint on execution_key means
+   * only one request may reserve this exact execution.
+   *
+   * This happens BEFORE Coinbase submission.
+   */
+  const auditRepository =
+    new SupabaseAtlasLiveOrderAuditRepository();
+
+
+  const reservation =
+    await auditRepository.reserveExecution({
+      executionKey:
+        fingerprint,
+
+      userId:
+        authorization.userId,
+
+      authorizationId:
+        authorization.authorizationId,
+
+      portfolioPlanId:
+        authorization.portfolioPlanId,
+
+      productId:
+        instruction.productId,
+
+      quoteSizeUsd:
+        instruction.quoteSizeUsd,
+    });
+
+
+  if (!reservation.reserved) {
+    return {
+      success: false,
+      submitted: false,
+
+      response: {
+        mode: "live",
+
+        fingerprint,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        reason:
+          "duplicate_live_execution_blocked",
+      },
+    };
+  }
+
+
+  /*
+   * Only the request that successfully reserved the
+   * execution may cross the Coinbase submission boundary.
+   */
   const coinbaseResult =
     await submitAtlasLiveCoinbaseOrder(
       instruction,
@@ -275,17 +333,44 @@ export async function executeAtlasLiveInstruction(
 
 
   const coinbaseOrderId =
-    extractOrderId(
+    extractAtlasCoinbaseOrderId(
       coinbaseResult.response
     );
+
+
+  const finalStatus =
+    coinbaseResult.submitted
+      ? "SUBMITTED"
+      : "FAILED";
+
+
+  const responseSummary =
+    coinbaseResult.submitted
+      ? "coinbase_order_submitted"
+      : "coinbase_order_failed";
+
+
+  /*
+   * Finalize the exact reservation that permitted
+   * the Coinbase request.
+   */
+  await auditRepository.finalizeExecution({
+    executionKey:
+      fingerprint,
+
+    status:
+      finalStatus,
+
+    coinbaseOrderId,
+
+    responseSummary,
+  });
 
 
   const audit =
     createAtlasLiveOrderAudit({
       status:
-        coinbaseResult.submitted
-          ? "SUBMITTED"
-          : "FAILED",
+        finalStatus,
 
       userId:
         authorization.userId,
@@ -304,16 +389,8 @@ export async function executeAtlasLiveInstruction(
 
       coinbaseOrderId,
 
-      responseSummary:
-        coinbaseResult.submitted
-          ? "coinbase_order_submitted"
-          : "coinbase_order_failed",
+      responseSummary,
     });
-
-
-  await persistAtlasLiveAudit(
-    audit
-  );
 
 
   return {

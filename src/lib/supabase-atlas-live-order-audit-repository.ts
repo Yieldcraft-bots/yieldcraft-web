@@ -4,7 +4,8 @@
  * Supabase Live Order Audit Repository
  *
  * PURPOSE
- * Supabase implementation for Atlas live audit persistence.
+ * Supabase implementation for Atlas live audit persistence
+ * and atomic execution reservations.
  *
  * SAFETY
  * - No execution logic
@@ -16,25 +17,25 @@
  * - No Pulse
  * - No Recon
  *
- * This file only persists audit records.
+ * This file only persists, reserves, finalizes,
+ * and retrieves audit records.
  * ============================================================
  */
 
-
 import type {
+  AtlasLiveExecutionFinalizeInput,
+  AtlasLiveExecutionReservationInput,
+  AtlasLiveExecutionReservationResult,
   AtlasLiveOrderAuditRepository,
 } from "./atlas-live-order-audit-repository";
-
 
 import type {
   AtlasLiveOrderAudit,
 } from "./atlas-live-order-audit";
 
-
 import {
   createClient,
 } from "@supabase/supabase-js";
-
 
 
 function getSupabase() {
@@ -63,7 +64,6 @@ function getSupabase() {
     }
   );
 }
-
 
 
 export class SupabaseAtlasLiveOrderAuditRepository
@@ -116,7 +116,6 @@ export class SupabaseAtlasLiveOrderAuditRepository
       throw error;
     }
   }
-
 
 
   async listByUser(
@@ -182,5 +181,125 @@ export class SupabaseAtlasLiveOrderAuditRepository
           row.response_summary,
       })
     );
+  }
+
+
+  async reserveExecution(
+    input: AtlasLiveExecutionReservationInput
+  ): Promise<AtlasLiveExecutionReservationResult> {
+
+    const supabase =
+      getSupabase();
+
+
+    const {
+      error,
+    } = await supabase
+      .from("atlas_live_execution_logs")
+      .insert({
+        created_at:
+          new Date().toISOString(),
+
+        status:
+          "RESERVED",
+
+        user_id:
+          input.userId,
+
+        authorization_id:
+          input.authorizationId,
+
+        portfolio_plan_id:
+          input.portfolioPlanId,
+
+        product_id:
+          input.productId,
+
+        quote_size_usd:
+          Number(
+            input.quoteSizeUsd.toFixed(2)
+          ),
+
+        coinbase_order_id:
+          null,
+
+        response_summary:
+          "execution_reserved",
+
+        execution_key:
+          input.executionKey,
+      });
+
+
+    if (!error) {
+      return {
+        reserved: true,
+        reason: "reserved",
+      };
+    }
+
+
+    /*
+     * PostgreSQL unique_violation.
+     *
+     * Once execution_key has a UNIQUE constraint,
+     * only one request can reserve a given execution.
+     */
+    if (error.code === "23505") {
+      return {
+        reserved: false,
+        reason: "already_reserved",
+      };
+    }
+
+
+    throw error;
+  }
+
+
+  async finalizeExecution(
+    input: AtlasLiveExecutionFinalizeInput
+  ): Promise<void> {
+
+    const supabase =
+      getSupabase();
+
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("atlas_live_execution_logs")
+      .update({
+        status:
+          input.status,
+
+        coinbase_order_id:
+          input.coinbaseOrderId,
+
+        response_summary:
+          input.responseSummary,
+      })
+      .eq(
+        "execution_key",
+        input.executionKey
+      )
+      .eq(
+        "status",
+        "RESERVED"
+      )
+      .select("id");
+
+
+    if (error) {
+      throw error;
+    }
+
+
+    if (!data || data.length !== 1) {
+      throw new Error(
+        "Atlas execution reservation could not be finalized."
+      );
+    }
   }
 }

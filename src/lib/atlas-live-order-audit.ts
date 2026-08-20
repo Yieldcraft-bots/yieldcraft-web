@@ -19,8 +19,8 @@
  * ============================================================
  */
 
-
 export type AtlasLiveOrderAuditStatus =
+  | "RESERVED"
   | "SUBMITTED"
   | "FAILED"
   | "BLOCKED";
