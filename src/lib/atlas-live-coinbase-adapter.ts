@@ -19,22 +19,18 @@
  * ============================================================
  */
 
-
 import type {
   AtlasExecutionInstruction,
 } from "./atlas-execution-adapter";
-
 
 import {
   buildCoinbaseMarketBuyOrder,
 } from "./coinbase-order-builder";
 
-
 import {
   atlasCoinbasePost,
   type AtlasCoinbaseRequestContext,
 } from "./atlas-live-coinbase-client";
-
 
 
 export interface AtlasLiveCoinbaseAdapterResult {
@@ -44,6 +40,67 @@ export interface AtlasLiveCoinbaseAdapterResult {
 }
 
 
+function money(n: number): string {
+  return Number(
+    n.toFixed(2)
+  ).toFixed(2);
+}
+
+
+/**
+ * Coinbase crypto products currently use readable IDs
+ * such as BTC-USD / ETH-USD.
+ *
+ * Coinbase equity products use canonical hashed IDs
+ * returned by the Products API.
+ *
+ * This keeps equity handling isolated to Atlas Multi-Asset
+ * without changing the shared Coinbase crypto order builder.
+ */
+function isAtlasEquityInstruction(
+  instruction: AtlasExecutionInstruction
+): boolean {
+  return !instruction.productId.includes("-");
+}
+
+
+function buildAtlasEquityMarketBuyOrder(
+  userId: string,
+  instruction: AtlasExecutionInstruction
+) {
+  const mode =
+    process.env.ATLAS_LIVE_ARMED === "true"
+      ? "live"
+      : "dry_run";
+
+  return {
+    client_order_id:
+      `yc_atlas_equity_${mode}_${userId.slice(0, 8)}_${Date.now()}`,
+
+    product_id:
+      instruction.productId,
+
+    side: "BUY" as const,
+
+    order_configuration: {
+      market_market_ioc: {
+        quote_size:
+          money(
+            instruction.quoteSizeUsd
+          ),
+      },
+    },
+
+    equity_order_metadata: {
+      equity_trading_session:
+        "NORMAL",
+
+      displayed_order_config:
+        "MARKET_GFD",
+    },
+  };
+}
+
 
 export async function submitAtlasLiveCoinbaseOrder(
   instruction: AtlasExecutionInstruction,
@@ -52,13 +109,25 @@ export async function submitAtlasLiveCoinbaseOrder(
 ): Promise<AtlasLiveCoinbaseAdapterResult> {
 
   try {
-    const payload =
-      buildCoinbaseMarketBuyOrder(
-        userId,
-        instruction.productId,
-        instruction.quoteSizeUsd,
-        true
+
+    const isEquity =
+      isAtlasEquityInstruction(
+        instruction
       );
+
+
+    const payload =
+      isEquity
+        ? buildAtlasEquityMarketBuyOrder(
+            userId,
+            instruction
+          )
+        : buildCoinbaseMarketBuyOrder(
+            userId,
+            instruction.productId,
+            instruction.quoteSizeUsd,
+            true
+          );
 
 
     const result =
@@ -70,19 +139,34 @@ export async function submitAtlasLiveCoinbaseOrder(
 
 
     if (!result.success) {
+
       return {
         success: false,
         submitted: false,
+
         response: {
           mode: "live",
+
+          assetType:
+            isEquity
+              ? "equity"
+              : "crypto",
+
           productId:
             instruction.productId,
+
+          symbol:
+            instruction.symbol,
+
           quoteSizeUsd:
             instruction.quoteSizeUsd,
+
           reason:
             "coinbase_order_rejected",
+
           status:
             result.status,
+
           coinbase:
             result.response,
         },
@@ -93,14 +177,27 @@ export async function submitAtlasLiveCoinbaseOrder(
     return {
       success: true,
       submitted: true,
+
       response: {
         mode: "live",
+
+        assetType:
+          isEquity
+            ? "equity"
+            : "crypto",
+
         productId:
           instruction.productId,
+
+        symbol:
+          instruction.symbol,
+
         quoteSizeUsd:
           instruction.quoteSizeUsd,
+
         reason:
           "coinbase_order_submitted",
+
         coinbase:
           result.response,
       },
@@ -111,14 +208,22 @@ export async function submitAtlasLiveCoinbaseOrder(
     return {
       success: false,
       submitted: false,
+
       response: {
         mode: "live",
+
         productId:
           instruction.productId,
+
+        symbol:
+          instruction.symbol,
+
         quoteSizeUsd:
           instruction.quoteSizeUsd,
+
         reason:
           "coinbase_adapter_error",
+
         error:
           error instanceof Error
             ? error.message
