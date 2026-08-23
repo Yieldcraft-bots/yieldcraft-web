@@ -24,3 +24,5 @@ src/coinbase-pkcs8.pem
 
 .vercel
 .env*.local
+.env*
+.atlas-operator-token.local
