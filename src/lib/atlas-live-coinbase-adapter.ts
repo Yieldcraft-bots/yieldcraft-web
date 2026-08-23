@@ -64,6 +64,25 @@ function isAtlasEquityInstruction(
 }
 
 
+/**
+ * Build a Coinbase equity market order for the
+ * normal trading session.
+ *
+ * Coinbase's current equity Create Order contract requires:
+ *
+ * - canonical equity product_id
+ * - market_market_ioc for a market order
+ * - MARKET_GFD displayed order configuration
+ * - equity_order_metadata
+ *
+ * IMPORTANT:
+ * Coinbase rejected the legacy literal "NORMAL" because it is
+ * not a valid EquityTradingSession protobuf enum value.
+ *
+ * UNKNOWN_EQUITY_TRADING_SESSION is the documented enum-safe
+ * value and allows Coinbase to resolve the supported normal
+ * session for MARKET_GFD rather than sending an invalid enum.
+ */
 function buildAtlasEquityMarketBuyOrder(
   userId: string,
   instruction: AtlasExecutionInstruction
@@ -93,7 +112,7 @@ function buildAtlasEquityMarketBuyOrder(
 
     equity_order_metadata: {
       equity_trading_session:
-        "NORMAL",
+        "UNKNOWN_EQUITY_TRADING_SESSION",
 
       displayed_order_config:
         "MARKET_GFD",
