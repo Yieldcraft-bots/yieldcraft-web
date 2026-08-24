@@ -15,7 +15,10 @@
  * - Gate required
  * - Executable instructions required
  * - Shadow execution default
- * - Live execution requires ATLAS_LIVE_ARMED
+ * - Live requires ATLAS_LIVE_ARMED=true
+ * - Live requires ATLAS_DRY_RUN=false
+ * - Optional productId may only NARROW an authorized plan
+ * - No caller-created execution instructions
  * - No UI authority
  * - No Pulse
  * - No Recon
@@ -56,27 +59,34 @@ import {
   executeAtlasLiveInstruction,
 } from "@/lib/atlas-live-execution-executor";
 
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
 
 function json(
   status: number,
   body: unknown
 ) {
+
   return NextResponse.json(
     body,
     {
       status,
+
       headers: {
-        "Cache-Control": "no-store",
+        "Cache-Control":
+          "no-store",
       },
     }
   );
 }
 
+
 function getOperatorToken(
   req: Request
 ): string {
+
   return (
     req.headers.get(
       "x-atlas-operator-token"
@@ -84,235 +94,519 @@ function getOperatorToken(
   ).trim();
 }
 
+
 export async function POST(
   req: Request
 ) {
+
   try {
+
+    /*
+     * ========================================================
+     * OPERATOR AUTHENTICATION
+     * ========================================================
+     */
+
     const configuredToken =
       process.env
         .ATLAS_APPROVAL_OPERATOR_TOKEN;
 
+
     if (!configuredToken) {
-      return json(500, {
-        ok: false,
-        error:
-          "missing_ATLAS_APPROVAL_OPERATOR_TOKEN",
-      });
+      return json(
+        500,
+        {
+          ok: false,
+
+          error:
+            "missing_ATLAS_APPROVAL_OPERATOR_TOKEN",
+        }
+      );
     }
 
+
     const suppliedToken =
-      getOperatorToken(req);
+      getOperatorToken(
+        req
+      );
+
 
     if (
       !suppliedToken ||
-      suppliedToken !== configuredToken
+      suppliedToken !==
+        configuredToken
     ) {
-      return json(401, {
-        ok: false,
-        error: "unauthorized",
-      });
+      return json(
+        401,
+        {
+          ok: false,
+
+          error:
+            "unauthorized",
+        }
+      );
     }
+
+
+    /*
+     * ========================================================
+     * REQUEST
+     * ========================================================
+     */
 
     const body: unknown =
       await req
         .json()
-        .catch(() => null);
+        .catch(
+          () => null
+        );
+
 
     if (
       typeof body !== "object" ||
       body === null
     ) {
-      return json(400, {
-        ok: false,
-        error:
-          "invalid_request_body",
-      });
+      return json(
+        400,
+        {
+          ok: false,
+
+          error:
+            "invalid_request_body",
+        }
+      );
     }
 
-    const approvalId =
+
+    const approvalIdValue =
       Reflect.get(
         body,
         "approvalId"
       );
 
-    const authorizationId =
+
+    const authorizationIdValue =
       Reflect.get(
         body,
         "authorizationId"
       );
 
-    const userId =
+
+    const userIdValue =
       Reflect.get(
         body,
         "userId"
       );
 
-    if (
-      typeof approvalId !== "string" ||
-      !approvalId.trim()
-    ) {
-      return json(400, {
-        ok: false,
-        error:
-          "missing_approval_id",
-      });
+
+    /*
+     * Optional controlled-execution selector.
+     *
+     * This selector can ONLY choose an instruction already
+     * present in the approved/authorized persisted plan.
+     *
+     * It cannot create or modify an instruction.
+     */
+    const productIdValue =
+      Reflect.get(
+        body,
+        "productId"
+      );
+
+
+    const approvalId =
+      typeof approvalIdValue ===
+        "string"
+        ? approvalIdValue.trim()
+        : "";
+
+
+    const authorizationId =
+      typeof authorizationIdValue ===
+        "string"
+        ? authorizationIdValue.trim()
+        : "";
+
+
+    const userId =
+      typeof userIdValue ===
+        "string"
+        ? userIdValue.trim()
+        : "";
+
+
+    const requestedProductId =
+      typeof productIdValue ===
+        "string"
+        ? productIdValue.trim()
+        : "";
+
+
+    if (!approvalId) {
+      return json(
+        400,
+        {
+          ok: false,
+
+          error:
+            "missing_approval_id",
+        }
+      );
     }
 
-    if (
-      typeof authorizationId !==
-        "string" ||
-      !authorizationId.trim()
-    ) {
-      return json(400, {
-        ok: false,
-        error:
-          "missing_authorization_id",
-      });
+
+    if (!authorizationId) {
+      return json(
+        400,
+        {
+          ok: false,
+
+          error:
+            "missing_authorization_id",
+        }
+      );
     }
 
-    if (
-      typeof userId !== "string" ||
-      !userId.trim()
-    ) {
-      return json(400, {
-        ok: false,
-        error:
-          "missing_user_id",
-      });
+
+    if (!userId) {
+      return json(
+        400,
+        {
+          ok: false,
+
+          error:
+            "missing_user_id",
+        }
+      );
     }
+
+
+    /*
+     * ========================================================
+     * LOAD AUTHORIZATION
+     * ========================================================
+     */
 
     const approvalRepository =
       new SupabaseAtlasApprovalRepository();
 
+
     const authorizationRepository =
       new SupabaseAtlasExecutionAuthorizationRepository();
 
+
     const authorization =
       await authorizationRepository.load(
-        authorizationId.trim(),
-        userId.trim()
+        authorizationId,
+        userId
       );
 
+
     if (!authorization) {
-      return json(404, {
-        ok: false,
-        error:
-          "authorization_not_found",
-      });
+      return json(
+        404,
+        {
+          ok: false,
+
+          error:
+            "authorization_not_found",
+        }
+      );
     }
+
 
     /*
      * Hard binding:
-     * the supplied approval must be the
-     * approval that created this authorization.
+     *
+     * supplied approval must be exactly the approval
+     * that created this authorization.
      */
     if (
       authorization.approvalId !==
-      approvalId.trim()
+      approvalId
     ) {
-      return json(403, {
-        ok: false,
-        error:
-          "authorization_approval_mismatch",
-      });
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            "authorization_approval_mismatch",
+        }
+      );
     }
+
+
+    /*
+     * ========================================================
+     * LOAD APPROVAL
+     * ========================================================
+     */
 
     const approval =
       await approvalRepository.load(
-        approvalId.trim(),
+        approvalId,
         authorization.userId
       );
 
+
     if (!approval) {
-      return json(404, {
-        ok: false,
-        error:
-          "approval_not_found",
-      });
+      return json(
+        404,
+        {
+          ok: false,
+
+          error:
+            "approval_not_found",
+        }
+      );
     }
+
 
     if (
       approval.status !==
       "APPROVED"
     ) {
-      return json(403, {
-        ok: false,
-        error:
-          "approval_not_approved",
-      });
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            "approval_not_approved",
+        }
+      );
     }
+
 
     /*
      * Hard binding:
-     * approval and authorization must
-     * reference the exact same plan.
+     *
+     * approval and authorization must reference the
+     * exact same persisted portfolio plan.
      */
     if (
       approval.portfolioPlanId !==
       authorization.portfolioPlanId
     ) {
-      return json(403, {
-        ok: false,
-        error:
-          "approval_authorization_plan_mismatch",
-      });
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            "approval_authorization_plan_mismatch",
+        }
+      );
     }
+
+
+    /*
+     * ========================================================
+     * AUTHORIZATION GATE
+     * ========================================================
+     */
 
     const gate =
       evaluateAtlasExecutionAuthorizationGate(
         authorization
       );
 
+
     if (!gate.authorized) {
-      return json(403, {
-        ok: false,
-        error:
-          gate.reason,
-      });
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            gate.reason,
+        }
+      );
     }
+
+
+    /*
+     * ========================================================
+     * PERSISTED PLAN
+     * ========================================================
+     */
 
     const storedPlan =
       await loadAtlasPortfolioPlan(
         authorization.portfolioPlanId
       );
 
+
     if (!storedPlan) {
-      return json(404, {
-        ok: false,
-        error:
-          "portfolio_plan_not_found",
-      });
+      return json(
+        404,
+        {
+          ok: false,
+
+          error:
+            "portfolio_plan_not_found",
+        }
+      );
     }
 
+
+    /*
+     * Build instructions ONLY from the persisted,
+     * approved and authorized plan.
+     */
     const execution =
       buildAtlasExecutionInstructions(
         storedPlan.plan
       );
 
+
     if (
       !execution.executable ||
-      execution.instructions.length === 0
+      execution.instructions.length ===
+        0
     ) {
-      return json(403, {
-        ok: false,
-        error:
-          "no_executable_instructions",
-        execution,
-      });
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            "no_executable_instructions",
+
+          execution,
+        }
+      );
     }
 
-    const liveEnabled =
+
+    /*
+     * ========================================================
+     * OPTIONAL SINGLE-PRODUCT NARROWING
+     * ========================================================
+     *
+     * For controlled production proofs an operator may specify
+     * one productId.
+     *
+     * This can only REDUCE the existing authorized instruction
+     * set. It cannot introduce an instruction that was not
+     * already generated from the persisted plan.
+     */
+
+    const selectedInstructions =
+      requestedProductId
+        ? execution.instructions.filter(
+            (
+              instruction
+            ) =>
+              instruction.productId ===
+              requestedProductId
+          )
+        : execution.instructions;
+
+
+    if (
+      selectedInstructions.length ===
+      0
+    ) {
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            "requested_product_not_authorized_for_execution",
+
+          requestedProductId,
+
+          authorizedProductIds:
+            execution.instructions.map(
+              (
+                instruction
+              ) =>
+                instruction.productId
+            ),
+        }
+      );
+    }
+
+
+    /*
+     * A product ID should map to only one instruction in a
+     * deterministic plan. Fail closed if that invariant is
+     * violated.
+     */
+    if (
+      requestedProductId &&
+      selectedInstructions.length !==
+        1
+    ) {
+      return json(
+        403,
+        {
+          ok: false,
+
+          error:
+            "requested_product_instruction_not_unique",
+
+          requestedProductId,
+
+          matches:
+            selectedInstructions.length,
+        }
+      );
+    }
+
+
+    /*
+     * ========================================================
+     * LIVE / SHADOW MODE
+     * ========================================================
+     *
+     * IMPORTANT:
+     *
+     * Live execution requires BOTH:
+     *
+     * ATLAS_LIVE_ARMED=true
+     * ATLAS_DRY_RUN=false
+     *
+     * Any missing, malformed, or true dry-run value fails
+     * safely to SHADOW.
+     */
+
+    const liveArmed =
       process.env
         .ATLAS_LIVE_ARMED ===
       "true";
 
+
+    const dryRunDisabled =
+      process.env
+        .ATLAS_DRY_RUN ===
+      "false";
+
+
+    const liveEnabled =
+      liveArmed &&
+      dryRunDisabled;
+
+
+    /*
+     * ========================================================
+     * DISPATCH
+     * ========================================================
+     */
+
     const dispatch =
       await dispatchAtlasExecutionInstructions(
-        execution.instructions,
+        selectedInstructions,
+
         async (
           instruction
         ) => {
+
           if (liveEnabled) {
+
             return {
               instruction,
 
@@ -324,6 +618,7 @@ export async function POST(
               ),
             };
           }
+
 
           return {
             instruction,
@@ -337,33 +632,68 @@ export async function POST(
         }
       );
 
-    return json(200, {
-      ok: true,
 
-      mode:
-        liveEnabled
-          ? "live"
-          : "shadow",
+    /*
+     * ========================================================
+     * RESPONSE
+     * ========================================================
+     */
 
-      approval,
-      authorization,
-      gate,
+    return json(
+      200,
+      {
+        ok: true,
 
-      portfolioPlan:
-        storedPlan,
+        mode:
+          liveEnabled
+            ? "live"
+            : "shadow",
 
-      execution,
-      dispatch,
-    });
+        safety: {
+          liveArmed,
+
+          dryRun:
+            !dryRunDisabled,
+
+          liveEnabled,
+
+          controlledProduct:
+            requestedProductId ||
+            null,
+
+          dispatchedInstructions:
+            selectedInstructions.length,
+        },
+
+        approval,
+
+        authorization,
+
+        gate,
+
+        portfolioPlan:
+          storedPlan,
+
+        execution,
+
+        selectedInstructions,
+
+        dispatch,
+      }
+    );
 
   } catch (error) {
-    return json(500, {
-      ok: false,
 
-      error:
-        error instanceof Error
-          ? error.message
-          : "unknown_error",
-    });
+    return json(
+      500,
+      {
+        ok: false,
+
+        error:
+          error instanceof Error
+            ? error.message
+            : "unknown_error",
+      }
+    );
   }
 }
