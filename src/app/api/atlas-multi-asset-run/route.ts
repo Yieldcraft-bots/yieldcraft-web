@@ -433,6 +433,58 @@ export async function POST(
 
 
     /*
+     * Fail closed if the plan is structurally valid but
+     * contains no instructions that can actually execute.
+     *
+     * Example:
+     * - deployable USD exists
+     * - allocation totals 100%
+     * - every generated order is below minimum size
+     *
+     * Such a plan must NOT advance to approval/authorization.
+     */
+    const executableOrders =
+      plan.portfolioPlan.orders.filter(
+        (order) =>
+          order.executable
+      );
+
+
+    if (
+      executableOrders.length === 0
+    ) {
+      return json(
+        200,
+        {
+          ok: true,
+
+          status:
+            "blocked",
+
+          reason:
+            "no_executable_orders",
+
+          funding: {
+            usdAvailable:
+              funding.usdAvailable,
+
+            usdcAvailable:
+              funding.usdcAvailable,
+
+            deployableCashUsd:
+              funding.deployableCashUsd,
+
+            checkedAt:
+              funding.checkedAt,
+          },
+
+          plan,
+        }
+      );
+    }
+
+
+    /*
      * Advance the persisted plan through the
      * existing Atlas approval + authorization
      * state machines.
