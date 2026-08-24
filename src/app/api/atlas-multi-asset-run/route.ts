@@ -74,6 +74,7 @@ function okAuth(
   req: Request
 ) {
   const secret =
+    process.env.ATLAS_MULTI_ASSET_RUN_SECRET?.trim() ||
     process.env.ATLAS_RUN_SECRET?.trim() ||
     process.env.CRON_SECRET?.trim() ||
     "";
