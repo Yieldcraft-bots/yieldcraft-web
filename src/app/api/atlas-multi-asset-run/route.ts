@@ -4,21 +4,32 @@
  * Multi Asset Governance Run
  * ------------------------------------------------------------
  * PURPOSE
- * Build a client-selected Atlas portfolio plan and advance it
+ * Build a client-selected Atlas portfolio plan using
+ * authoritative per-client Coinbase USD funding and advance it
  * through the existing approval and authorization boundaries.
  *
  * SAFETY
  * - Operator controlled
  * - Client allocation driven
+ * - Per-client Atlas Coinbase credentials
+ * - Read-only Coinbase balance access
  * - Uses existing approval state machine
  * - Uses existing authorization state machine
  * - No execution dispatch
- * - No Coinbase
- * - No credential access
+ * - No Coinbase order submission
  * - No Pulse
  * - No Recon
  * - No trading
  * - Does not modify legacy Atlas BTC execution
+ *
+ * IMPORTANT
+ * availableCash is NOT accepted from the caller.
+ *
+ * Atlas resolves the client's authoritative Coinbase USD
+ * available balance itself.
+ *
+ * USDC is reported separately and is NOT automatically counted
+ * as deployable USD.
  *
  * This route creates governed execution-ready state only.
  * ============================================================
@@ -33,6 +44,10 @@ import {
 import {
   governAtlasMultiAssetPlan,
 } from "@/lib/atlas-multi-asset-orchestrator";
+
+import {
+  getAtlasClientFundingBalance,
+} from "@/lib/atlas-client-coinbase-balance";
 
 
 export const runtime = "nodejs";
@@ -139,32 +154,17 @@ export async function POST(
     }
 
 
-    const userId =
-      typeof Reflect.get(
+    const userIdValue =
+      Reflect.get(
         body,
         "userId"
-      ) === "string"
-        ? Reflect.get(
-            body,
-            "userId"
-          ).trim()
-        : "";
-
-
-    const fundingCurrency =
-      Reflect.get(
-        body,
-        "fundingCurrency"
-      ) === "USDC"
-        ? "USDC"
-        : "USD";
-
-
-    const availableCashValue =
-      Reflect.get(
-        body,
-        "availableCash"
       );
+
+
+    const userId =
+      typeof userIdValue === "string"
+        ? userIdValue.trim()
+        : "";
 
 
     const deployPctValue =
@@ -186,13 +186,6 @@ export async function POST(
         body,
         "minBuy"
       );
-
-
-    const availableCash =
-      typeof availableCashValue ===
-        "number"
-        ? availableCashValue
-        : 0;
 
 
     const deployPct =
@@ -223,23 +216,6 @@ export async function POST(
           ok: false,
           error:
             "missing_user_id",
-        }
-      );
-    }
-
-
-    if (
-      !Number.isFinite(
-        availableCash
-      ) ||
-      availableCash < 0
-    ) {
-      return json(
-        400,
-        {
-          ok: false,
-          error:
-            "invalid_available_cash",
         }
       );
     }
@@ -298,14 +274,86 @@ export async function POST(
 
 
     /*
+     * Resolve authoritative funding directly from this
+     * client's Atlas-scoped Coinbase credentials.
+     *
+     * The caller cannot provide availableCash.
+     *
+     * This is READ-ONLY Coinbase access.
+     */
+    let funding;
+
+
+    try {
+
+      funding =
+        await getAtlasClientFundingBalance(
+          userId
+        );
+
+    } catch (error) {
+
+      return json(
+        200,
+        {
+          ok: true,
+
+          status:
+            "blocked",
+
+          reason:
+            "coinbase_funding_unverified",
+
+          error:
+            error instanceof Error
+              ? error.message
+              : "unknown_funding_error",
+        }
+      );
+    }
+
+
+    const availableCash =
+      funding.deployableCashUsd;
+
+
+    if (
+      !Number.isFinite(
+        availableCash
+      ) ||
+      availableCash < 0
+    ) {
+      return json(
+        200,
+        {
+          ok: true,
+
+          status:
+            "blocked",
+
+          reason:
+            "coinbase_funding_invalid",
+        }
+      );
+    }
+
+
+    /*
      * Build the persisted multi-asset portfolio plan
-     * from this client's saved allocation.
+     * from:
+     *
+     * - this client's saved allocation
+     * - this client's authoritative Coinbase USD balance
+     *
+     * USDC remains separate and is not automatically
+     * counted as deployable USD.
      */
     const plan =
       await buildClientPortfolioPlan({
         userId,
 
-        fundingCurrency,
+        fundingCurrency:
+          "USD",
 
         allocationPolicy: {
           availableCash,
@@ -331,6 +379,20 @@ export async function POST(
           reason:
             "portfolio_plan_not_ready",
 
+          funding: {
+            usdAvailable:
+              funding.usdAvailable,
+
+            usdcAvailable:
+              funding.usdcAvailable,
+
+            deployableCashUsd:
+              funding.deployableCashUsd,
+
+            checkedAt:
+              funding.checkedAt,
+          },
+
           plan,
         }
       );
@@ -349,6 +411,20 @@ export async function POST(
           reason:
             "portfolio_plan_invalid",
 
+          funding: {
+            usdAvailable:
+              funding.usdAvailable,
+
+            usdcAvailable:
+              funding.usdcAvailable,
+
+            deployableCashUsd:
+              funding.deployableCashUsd,
+
+            checkedAt:
+              funding.checkedAt,
+          },
+
           plan,
         }
       );
@@ -360,7 +436,10 @@ export async function POST(
      * existing Atlas approval + authorization
      * state machines.
      *
-     * Still NO Coinbase and NO execution here.
+     * Still:
+     *
+     * NO Coinbase order submission.
+     * NO execution dispatch.
      */
     const governance =
       await governAtlasMultiAssetPlan({
@@ -379,6 +458,26 @@ export async function POST(
 
         status:
           "authorized_ready",
+
+        funding: {
+          source:
+            "coinbase_atlas_client",
+
+          currency:
+            "USD",
+
+          usdAvailable:
+            funding.usdAvailable,
+
+          usdcAvailable:
+            funding.usdcAvailable,
+
+          deployableCashUsd:
+            funding.deployableCashUsd,
+
+          checkedAt:
+            funding.checkedAt,
+        },
 
         plan,
 

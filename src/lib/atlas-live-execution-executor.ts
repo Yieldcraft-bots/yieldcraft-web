@@ -12,6 +12,8 @@
  * - Requires deterministic execution fingerprint
  * - Atomically reserves execution before Coinbase submission
  * - Finalizes the same reservation after Coinbase response
+ * - Uses the authorization userId to resolve that client's
+ *   Atlas-scoped Coinbase credentials
  * - No UI access
  * - No Pulse
  * - No Recon
@@ -76,11 +78,13 @@ function extractAtlasCoinbaseOrderId(
     return null;
   }
 
+
   const rawCoinbaseResponse =
     Reflect.get(
       response,
       "coinbase"
     );
+
 
   return extractCoinbaseOrderId(
     rawCoinbaseResponse
@@ -96,6 +100,7 @@ async function persistAtlasLiveAudit(
 
   const repository =
     new SupabaseAtlasLiveOrderAuditRepository();
+
 
   await repository.create(
     audit
@@ -149,6 +154,15 @@ export async function executeAtlasLiveInstruction(
   /*
    * Credentials are obtained before reservation.
    *
+   * IMPORTANT:
+   * Credentials are resolved using the SAME userId
+   * contained in the validated execution authorization.
+   *
+   * This binds:
+   *
+   * authorization.userId
+   * -> that user's Atlas-scoped Coinbase credentials
+   *
    * A credential failure does not consume the execution
    * reservation because no Coinbase submission was possible.
    */
@@ -158,7 +172,9 @@ export async function executeAtlasLiveInstruction(
   try {
 
     credentials =
-      await getAtlasLiveCoinbaseCredentials();
+      await getAtlasLiveCoinbaseCredentials(
+        authorization.userId
+      );
 
   } catch (error) {
 
