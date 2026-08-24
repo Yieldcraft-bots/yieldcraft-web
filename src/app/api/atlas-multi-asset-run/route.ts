@@ -74,12 +74,12 @@ function okAuth(
   req: Request
 ) {
   const secret =
-    process.env.ATLAS_RUN_SECRET ??
-    process.env.CRON_SECRET ??
+    process.env.ATLAS_RUN_SECRET?.trim() ||
+    process.env.CRON_SECRET?.trim() ||
     "";
 
 
-  if (!secret.trim()) {
+  if (!secret) {
     return false;
   }
 
