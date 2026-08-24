@@ -4,42 +4,37 @@
  * Multi Asset Governance Run
  * ------------------------------------------------------------
  * PURPOSE
- * Build a client-selected Atlas portfolio plan using
- * authoritative per-client Coinbase USD funding and advance it
- * through the existing approval and authorization boundaries.
+ * Resolve authoritative per-client Coinbase USD funding,
+ * accumulate only genuinely unprocessed cash into persistent
+ * per-asset buckets, build an execution plan from those buckets,
+ * and advance executable plans through governance.
  *
  * SAFETY
  * - Operator controlled
  * - Client allocation driven
  * - Per-client Atlas Coinbase credentials
  * - Read-only Coinbase balance access
+ * - Multi-Asset state tables only
+ * - Same observed cash cannot be allocated repeatedly
  * - Uses existing approval state machine
  * - Uses existing authorization state machine
  * - No execution dispatch
  * - No Coinbase order submission
  * - No Pulse
  * - No Recon
- * - No trading
- * - Does not modify legacy Atlas BTC execution
- *
- * IMPORTANT
- * availableCash is NOT accepted from the caller.
- *
- * Atlas resolves the client's authoritative Coinbase USD
- * available balance itself.
- *
- * USDC is reported separately and is NOT automatically counted
- * as deployable USD.
- *
- * This route creates governed execution-ready state only.
+ * - Does not modify legacy Atlas BTC
  * ============================================================
  */
 
 import { NextResponse } from "next/server";
 
 import {
-  buildClientPortfolioPlan,
-} from "@/lib/atlas-intelligence/portfolio-plan-service";
+  getClientAllocationPlan,
+} from "@/lib/repositories/clientAllocationRepository";
+
+import {
+  saveAtlasPortfolioPlan,
+} from "@/lib/repositories/atlasPortfolioPlanRepository";
 
 import {
   governAtlasMultiAssetPlan,
@@ -48,6 +43,14 @@ import {
 import {
   getAtlasClientFundingBalance,
 } from "@/lib/atlas-client-coinbase-balance";
+
+import {
+  processAtlasMultiAssetAccumulation,
+} from "@/lib/atlas-multi-asset-state-service";
+
+import {
+  buildAtlasPendingPortfolioPlan,
+} from "@/lib/atlas-multi-asset-pending-plan";
 
 
 export const runtime = "nodejs";
@@ -63,7 +66,8 @@ function json(
     {
       status,
       headers: {
-        "Cache-Control": "no-store",
+        "Cache-Control":
+          "no-store",
       },
     }
   );
@@ -73,10 +77,17 @@ function json(
 function okAuth(
   req: Request
 ) {
+
   const secret =
-    process.env.ATLAS_MULTI_ASSET_RUN_SECRET?.trim() ||
-    process.env.ATLAS_RUN_SECRET?.trim() ||
-    process.env.CRON_SECRET?.trim() ||
+    process.env
+      .ATLAS_MULTI_ASSET_RUN_SECRET
+      ?.trim() ||
+    process.env
+      .ATLAS_RUN_SECRET
+      ?.trim() ||
+    process.env
+      .CRON_SECRET
+      ?.trim() ||
     "";
 
 
@@ -99,14 +110,17 @@ function okAuth(
 
   if (
     header === secret ||
-    header === `Bearer ${secret}`
+    header ===
+      `Bearer ${secret}`
   ) {
     return true;
   }
 
 
   const url =
-    new URL(req.url);
+    new URL(
+      req.url
+    );
 
 
   return (
@@ -128,7 +142,8 @@ export async function POST(
         401,
         {
           ok: false,
-          error: "Unauthorized",
+          error:
+            "Unauthorized",
         }
       );
     }
@@ -137,11 +152,15 @@ export async function POST(
     const body =
       await req
         .json()
-        .catch(() => null);
+        .catch(
+          () =>
+            null
+        );
 
 
     if (
-      typeof body !== "object" ||
+      typeof body !==
+        "object" ||
       body === null
     ) {
       return json(
@@ -163,7 +182,8 @@ export async function POST(
 
 
     const userId =
-      typeof userIdValue === "string"
+      typeof userIdValue ===
+        "string"
         ? userIdValue.trim()
         : "";
 
@@ -275,13 +295,11 @@ export async function POST(
 
 
     /*
-     * Resolve authoritative funding directly from this
-     * client's Atlas-scoped Coinbase credentials.
-     *
-     * The caller cannot provide availableCash.
-     *
-     * This is READ-ONLY Coinbase access.
+     * ========================================================
+     * 1. AUTHORITATIVE COINBASE FUNDING
+     * ========================================================
      */
+
     let funding;
 
 
@@ -339,35 +357,33 @@ export async function POST(
     }
 
 
+    const fundingSummary = {
+      source:
+        "coinbase_atlas_client",
+
+      currency:
+        "USD",
+
+      usdAvailable:
+        funding.usdAvailable,
+
+      usdcAvailable:
+        funding.usdcAvailable,
+
+      deployableCashUsd:
+        funding.deployableCashUsd,
+
+      checkedAt:
+        funding.checkedAt,
+    };
+
+
     /*
-     * Build the persisted multi-asset portfolio plan
-     * from:
-     *
-     * - this client's saved allocation
-     * - this client's authoritative Coinbase USD balance
-     *
-     * USDC remains separate and is not automatically
-     * counted as deployable USD.
+     * Minimum cash gate occurs BEFORE accumulation.
      */
-    const plan =
-      await buildClientPortfolioPlan({
-        userId,
-
-        fundingCurrency:
-          "USD",
-
-        allocationPolicy: {
-          availableCash,
-          deployPct,
-          minCash,
-          minBuy,
-        },
-      });
-
-
     if (
-      !plan.portfolioPlanId ||
-      !plan.portfolioPlan
+      availableCash <
+      minCash
     ) {
       return json(
         200,
@@ -378,29 +394,132 @@ export async function POST(
             "blocked",
 
           reason:
-            "portfolio_plan_not_ready",
+            "below_min_cash",
 
-          funding: {
-            usdAvailable:
-              funding.usdAvailable,
-
-            usdcAvailable:
-              funding.usdcAvailable,
-
-            deployableCashUsd:
-              funding.deployableCashUsd,
-
-            checkedAt:
-              funding.checkedAt,
-          },
-
-          plan,
+          funding:
+            fundingSummary,
         }
       );
     }
 
 
-    if (!plan.portfolioPlan.valid) {
+    /*
+     * ========================================================
+     * 2. CLIENT ALLOCATION
+     * ========================================================
+     */
+
+    const allocationRows =
+      await getClientAllocationPlan(
+        userId
+      );
+
+
+    if (
+      allocationRows.length ===
+      0
+    ) {
+      return json(
+        200,
+        {
+          ok: true,
+
+          status:
+            "blocked",
+
+          reason:
+            "no_client_allocation",
+
+          funding:
+            fundingSummary,
+        }
+      );
+    }
+
+
+    /*
+     * ========================================================
+     * 3. PERSISTENT MULTI-ASSET ACCUMULATION
+     * ========================================================
+     *
+     * Only genuinely unprocessed cash contributes new dollars
+     * to the client's per-asset pending buckets.
+     *
+     * An unchanged Coinbase balance cannot repeatedly produce
+     * another deployment amount.
+     */
+
+    const accumulation =
+      await processAtlasMultiAssetAccumulation({
+        userId,
+
+        currentCashUsd:
+          availableCash,
+
+        deployPct,
+
+        minOrderUsd:
+          minBuy,
+
+        allocationRows,
+      });
+
+
+    if (
+      !accumulation
+        .accumulation
+        .valid
+    ) {
+      return json(
+        200,
+        {
+          ok: true,
+
+          status:
+            "blocked",
+
+          reason:
+            accumulation
+              .accumulation
+              .reason,
+
+          funding:
+            fundingSummary,
+
+          accumulation,
+        }
+      );
+    }
+
+
+    /*
+     * ========================================================
+     * 4. BUILD PLAN FROM PERSISTED/PENDING BUCKETS
+     * ========================================================
+     *
+     * We intentionally do NOT feed the full Coinbase balance
+     * back through the old percentage planner here.
+     *
+     * The pending buckets are now the authoritative planned
+     * dollar amounts.
+     */
+
+    const portfolioPlan =
+      buildAtlasPendingPortfolioPlan({
+        buckets:
+          accumulation
+            .accumulation
+            .buckets,
+
+        fundingCurrency:
+          "USD",
+
+        minOrderUsd:
+          minBuy,
+      });
+
+
+    if (!portfolioPlan.valid) {
       return json(
         200,
         {
@@ -412,46 +531,29 @@ export async function POST(
           reason:
             "portfolio_plan_invalid",
 
-          funding: {
-            usdAvailable:
-              funding.usdAvailable,
+          funding:
+            fundingSummary,
 
-            usdcAvailable:
-              funding.usdcAvailable,
+          accumulation,
 
-            deployableCashUsd:
-              funding.deployableCashUsd,
-
-            checkedAt:
-              funding.checkedAt,
-          },
-
-          plan,
+          portfolioPlan,
         }
       );
     }
 
 
-    /*
-     * Fail closed if the plan is structurally valid but
-     * contains no instructions that can actually execute.
-     *
-     * Example:
-     * - deployable USD exists
-     * - allocation totals 100%
-     * - every generated order is below minimum size
-     *
-     * Such a plan must NOT advance to approval/authorization.
-     */
     const executableOrders =
-      plan.portfolioPlan.orders.filter(
-        (order) =>
-          order.executable
-      );
+      portfolioPlan
+        .orders
+        .filter(
+          (order) =>
+            order.executable
+        );
 
 
     if (
-      executableOrders.length === 0
+      executableOrders.length ===
+      0
     ) {
       return json(
         200,
@@ -462,45 +564,52 @@ export async function POST(
             "blocked",
 
           reason:
-            "no_executable_orders",
+            "pending_below_minimum",
 
-          funding: {
-            usdAvailable:
-              funding.usdAvailable,
+          funding:
+            fundingSummary,
 
-            usdcAvailable:
-              funding.usdcAvailable,
+          accumulation,
 
-            deployableCashUsd:
-              funding.deployableCashUsd,
-
-            checkedAt:
-              funding.checkedAt,
-          },
-
-          plan,
+          portfolioPlan,
         }
       );
     }
 
 
     /*
-     * Advance the persisted plan through the
-     * existing Atlas approval + authorization
-     * state machines.
-     *
-     * Still:
-     *
-     * NO Coinbase order submission.
-     * NO execution dispatch.
+     * ========================================================
+     * 5. PERSIST EXECUTABLE PORTFOLIO PLAN
+     * ========================================================
      */
+
+    const portfolioPlanId =
+      crypto.randomUUID();
+
+
+    await saveAtlasPortfolioPlan({
+      portfolioPlanId,
+
+      userId,
+
+      plan:
+        portfolioPlan,
+    });
+
+
+    /*
+     * ========================================================
+     * 6. GOVERNANCE
+     * ========================================================
+     *
+     * Still NO execution and NO Coinbase order submission.
+     */
+
     const governance =
       await governAtlasMultiAssetPlan({
-        userId:
-          plan.userId,
+        userId,
 
-        portfolioPlanId:
-          plan.portfolioPlanId,
+        portfolioPlanId,
       });
 
 
@@ -512,27 +621,20 @@ export async function POST(
         status:
           "authorized_ready",
 
-        funding: {
-          source:
-            "coinbase_atlas_client",
+        funding:
+          fundingSummary,
 
-          currency:
-            "USD",
+        accumulation,
 
-          usdAvailable:
-            funding.usdAvailable,
+        plan: {
+          userId,
 
-          usdcAvailable:
-            funding.usdcAvailable,
+          portfolioPlanId,
 
-          deployableCashUsd:
-            funding.deployableCashUsd,
+          allocationRows,
 
-          checkedAt:
-            funding.checkedAt,
+          portfolioPlan,
         },
-
-        plan,
 
         governance,
       }
