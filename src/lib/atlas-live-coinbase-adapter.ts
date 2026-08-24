@@ -4,16 +4,19 @@
  * Live Coinbase Adapter
  *
  * PURPOSE
- * Controlled Coinbase communication boundary for Atlas live execution.
+ * Controlled Coinbase communication boundary for Atlas live
+ * execution.
  *
  * SAFETY
  * - No approval logic
  * - No authorization logic
+ * - Equity orders require authoritative Coinbase tradability
+ *   and normal-session proof before submission
+ * - Crypto order behavior remains unchanged
  * - No UI access
  * - No Pulse
  * - No Recon
  * - No policy mutation
- * - No order decisions
  *
  * This adapter only communicates with Coinbase.
  * ============================================================
@@ -32,6 +35,10 @@ import {
   type AtlasCoinbaseRequestContext,
 } from "./atlas-live-coinbase-client";
 
+import {
+  evaluateAtlasEquityTradability,
+} from "./atlas-equity-tradability-gate";
+
 
 export interface AtlasLiveCoinbaseAdapterResult {
   success: boolean;
@@ -40,7 +47,10 @@ export interface AtlasLiveCoinbaseAdapterResult {
 }
 
 
-function money(n: number): string {
+function money(
+  n: number
+): string {
+
   return Number(
     n.toFixed(2)
   ).toFixed(2);
@@ -48,49 +58,49 @@ function money(n: number): string {
 
 
 /**
- * Coinbase crypto products currently use readable IDs
- * such as BTC-USD / ETH-USD.
+ * Coinbase crypto products use readable IDs such as:
  *
- * Coinbase equity products use canonical hashed IDs
- * returned by the Products API.
+ * BTC-USD
+ * ETH-USD
  *
- * This keeps equity handling isolated to Atlas Multi-Asset
- * without changing the shared Coinbase crypto order builder.
+ * Coinbase equity products use canonical hashed IDs returned
+ * by the EQUITY Products API.
  */
 function isAtlasEquityInstruction(
   instruction: AtlasExecutionInstruction
 ): boolean {
+
   return !instruction.productId.includes("-");
 }
 
 
 /**
- * Build a Coinbase equity market order for the
- * normal trading session.
+ * Build a Coinbase equity market buy for the NORMAL session.
  *
- * Coinbase's current equity Create Order contract requires:
+ * This payload is constructed only AFTER Coinbase's read-only
+ * equity tradability gate has confirmed:
  *
- * - canonical equity product_id
- * - market_market_ioc for a market order
- * - MARKET_GFD displayed order configuration
- * - equity_order_metadata
+ * - product_type = EQUITY
+ * - trading is enabled
+ * - product is not view-only
+ * - product is tradable
+ * - buys are enabled
+ * - trading is not halted
+ * - current session = EQUITY_TRADING_SESSION_NORMAL
  *
- * IMPORTANT:
- * Coinbase rejected the legacy literal "NORMAL" because it is
- * not a valid EquityTradingSession protobuf enum value.
- *
- * UNKNOWN_EQUITY_TRADING_SESSION is the documented enum-safe
- * value and allows Coinbase to resolve the supported normal
- * session for MARKET_GFD rather than sending an invalid enum.
+ * Atlas therefore never attempts this fractional/notional
+ * market order during unsupported extended-hours sessions.
  */
 function buildAtlasEquityMarketBuyOrder(
   userId: string,
   instruction: AtlasExecutionInstruction
 ) {
+
   const mode =
     process.env.ATLAS_LIVE_ARMED === "true"
       ? "live"
       : "dry_run";
+
 
   return {
     client_order_id:
@@ -99,7 +109,8 @@ function buildAtlasEquityMarketBuyOrder(
     product_id:
       instruction.productId,
 
-    side: "BUY" as const,
+    side:
+      "BUY" as const,
 
     order_configuration: {
       market_market_ioc: {
@@ -112,7 +123,7 @@ function buildAtlasEquityMarketBuyOrder(
 
     equity_order_metadata: {
       equity_trading_session:
-        "UNKNOWN_EQUITY_TRADING_SESSION",
+        "EQUITY_TRADING_SESSION_NORMAL",
 
       displayed_order_config:
         "MARKET_GFD",
@@ -135,6 +146,73 @@ export async function submitAtlasLiveCoinbaseOrder(
       );
 
 
+    /*
+     * ========================================================
+     * EQUITY PRE-SUBMISSION GATE
+     * ========================================================
+     *
+     * This performs a separate authenticated GET against the
+     * exact Coinbase equity product.
+     *
+     * If Coinbase cannot affirmatively prove the product is
+     * currently suitable for our normal-session market order,
+     * fail closed BEFORE POST /orders.
+     */
+    if (isEquity) {
+
+      const tradability =
+        await evaluateAtlasEquityTradability(
+          userId,
+          instruction.productId
+        );
+
+
+      if (!tradability.allowed) {
+
+        return {
+          success: false,
+
+          submitted: false,
+
+          response: {
+            mode:
+              "live",
+
+            assetType:
+              "equity",
+
+            productId:
+              instruction.productId,
+
+            symbol:
+              instruction.symbol,
+
+            quoteSizeUsd:
+              instruction.quoteSizeUsd,
+
+            reason:
+              "equity_tradability_gate_blocked",
+
+            gateReason:
+              tradability.reason,
+
+            ticker:
+              tradability.ticker,
+
+            currentSession:
+              tradability.currentSession,
+          },
+        };
+      }
+    }
+
+
+    /*
+     * ========================================================
+     * ORDER PAYLOAD
+     * ========================================================
+     */
+
     const payload =
       isEquity
         ? buildAtlasEquityMarketBuyOrder(
@@ -149,6 +227,12 @@ export async function submitAtlasLiveCoinbaseOrder(
           );
 
 
+    /*
+     * ========================================================
+     * COINBASE SUBMISSION
+     * ========================================================
+     */
+
     const result =
       await atlasCoinbasePost(
         context,
@@ -161,10 +245,12 @@ export async function submitAtlasLiveCoinbaseOrder(
 
       return {
         success: false,
+
         submitted: false,
 
         response: {
-          mode: "live",
+          mode:
+            "live",
 
           assetType:
             isEquity
@@ -195,10 +281,12 @@ export async function submitAtlasLiveCoinbaseOrder(
 
     return {
       success: true,
+
       submitted: true,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         assetType:
           isEquity
@@ -226,10 +314,12 @@ export async function submitAtlasLiveCoinbaseOrder(
 
     return {
       success: false,
+
       submitted: false,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         productId:
           instruction.productId,

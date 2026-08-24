@@ -172,14 +172,16 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     accumulationEnabled: true,
   },
 
-  // SpaceX is retained in Atlas but is not executable through
-  // Coinbase until Coinbase exposes a valid tradable product ID.
   {
     id: "spacex",
     symbol: "SPACEX",
     displayName: "SpaceX",
     broker: "coinbase",
-    accumulationEnabled: false,
+    usdPair:
+      "d0484aeacc93f88a18b0431b8d2aac6efededa3b203ff4b55c72b64805aa5a2e",
+    usdcPair:
+      "ed1f01897dcd14d8e9a30890288cfd1c547dcbe5072a64f236111d8dc7a4a238",
+    accumulationEnabled: true,
   },
 
 ] as const;

@@ -17,6 +17,7 @@
  * -> Authorization
  *
  * SAFETY
+ * - Uses isolated Multi-Asset run secret
  * - No caller-supplied availableCash
  * - Read-only Coinbase balance access
  * - No Coinbase order submission
@@ -33,6 +34,10 @@
 
 import { config } from "dotenv";
 
+import {
+  readFileSync,
+} from "fs";
+
 
 config({
   path: ".env.production.local",
@@ -43,15 +48,28 @@ const BASE_URL =
   "https://yieldcraft.co";
 
 
-const RUN_SECRET =
-  process.env.ATLAS_RUN_SECRET?.trim() ||
-  process.env.CRON_SECRET?.trim() ||
+let RUN_SECRET =
   "";
+
+
+try {
+
+  RUN_SECRET =
+    readFileSync(
+      ".atlas-multi-asset-run-secret.local",
+      "utf8"
+    ).trim();
+
+} catch {
+
+  RUN_SECRET =
+    "";
+}
 
 
 if (!RUN_SECRET) {
   throw new Error(
-    "Missing ATLAS_RUN_SECRET or CRON_SECRET"
+    "Missing .atlas-multi-asset-run-secret.local"
   );
 }
 
@@ -81,8 +99,25 @@ async function post(
     );
 
 
-  const json =
-    await response.json();
+  const text =
+    await response.text();
+
+
+  let json: any;
+
+
+  try {
+
+    json =
+      JSON.parse(text);
+
+  } catch {
+
+    json = {
+      raw:
+        text,
+    };
+  }
 
 
   console.log(
@@ -127,7 +162,7 @@ async function main() {
 
       {
         userId:
-          "295165f4-df46-403f-8727-80408d6a2578",
+          "8b0def33-f6cd-48c5-8029-6e7b59b5ae8e",
 
         deployPct:
           20,
@@ -196,6 +231,32 @@ async function main() {
     console.log(
       "DEPLOYABLE USD:",
       run.funding.deployableCashUsd
+    );
+  }
+
+
+  if (
+    run.status ===
+    "authorized_ready"
+  ) {
+
+    console.log(
+      "PORTFOLIO PLAN ID:",
+      run.plan?.portfolioPlanId
+    );
+
+
+    console.log(
+      "APPROVAL ID:",
+      run.governance?.approval?.approvalId ??
+      run.governance?.approvalId
+    );
+
+
+    console.log(
+      "AUTHORIZATION ID:",
+      run.governance?.authorization?.authorizationId ??
+      run.governance?.authorizationId
     );
   }
 }

@@ -7,6 +7,7 @@
  * Isolated Coinbase communication boundary for Atlas live flow.
  *
  * SAFETY
+ * - GET + POST transport only
  * - No approval logic
  * - No authorization logic
  * - No allocation logic
@@ -14,8 +15,6 @@
  * - No Pulse
  * - No Recon
  * - No trading decisions
- *
- * This file only communicates with Coinbase.
  * ============================================================
  */
 
@@ -32,22 +31,24 @@ export type AtlasCoinbaseRequestContext = {
 };
 
 
-export async function atlasCoinbasePost(
+export async function atlasCoinbaseGet(
   context: AtlasCoinbaseRequestContext,
-  path: string,
-  payload: unknown
+  path: string
 ): Promise<AtlasCoinbaseRequestResult> {
 
   const response =
     await fetch(
       `https://api.coinbase.com${path}`,
       {
-        method: "POST",
+        method: "GET",
+
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${context.jwt}`,
+          Authorization:
+            `Bearer ${context.jwt}`,
         },
-        body: JSON.stringify(payload),
+
+        cache:
+          "no-store",
       }
     );
 
@@ -59,8 +60,60 @@ export async function atlasCoinbasePost(
 
 
   return {
-    success: response.ok,
-    status: response.status,
-    response: data,
+    success:
+      response.ok,
+
+    status:
+      response.status,
+
+    response:
+      data,
+  };
+}
+
+
+export async function atlasCoinbasePost(
+  context: AtlasCoinbaseRequestContext,
+  path: string,
+  payload: unknown
+): Promise<AtlasCoinbaseRequestResult> {
+
+  const response =
+    await fetch(
+      `https://api.coinbase.com${path}`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          Authorization:
+            `Bearer ${context.jwt}`,
+        },
+
+        body:
+          JSON.stringify(
+            payload
+          ),
+      }
+    );
+
+
+  const data =
+    await response
+      .json()
+      .catch(() => null);
+
+
+  return {
+    success:
+      response.ok,
+
+    status:
+      response.status,
+
+    response:
+      data,
   };
 }

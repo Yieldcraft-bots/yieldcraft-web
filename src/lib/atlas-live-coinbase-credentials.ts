@@ -5,11 +5,12 @@
  *
  * PURPOSE
  * Provide per-client Coinbase authentication context to the
- * Atlas live execution adapter.
+ * Atlas live execution infrastructure.
  *
  * SAFETY
  * - Credentials are scoped to the authorization user
  * - Atlas product_scope only
+ * - Supports request-specific GET/POST JWT creation
  * - No execution logic
  * - No order decisions
  * - No approval logic
@@ -37,6 +38,11 @@ import type {
 type CoinbaseKeyAlg =
   | "ES256"
   | "EdDSA";
+
+
+type AtlasCoinbaseHttpMethod =
+  | "GET"
+  | "POST";
 
 
 function normalizePem(
@@ -74,7 +80,7 @@ function normalizePem(
 function buildAtlasClientCoinbaseJwt(
   apiKeyName: string,
   privateKeyPem: string,
-  method: "POST",
+  method: AtlasCoinbaseHttpMethod,
   path: string,
   alg: CoinbaseKeyAlg
 ): string {
@@ -255,8 +261,10 @@ async function loadAtlasClientCoinbaseKeys(
 }
 
 
-export async function getAtlasLiveCoinbaseCredentials(
-  userId: string
+async function createAtlasCoinbaseRequestContext(
+  userId: string,
+  method: AtlasCoinbaseHttpMethod,
+  path: string
 ): Promise<AtlasCoinbaseRequestContext> {
 
   const keys =
@@ -265,15 +273,11 @@ export async function getAtlasLiveCoinbaseCredentials(
     );
 
 
-  const path =
-    "/api/v3/brokerage/orders";
-
-
   const signedJwt =
     buildAtlasClientCoinbaseJwt(
       keys.apiKeyName,
       keys.privateKeyPem,
-      "POST",
+      method,
       path,
       keys.keyAlg
     );
@@ -289,21 +293,77 @@ export async function getAtlasLiveCoinbaseCredentials(
 }
 
 
+export async function getAtlasLiveCoinbaseCredentials(
+  userId: string
+): Promise<AtlasCoinbaseRequestContext> {
+
+  return createAtlasCoinbaseRequestContext(
+    userId,
+    "POST",
+    "/api/v3/brokerage/orders"
+  );
+}
+
+
+export async function getAtlasCoinbaseProductCredentials(
+  userId: string,
+  productId: string
+): Promise<AtlasCoinbaseRequestContext> {
+
+  const normalizedProductId =
+    productId.trim();
+
+
+  if (!normalizedProductId) {
+    throw new Error(
+      "atlas_coinbase_product_id_missing"
+    );
+  }
+
+
+  return createAtlasCoinbaseRequestContext(
+    userId,
+    "GET",
+    `/api/v3/brokerage/products/${encodeURIComponent(
+      normalizedProductId
+    )}`
+  );
+}
+
+
+export async function getAtlasCoinbaseOrderCredentials(
+  userId: string,
+  orderId: string
+): Promise<AtlasCoinbaseRequestContext> {
+
+  const normalizedOrderId =
+    orderId.trim();
+
+
+  if (!normalizedOrderId) {
+    throw new Error(
+      "atlas_coinbase_order_id_missing"
+    );
+  }
+
+
+  return createAtlasCoinbaseRequestContext(
+    userId,
+    "GET",
+    `/api/v3/brokerage/orders/historical/${encodeURIComponent(
+      normalizedOrderId
+    )}`
+  );
+}
+
+
 export async function refreshAtlasLiveCoinbaseCredentials(
   userId: string
 ): Promise<void> {
 
-  const keys =
-    await loadAtlasClientCoinbaseKeys(
-      userId
-    );
-
-
-  buildAtlasClientCoinbaseJwt(
-    keys.apiKeyName,
-    keys.privateKeyPem,
+  await createAtlasCoinbaseRequestContext(
+    userId,
     "POST",
-    "/api/v3/brokerage/orders",
-    keys.keyAlg
+    "/api/v3/brokerage/orders"
   );
 }

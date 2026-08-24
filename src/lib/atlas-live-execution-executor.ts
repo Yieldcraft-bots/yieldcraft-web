@@ -11,6 +11,8 @@
  * - Requires live gateway approval
  * - Requires deterministic execution fingerprint
  * - Atomically reserves execution before Coinbase submission
+ * - Reconciles authoritative Coinbase fill state
+ * - Atomically consumes only confirmed filled pending USD
  * - Finalizes the same reservation after Coinbase response
  * - Uses the authorization userId to resolve that client's
  *   Atlas-scoped Coinbase credentials
@@ -58,6 +60,14 @@ import {
 import {
   extractCoinbaseOrderId,
 } from "./coinbase-order-builder";
+
+import {
+  reconcileAtlasLiveCoinbaseOrder,
+} from "./atlas-live-order-reconciliation";
+
+import {
+  SupabaseAtlasMultiAssetStateRepository,
+} from "./repositories/atlasMultiAssetStateRepository";
 
 
 export interface AtlasLiveExecutionExecutorResult {
@@ -151,21 +161,6 @@ export async function executeAtlasLiveInstruction(
     });
 
 
-  /*
-   * Credentials are obtained before reservation.
-   *
-   * IMPORTANT:
-   * Credentials are resolved using the SAME userId
-   * contained in the validated execution authorization.
-   *
-   * This binds:
-   *
-   * authorization.userId
-   * -> that user's Atlas-scoped Coinbase credentials
-   *
-   * A credential failure does not consume the execution
-   * reservation because no Coinbase submission was possible.
-   */
   let credentials;
 
 
@@ -284,11 +279,6 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * Atomic execution reservation.
-   *
-   * The database UNIQUE constraint on execution_key means
-   * only one request may reserve this exact execution.
-   *
-   * This happens BEFORE Coinbase submission.
    */
   const auditRepository =
     new SupabaseAtlasLiveOrderAuditRepository();
@@ -337,8 +327,7 @@ export async function executeAtlasLiveInstruction(
 
 
   /*
-   * Only the request that successfully reserved the
-   * execution may cross the Coinbase submission boundary.
+   * Coinbase submission boundary.
    */
   const coinbaseResult =
     await submitAtlasLiveCoinbaseOrder(
@@ -354,39 +343,282 @@ export async function executeAtlasLiveInstruction(
     );
 
 
-  const finalStatus =
-    coinbaseResult.submitted
-      ? "SUBMITTED"
-      : "FAILED";
+  /*
+   * If Coinbase did not accept the order, finalize as FAILED.
+   */
+  if (
+    !coinbaseResult.submitted ||
+    !coinbaseOrderId
+  ) {
+
+    await auditRepository.finalizeExecution({
+      executionKey:
+        fingerprint,
+
+      status:
+        "FAILED",
+
+      coinbaseOrderId:
+        coinbaseOrderId,
+
+      responseSummary:
+        "coinbase_order_failed",
+    });
 
 
-  const responseSummary =
-    coinbaseResult.submitted
-      ? "coinbase_order_submitted"
-      : "coinbase_order_failed";
+    const audit =
+      createAtlasLiveOrderAudit({
+        status: "FAILED",
+
+        userId:
+          authorization.userId,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        portfolioPlanId:
+          authorization.portfolioPlanId,
+
+        productId:
+          instruction.productId,
+
+        quoteSizeUsd:
+          instruction.quoteSizeUsd,
+
+        coinbaseOrderId,
+
+        responseSummary:
+          "coinbase_order_failed",
+      });
+
+
+    return {
+      success: false,
+      submitted: false,
+
+      response: {
+        mode: "live",
+
+        fingerprint,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        audit,
+
+        coinbase:
+          coinbaseResult.response,
+      },
+    };
+  }
 
 
   /*
-   * Finalize the exact reservation that permitted
-   * the Coinbase request.
+   * ========================================================
+   * AUTHORITATIVE FILL RECONCILIATION
+   * ========================================================
+   *
+   * Submitted does not mean filled.
+   *
+   * Atlas therefore queries Coinbase for the exact order and
+   * uses actual filled_value before consuming pending USD.
+   */
+  const reconciliation =
+    await reconcileAtlasLiveCoinbaseOrder({
+      userId:
+        authorization.userId,
+
+      orderId:
+        coinbaseOrderId,
+
+      expectedProductId:
+        instruction.productId,
+    });
+
+
+  if (!reconciliation.confirmed) {
+
+    await auditRepository.finalizeExecution({
+      executionKey:
+        fingerprint,
+
+      status:
+        "SUBMITTED",
+
+      coinbaseOrderId,
+
+      responseSummary:
+        reconciliation.reason,
+    });
+
+
+    const audit =
+      createAtlasLiveOrderAudit({
+        status: "SUBMITTED",
+
+        userId:
+          authorization.userId,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        portfolioPlanId:
+          authorization.portfolioPlanId,
+
+        productId:
+          instruction.productId,
+
+        quoteSizeUsd:
+          instruction.quoteSizeUsd,
+
+        coinbaseOrderId,
+
+        responseSummary:
+          reconciliation.reason,
+      });
+
+
+    return {
+      success: true,
+      submitted: true,
+
+      response: {
+        mode: "live",
+
+        fingerprint,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        audit,
+
+        reconciliation,
+
+        pendingSettlement:
+          null,
+
+        coinbase:
+          coinbaseResult.response,
+      },
+    };
+  }
+
+
+  /*
+   * ========================================================
+   * ATOMIC PENDING SETTLEMENT
+   * ========================================================
+   *
+   * Only actual Coinbase filled_value is consumed.
+   */
+  const stateRepository =
+    new SupabaseAtlasMultiAssetStateRepository();
+
+
+  const pendingSettlement =
+    await stateRepository.consumePendingAllocation({
+      userId:
+        authorization.userId,
+
+      assetSymbol:
+        instruction.symbol,
+
+      amountUsd:
+        reconciliation.filledValueUsd,
+    });
+
+
+  if (!pendingSettlement.consumed) {
+
+    await auditRepository.finalizeExecution({
+      executionKey:
+        fingerprint,
+
+      status:
+        "SUBMITTED",
+
+      coinbaseOrderId,
+
+      responseSummary:
+        "coinbase_fill_confirmed_pending_settlement_blocked",
+    });
+
+
+    const audit =
+      createAtlasLiveOrderAudit({
+        status: "SUBMITTED",
+
+        userId:
+          authorization.userId,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        portfolioPlanId:
+          authorization.portfolioPlanId,
+
+        productId:
+          instruction.productId,
+
+        quoteSizeUsd:
+          instruction.quoteSizeUsd,
+
+        coinbaseOrderId,
+
+        responseSummary:
+          "coinbase_fill_confirmed_pending_settlement_blocked",
+      });
+
+
+    return {
+      success: true,
+      submitted: true,
+
+      response: {
+        mode: "live",
+
+        fingerprint,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        audit,
+
+        reconciliation,
+
+        pendingSettlement,
+
+        coinbase:
+          coinbaseResult.response,
+      },
+    };
+  }
+
+
+  /*
+   * Finalize only after:
+   *
+   * Coinbase accepted
+   * -> Coinbase fill confirmed
+   * -> exact pending dollars atomically consumed
    */
   await auditRepository.finalizeExecution({
     executionKey:
       fingerprint,
 
     status:
-      finalStatus,
+      "SUBMITTED",
 
     coinbaseOrderId,
 
-    responseSummary,
+    responseSummary:
+      "coinbase_order_filled_and_pending_settled",
   });
 
 
   const audit =
     createAtlasLiveOrderAudit({
-      status:
-        finalStatus,
+      status: "SUBMITTED",
 
       userId:
         authorization.userId,
@@ -405,16 +637,14 @@ export async function executeAtlasLiveInstruction(
 
       coinbaseOrderId,
 
-      responseSummary,
+      responseSummary:
+        "coinbase_order_filled_and_pending_settled",
     });
 
 
   return {
-    success:
-      coinbaseResult.success,
-
-    submitted:
-      coinbaseResult.submitted,
+    success: true,
+    submitted: true,
 
     response: {
       mode: "live",
@@ -425,6 +655,10 @@ export async function executeAtlasLiveInstruction(
         authorization.authorizationId,
 
       audit,
+
+      reconciliation,
+
+      pendingSettlement,
 
       coinbase:
         coinbaseResult.response,

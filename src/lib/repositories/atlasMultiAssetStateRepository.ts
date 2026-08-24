@@ -10,6 +10,7 @@
  * SAFETY
  * - Multi-Asset only
  * - Per-client user_id isolation
+ * - Atomic pending settlement support
  * - Does not access atlas_user_state
  * - Does not modify legacy Atlas BTC
  * - No Pulse
@@ -40,6 +41,13 @@ type PendingAllocationRow = {
 };
 
 
+type PendingSettlementRow = {
+  consumed: boolean;
+  previous_pending_usd: number | string | null;
+  remaining_pending_usd: number | string | null;
+};
+
+
 export type AtlasMultiAssetCashState = {
   userId: string;
 
@@ -61,6 +69,15 @@ export type AtlasMultiAssetPendingAllocation = {
   assetSymbol: string;
 
   pendingUsd: number;
+};
+
+
+export type AtlasMultiAssetPendingSettlementResult = {
+  consumed: boolean;
+
+  previousPendingUsd: number;
+
+  remainingPendingUsd: number;
 };
 
 
@@ -499,5 +516,152 @@ export class SupabaseAtlasMultiAssetStateRepository {
         `atlas_multi_asset_pending_save_failed:${error.message}`
       );
     }
+  }
+
+
+  /**
+   * Atomically consume dollars from exactly one client's
+   * exactly one asset pending bucket.
+   *
+   * The database function owns the row lock and subtraction.
+   * This repository never performs read-modify-write settlement.
+   */
+  async consumePendingAllocation(
+    input: {
+      userId: string;
+      assetSymbol: string;
+      amountUsd: number;
+    }
+  ): Promise<
+    AtlasMultiAssetPendingSettlementResult
+  > {
+
+    const normalizedUserId =
+      input.userId.trim();
+
+
+    const normalizedSymbol =
+      input.assetSymbol
+        .trim()
+        .toUpperCase();
+
+
+    if (
+      !normalizedUserId ||
+      !normalizedSymbol
+    ) {
+      throw new Error(
+        "atlas_multi_asset_settlement_identity_invalid"
+      );
+    }
+
+
+    if (
+      !Number.isFinite(
+        input.amountUsd
+      ) ||
+      input.amountUsd <= 0
+    ) {
+      throw new Error(
+        "atlas_multi_asset_settlement_amount_invalid"
+      );
+    }
+
+
+    const supabase =
+      getSupabaseAdmin();
+
+
+    const {
+      data,
+      error,
+    } =
+      await supabase.rpc(
+        "consume_atlas_multi_asset_pending_allocation",
+        {
+          p_user_id:
+            normalizedUserId,
+
+          p_asset_symbol:
+            normalizedSymbol,
+
+          p_amount_usd:
+            money(
+              input.amountUsd
+            ),
+        }
+      );
+
+
+    if (error) {
+      throw new Error(
+        `atlas_multi_asset_pending_settlement_failed:${error.message}`
+      );
+    }
+
+
+    const rows =
+      (
+        Array.isArray(data)
+          ? data
+          : []
+      ) as unknown as PendingSettlementRow[];
+
+
+    const row =
+      rows[0];
+
+
+    if (!row) {
+      throw new Error(
+        "atlas_multi_asset_pending_settlement_result_missing"
+      );
+    }
+
+
+    const previousPendingUsd =
+      Number(
+        row.previous_pending_usd ??
+        0
+      );
+
+
+    const remainingPendingUsd =
+      Number(
+        row.remaining_pending_usd ??
+        0
+      );
+
+
+    if (
+      !Number.isFinite(
+        previousPendingUsd
+      ) ||
+      !Number.isFinite(
+        remainingPendingUsd
+      ) ||
+      previousPendingUsd < 0 ||
+      remainingPendingUsd < 0
+    ) {
+      throw new Error(
+        "atlas_multi_asset_pending_settlement_result_invalid"
+      );
+    }
+
+
+    return {
+      consumed:
+        row.consumed === true,
+
+      previousPendingUsd:
+        money(
+          previousPendingUsd
+        ),
+
+      remainingPendingUsd:
+        money(
+          remainingPendingUsd
+        ),
+    };
   }
 }
