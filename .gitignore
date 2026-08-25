@@ -22,7 +22,13 @@ node_modules/
 src/coinbase-sec1.pem
 src/coinbase-pkcs8.pem
 
+# Vercel local configuration
 .vercel
-.env*.local
-.env*
+
+# Supabase CLI temporary state
+supabase/.temp/
+
+# Atlas local secrets / proof data
 .atlas-operator-token.local
+.atlas-multi-asset-run-secret.local
+.atlas-live-order-id.local

@@ -171,7 +171,7 @@ async function main() {
           10,
 
         minBuy:
-          10,
+          2.75,
       },
 
       {
