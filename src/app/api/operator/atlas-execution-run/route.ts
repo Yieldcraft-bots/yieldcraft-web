@@ -1,10 +1,11 @@
 /**
  * ============================================================
- * YieldCraft Atlas
+ * YieldCraft Atlas Multi-Asset
  * Protected Execution Run
  *
  * PURPOSE
- * Execute only an already approved and authorized Atlas plan.
+ * Execute only an already approved and authorized
+ * Atlas Multi-Asset plan.
  *
  * SAFETY
  * - Operator controlled
@@ -15,10 +16,11 @@
  * - Gate required
  * - Executable instructions required
  * - Shadow execution default
- * - Live requires ATLAS_LIVE_ARMED=true
- * - Live requires ATLAS_DRY_RUN=false
+ * - Live requires ATLAS_MULTI_ASSET_LIVE_ARMED=true
+ * - Live requires ATLAS_MULTI_ASSET_DRY_RUN=false
  * - Optional productId may only NARROW an authorized plan
  * - No caller-created execution instructions
+ * - No legacy Atlas BTC controls
  * - No UI authority
  * - No Pulse
  * - No Recon
@@ -317,7 +319,6 @@ export async function POST(
 
     /*
      * Hard binding:
-     *
      * supplied approval must be exactly the approval
      * that created this authorization.
      */
@@ -380,10 +381,8 @@ export async function POST(
 
 
     /*
-     * Hard binding:
-     *
-     * approval and authorization must reference the
-     * exact same persisted portfolio plan.
+     * Approval and authorization must reference
+     * the exact same persisted portfolio plan.
      */
     if (
       approval.portfolioPlanId !==
@@ -451,10 +450,6 @@ export async function POST(
     }
 
 
-    /*
-     * Build instructions ONLY from the persisted,
-     * approved and authorized plan.
-     */
     const execution =
       buildAtlasExecutionInstructions(
         storedPlan.plan
@@ -485,12 +480,7 @@ export async function POST(
      * OPTIONAL SINGLE-PRODUCT NARROWING
      * ========================================================
      *
-     * For controlled production proofs an operator may specify
-     * one productId.
-     *
-     * This can only REDUCE the existing authorized instruction
-     * set. It cannot introduce an instruction that was not
-     * already generated from the persisted plan.
+     * productId can only REDUCE the instruction set.
      */
 
     const selectedInstructions =
@@ -531,11 +521,6 @@ export async function POST(
     }
 
 
-    /*
-     * A product ID should map to only one instruction in a
-     * deterministic plan. Fail closed if that invariant is
-     * violated.
-     */
     if (
       requestedProductId &&
       selectedInstructions.length !==
@@ -560,29 +545,30 @@ export async function POST(
 
     /*
      * ========================================================
-     * LIVE / SHADOW MODE
+     * MULTI-ASSET LIVE / SHADOW MODE
      * ========================================================
      *
      * IMPORTANT:
      *
-     * Live execution requires BOTH:
+     * These are deliberately independent from legacy Atlas.
      *
-     * ATLAS_LIVE_ARMED=true
-     * ATLAS_DRY_RUN=false
+     * Multi-Asset live execution requires BOTH:
      *
-     * Any missing, malformed, or true dry-run value fails
-     * safely to SHADOW.
+     * ATLAS_MULTI_ASSET_LIVE_ARMED=true
+     * ATLAS_MULTI_ASSET_DRY_RUN=false
+     *
+     * Missing/malformed values fail safely to SHADOW.
      */
 
     const liveArmed =
       process.env
-        .ATLAS_LIVE_ARMED ===
+        .ATLAS_MULTI_ASSET_LIVE_ARMED ===
       "true";
 
 
     const dryRunDisabled =
       process.env
-        .ATLAS_DRY_RUN ===
+        .ATLAS_MULTI_ASSET_DRY_RUN ===
       "false";
 
 
@@ -650,6 +636,9 @@ export async function POST(
             : "shadow",
 
         safety: {
+          scope:
+            "atlas_multi_asset",
+
           liveArmed,
 
           dryRun:
@@ -682,7 +671,9 @@ export async function POST(
       }
     );
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     return json(
       500,

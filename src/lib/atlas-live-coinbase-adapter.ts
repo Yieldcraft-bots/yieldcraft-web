@@ -1,34 +1,36 @@
 /**
  * ============================================================
- * YieldCraft Atlas
+ * YieldCraft Atlas Multi-Asset
  * Live Coinbase Adapter
  *
  * PURPOSE
- * Controlled Coinbase communication boundary for Atlas live
- * execution.
+ * Controlled Coinbase communication boundary for
+ * Atlas Multi-Asset live execution.
  *
  * SAFETY
+ * - Multi-Asset only
+ * - Requires ATLAS_MULTI_ASSET_LIVE_ARMED=true
+ * - Requires ATLAS_MULTI_ASSET_DRY_RUN=false
+ * - Independent from legacy Atlas live controls
+ * - No shared legacy Atlas order builder dependency
  * - No approval logic
  * - No authorization logic
  * - Equity orders require authoritative Coinbase tradability
  *   and normal-session proof before submission
- * - Crypto order behavior remains unchanged
  * - No UI access
  * - No Pulse
  * - No Recon
  * - No policy mutation
  *
- * This adapter only communicates with Coinbase.
+ * This adapter only communicates with Coinbase after all
+ * upstream execution boundaries have already authorized the
+ * instruction.
  * ============================================================
  */
 
 import type {
   AtlasExecutionInstruction,
 } from "./atlas-execution-adapter";
-
-import {
-  buildCoinbaseMarketBuyOrder,
-} from "./coinbase-order-builder";
 
 import {
   atlasCoinbasePost,
@@ -58,6 +60,25 @@ function money(
 
 
 /**
+ * Multi-Asset live execution is intentionally independent
+ * from legacy Atlas controls.
+ *
+ * Both dedicated flags are required.
+ */
+function multiAssetLiveEnabled(): boolean {
+
+  return (
+    process.env
+      .ATLAS_MULTI_ASSET_LIVE_ARMED ===
+      "true" &&
+    process.env
+      .ATLAS_MULTI_ASSET_DRY_RUN ===
+      "false"
+  );
+}
+
+
+/**
  * Coinbase crypto products use readable IDs such as:
  *
  * BTC-USD
@@ -75,6 +96,44 @@ function isAtlasEquityInstruction(
 
 
 /**
+ * Multi-Asset-specific crypto market order builder.
+ *
+ * IMPORTANT:
+ * This intentionally does NOT use the legacy/shared
+ * coinbase-order-builder.ts because that module depends on
+ * legacy ATLAS_LIVE_ARMED.
+ */
+function buildAtlasMultiAssetCryptoMarketBuyOrder(
+  userId: string,
+  instruction: AtlasExecutionInstruction
+) {
+
+  return {
+    client_order_id:
+      `yc_atlas_multi_asset_live_${userId.slice(
+        0,
+        8
+      )}_${Date.now()}`,
+
+    product_id:
+      instruction.productId,
+
+    side:
+      "BUY" as const,
+
+    order_configuration: {
+      market_market_ioc: {
+        quote_size:
+          money(
+            instruction.quoteSizeUsd
+          ),
+      },
+    },
+  };
+}
+
+
+/**
  * Build a Coinbase equity market buy for the NORMAL session.
  *
  * This payload is constructed only AFTER Coinbase's read-only
@@ -87,24 +146,18 @@ function isAtlasEquityInstruction(
  * - buys are enabled
  * - trading is not halted
  * - current session = EQUITY_TRADING_SESSION_NORMAL
- *
- * Atlas therefore never attempts this fractional/notional
- * market order during unsupported extended-hours sessions.
  */
 function buildAtlasEquityMarketBuyOrder(
   userId: string,
   instruction: AtlasExecutionInstruction
 ) {
 
-  const mode =
-    process.env.ATLAS_LIVE_ARMED === "true"
-      ? "live"
-      : "dry_run";
-
-
   return {
     client_order_id:
-      `yc_atlas_equity_${mode}_${userId.slice(0, 8)}_${Date.now()}`,
+      `yc_atlas_multi_asset_equity_live_${userId.slice(
+        0,
+        8
+      )}_${Date.now()}`,
 
     product_id:
       instruction.productId,
@@ -140,6 +193,48 @@ export async function submitAtlasLiveCoinbaseOrder(
 
   try {
 
+    /*
+     * ========================================================
+     * DEFENSE-IN-DEPTH LIVE GATE
+     * ========================================================
+     *
+     * Even if this adapter is called incorrectly from an
+     * upstream layer, Coinbase submission remains impossible
+     * unless BOTH dedicated Multi-Asset flags allow live mode.
+     */
+
+    if (
+      !multiAssetLiveEnabled()
+    ) {
+
+      return {
+        success: false,
+
+        submitted: false,
+
+        response: {
+          mode:
+            "blocked",
+
+          scope:
+            "atlas_multi_asset",
+
+          productId:
+            instruction.productId,
+
+          symbol:
+            instruction.symbol,
+
+          quoteSizeUsd:
+            instruction.quoteSizeUsd,
+
+          reason:
+            "atlas_multi_asset_live_not_enabled",
+        },
+      };
+    }
+
+
     const isEquity =
       isAtlasEquityInstruction(
         instruction
@@ -151,13 +246,12 @@ export async function submitAtlasLiveCoinbaseOrder(
      * EQUITY PRE-SUBMISSION GATE
      * ========================================================
      *
-     * This performs a separate authenticated GET against the
-     * exact Coinbase equity product.
+     * Authenticated GET against the exact Coinbase product.
      *
-     * If Coinbase cannot affirmatively prove the product is
-     * currently suitable for our normal-session market order,
-     * fail closed BEFORE POST /orders.
+     * Fail closed before POST /orders unless Coinbase
+     * affirmatively proves normal-session tradability.
      */
+
     if (isEquity) {
 
       const tradability =
@@ -167,7 +261,9 @@ export async function submitAtlasLiveCoinbaseOrder(
         );
 
 
-      if (!tradability.allowed) {
+      if (
+        !tradability.allowed
+      ) {
 
         return {
           success: false,
@@ -177,6 +273,9 @@ export async function submitAtlasLiveCoinbaseOrder(
           response: {
             mode:
               "live",
+
+            scope:
+              "atlas_multi_asset",
 
             assetType:
               "equity",
@@ -209,7 +308,7 @@ export async function submitAtlasLiveCoinbaseOrder(
 
     /*
      * ========================================================
-     * ORDER PAYLOAD
+     * MULTI-ASSET ORDER PAYLOAD
      * ========================================================
      */
 
@@ -219,11 +318,9 @@ export async function submitAtlasLiveCoinbaseOrder(
             userId,
             instruction
           )
-        : buildCoinbaseMarketBuyOrder(
+        : buildAtlasMultiAssetCryptoMarketBuyOrder(
             userId,
-            instruction.productId,
-            instruction.quoteSizeUsd,
-            true
+            instruction
           );
 
 
@@ -241,7 +338,9 @@ export async function submitAtlasLiveCoinbaseOrder(
       );
 
 
-    if (!result.success) {
+    if (
+      !result.success
+    ) {
 
       return {
         success: false,
@@ -251,6 +350,9 @@ export async function submitAtlasLiveCoinbaseOrder(
         response: {
           mode:
             "live",
+
+          scope:
+            "atlas_multi_asset",
 
           assetType:
             isEquity
@@ -288,6 +390,9 @@ export async function submitAtlasLiveCoinbaseOrder(
         mode:
           "live",
 
+        scope:
+          "atlas_multi_asset",
+
         assetType:
           isEquity
             ? "equity"
@@ -310,7 +415,9 @@ export async function submitAtlasLiveCoinbaseOrder(
       },
     };
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     return {
       success: false,
@@ -320,6 +427,9 @@ export async function submitAtlasLiveCoinbaseOrder(
       response: {
         mode:
           "live",
+
+        scope:
+          "atlas_multi_asset",
 
         productId:
           instruction.productId,
@@ -336,7 +446,9 @@ export async function submitAtlasLiveCoinbaseOrder(
         error:
           error instanceof Error
             ? error.message
-            : String(error),
+            : String(
+                error
+              ),
       },
     };
   }
