@@ -203,7 +203,7 @@ export default function AtlasQuickStartPage() {
               </Pill>
 
               <Pill>
-                Buy-only
+                Accumulation-focused
               </Pill>
             </div>
           </div>

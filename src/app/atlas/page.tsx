@@ -276,20 +276,22 @@ export default function AtlasPage() {
           </Section>
 
           <Section title="Dedicated Atlas Account Structure">
-            <p className="text-slate-300">
-              <span className="font-semibold text-slate-200">
-                Atlas requires a separate Coinbase account or dedicated
-                portfolio from other YieldCraft execution systems.
-              </span>{" "}
-              This separation protects accounting, credentials, and strategy
-              boundaries.
-            </p>
+  <p className="text-slate-300">
+    <span className="font-semibold text-slate-200">
+      Atlas uses a dedicated account or portfolio connection for supported
+      execution activity.
+    </span>{" "}
+    Keeping Atlas separate from other YieldCraft execution systems protects
+    accounting, credentials, and strategy boundaries.
+  </p>
 
-            <p className="mt-3 text-slate-400">
-              Do not use the same API credentials or active trading funds for
-              both Atlas and Pulse.
-            </p>
-          </Section>
+  <p className="mt-3 text-slate-400">
+    Do not use the same API credentials or active trading funds for both Atlas
+    and Pulse. Asset execution may use different supported execution venues or
+    infrastructure depending on the asset, account capability, market
+    availability, and execution eligibility.
+  </p>
+</Section>
 
           <Section title="Existing Atlas Client?">
             <p className="text-slate-300">

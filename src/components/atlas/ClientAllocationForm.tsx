@@ -25,19 +25,19 @@ const ASSET_GROUPS: readonly AssetGroupDefinition[] = [
     key: "CRYPTO",
     title: "Crypto",
     description:
-      "Digital assets available for Atlas portfolio configuration.",
+      "Digital assets supported within the Atlas portfolio configuration universe. Execution remains subject to account and market eligibility.",
   },
   {
     key: "PRIVATE",
     title: "Private Markets",
     description:
-      "Private-market exposure represented within your Atlas strategy.",
+      "Selected private-market exposure represented within the Atlas strategy. Configuration does not represent immediate availability, liquidity, or guaranteed execution.",
   },
   {
     key: "STOCK",
     title: "Equities",
     description:
-      "Public-company allocations across the Atlas equity universe.",
+      "Public-company allocations within the Atlas portfolio configuration universe. Execution remains subject to market session, account capability, asset availability, and execution eligibility.",
   },
 ];
 
