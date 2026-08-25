@@ -1,25 +1,34 @@
 /**
  * ============================================================
  * YieldCraft Atlas Multi-Asset
- * Governance Run
+ * Intelligence Governance Run
  * ------------------------------------------------------------
  * PURPOSE
  * Resolve authoritative per-client Coinbase USD funding,
- * accumulate only genuinely unprocessed cash into persistent
- * per-asset buckets, build an execution plan from those buckets,
- * and advance executable plans through governance.
+ * commit 100% of genuinely unprocessed Atlas cash into the
+ * client's saved target allocation, persist pending capital,
+ * evaluate real market conditions through isolated Multi-Asset
+ * intelligence, persist the intelligence-approved deterministic
+ * portfolio plan, and advance it through governance.
+ *
+ * CORE RULES
+ * - 100% of genuinely new Atlas cash becomes portfolio capital
+ * - Client allocation remains authoritative
+ * - Intelligence controls BUY timing/staging only
+ * - Intelligence cannot redirect dollars between assets
+ * - Atlas never creates SELL instructions
+ * - Pending capital remains assigned when intelligence waits
  *
  * SAFETY
  * - Operator controlled
  * - Client allocation driven
- * - Per-client Atlas Coinbase credentials
- * - Read-only Coinbase balance access
+ * - Per-client Atlas Coinbase funding read
  * - Multi-Asset state tables only
  * - Same observed cash cannot be allocated repeatedly
- * - Deterministic portfolio identity prevents identical
- *   pending state from appearing as a new plan every cycle
- * - Uses existing approval state machine
- * - Uses existing authorization state machine
+ * - Intelligence-approved plan is what governance authorizes
+ * - Deterministic plan identity
+ * - Existing approval state machine
+ * - Existing authorization state machine
  * - No execution dispatch
  * - No Coinbase order submission
  * - No Pulse
@@ -58,6 +67,10 @@ import {
   buildAtlasPendingPortfolioPlan,
 } from "@/lib/atlas-multi-asset-pending-plan";
 
+import {
+  buildAtlasMultiAssetIntelligencePlan,
+} from "@/lib/atlas-multi-asset-intelligence/intelligence-plan";
+
 
 export const runtime =
   "nodejs";
@@ -70,7 +83,6 @@ function json(
   status: number,
   body: unknown
 ) {
-
   return NextResponse.json(
     body,
     {
@@ -86,13 +98,12 @@ function json(
 
 
 /**
- * Produce a stable JSON representation so object-key ordering
- * can never change the deterministic plan fingerprint.
+ * Produce stable JSON so object-key ordering cannot change
+ * deterministic portfolio identity.
  */
 function canonicalize(
   value: unknown
 ): unknown {
-
   if (
     value === null ||
     typeof value !==
@@ -100,7 +111,6 @@ function canonicalize(
   ) {
     return value;
   }
-
 
   if (
     Array.isArray(
@@ -112,14 +122,12 @@ function canonicalize(
     );
   }
 
-
   const input =
     value as
       Record<
         string,
         unknown
       >;
-
 
   const output:
     Record<
@@ -128,40 +136,33 @@ function canonicalize(
     > =
       {};
 
-
   for (
     const key
     of Object.keys(
       input
     ).sort()
   ) {
-
     output[key] =
       canonicalize(
         input[key]
       );
   }
 
-
   return output;
 }
 
 
 /**
- * Convert a deterministic SHA-256 digest into a UUID-shaped
- * identifier suitable for the existing portfolio_plan_id.
- *
- * Same user + same actual portfolio plan contents
+ * Same user + same intelligence-approved plan contents
  * => same portfolioPlanId.
  *
- * Any material pending-plan change
+ * Any material intelligence-approved plan change
  * => different portfolioPlanId.
  */
 function createDeterministicPortfolioPlanId(
   userId: string,
   portfolioPlan: unknown
 ): string {
-
   const canonicalPayload =
     JSON.stringify(
       canonicalize({
@@ -174,7 +175,6 @@ function createDeterministicPortfolioPlanId(
       })
     );
 
-
   const digest =
     crypto
       .createHash(
@@ -186,7 +186,6 @@ function createDeterministicPortfolioPlanId(
       .digest(
         "hex"
       );
-
 
   /*
    * UUID-shaped deterministic value.
@@ -211,7 +210,6 @@ function createDeterministicPortfolioPlanId(
         32
       )
     );
-
 
   return [
     uuidHex.slice(
@@ -247,7 +245,6 @@ function createDeterministicPortfolioPlanId(
 function okAuth(
   req: Request
 ) {
-
   const secret =
     process.env
       .ATLAS_MULTI_ASSET_RUN_SECRET
@@ -260,11 +257,9 @@ function okAuth(
       ?.trim() ||
     "";
 
-
   if (!secret) {
     return false;
   }
-
 
   const header =
     req.headers.get(
@@ -277,7 +272,6 @@ function okAuth(
       "authorization"
     );
 
-
   if (
     header === secret ||
     header ===
@@ -286,12 +280,10 @@ function okAuth(
     return true;
   }
 
-
   const url =
     new URL(
       req.url
     );
-
 
   return (
     url.searchParams.get(
@@ -304,8 +296,12 @@ function okAuth(
 export async function POST(
   req: Request
 ) {
-
   try {
+    /*
+     * ========================================================
+     * AUTH
+     * ========================================================
+     */
 
     if (
       !okAuth(
@@ -324,6 +320,12 @@ export async function POST(
     }
 
 
+    /*
+     * ========================================================
+     * REQUEST
+     * ========================================================
+     */
+
     const body =
       await req
         .json()
@@ -331,7 +333,6 @@ export async function POST(
           () =>
             null
         );
-
 
     if (
       typeof body !==
@@ -358,13 +359,6 @@ export async function POST(
       );
 
 
-    const userId =
-      typeof userIdValue ===
-        "string"
-        ? userIdValue.trim()
-        : "";
-
-
     const deployPctValue =
       Reflect.get(
         body,
@@ -386,18 +380,35 @@ export async function POST(
       );
 
 
+    const userId =
+      typeof userIdValue ===
+        "string"
+        ? userIdValue.trim()
+        : "";
+
+
+    /*
+     * Compatibility values.
+     *
+     * deployPct no longer reduces Multi-Asset capital
+     * accounting.
+     *
+     * minCash no longer blocks accumulation.
+     *
+     * minBuy remains the execution-readiness minimum.
+     */
     const deployPct =
       typeof deployPctValue ===
         "number"
         ? deployPctValue
-        : 20;
+        : 100;
 
 
     const minCash =
       typeof minCashValue ===
         "number"
         ? minCashValue
-        : 10;
+        : 0;
 
 
     const minBuy =
@@ -481,7 +492,7 @@ export async function POST(
 
     /*
      * ========================================================
-     * 1. AUTHORITATIVE COINBASE FUNDING
+     * 1. AUTHORITATIVE CLIENT FUNDING
      * ========================================================
      */
 
@@ -489,7 +500,6 @@ export async function POST(
 
 
     try {
-
       funding =
         await getAtlasClientFundingBalance(
           userId
@@ -498,7 +508,6 @@ export async function POST(
     } catch (
       error
     ) {
-
       return json(
         200,
         {
@@ -567,33 +576,15 @@ export async function POST(
 
 
     /*
-     * Minimum cash gate occurs BEFORE accumulation.
+     * There is intentionally NO pre-accumulation minCash gate.
+     *
+     * Even small verified balances belong in portfolio state.
      */
-    if (
-      availableCash <
-      minCash
-    ) {
-      return json(
-        200,
-        {
-          ok: true,
-
-          status:
-            "blocked",
-
-          reason:
-            "below_min_cash",
-
-          funding:
-            fundingSummary,
-        }
-      );
-    }
 
 
     /*
      * ========================================================
-     * 2. CLIENT ALLOCATION
+     * 2. AUTHORITATIVE CLIENT ALLOCATION
      * ========================================================
      */
 
@@ -605,7 +596,7 @@ export async function POST(
 
     if (
       allocationRows.length ===
-      0
+        0
     ) {
       return json(
         200,
@@ -627,14 +618,8 @@ export async function POST(
 
     /*
      * ========================================================
-     * 3. PERSISTENT MULTI-ASSET ACCUMULATION
+     * 3. PERSISTENT 100% CAPITAL ACCUMULATION
      * ========================================================
-     *
-     * Only genuinely unprocessed cash contributes new dollars
-     * to the client's per-asset pending buckets.
-     *
-     * An unchanged Coinbase balance cannot repeatedly produce
-     * another deployment amount.
      */
 
     const accumulation =
@@ -682,17 +667,15 @@ export async function POST(
 
     /*
      * ========================================================
-     * 4. BUILD PLAN FROM PERSISTED/PENDING BUCKETS
+     * 4. BASE PENDING PORTFOLIO PLAN
      * ========================================================
      *
-     * We intentionally do NOT feed the full Coinbase balance
-     * back through the old percentage planner here.
+     * This represents the complete committed pending portfolio.
      *
-     * The pending buckets are now the authoritative planned
-     * dollar amounts.
+     * Intelligence has NOT reduced/staged anything yet.
      */
 
-    const portfolioPlan =
+    const basePortfolioPlan =
       buildAtlasPendingPortfolioPlan({
         buckets:
           accumulation
@@ -708,7 +691,7 @@ export async function POST(
 
 
     if (
-      !portfolioPlan.valid
+      !basePortfolioPlan.valid
     ) {
       return json(
         200,
@@ -726,26 +709,35 @@ export async function POST(
 
           accumulation,
 
-          portfolioPlan,
+          basePortfolioPlan,
         }
       );
     }
 
 
-    const executableOrders =
-      portfolioPlan
-        .orders
-        .filter(
-          (
-            order
-          ) =>
-            order.executable
-        );
+    /*
+     * ========================================================
+     * 5. ISOLATED MULTI-ASSET INTELLIGENCE
+     * ========================================================
+     *
+     * Reads market observations and determines BUY_NOW,
+     * SCALE_IN, WAIT, or BLOCK for each pending asset.
+     *
+     * No execution occurs here.
+     */
+
+    const intelligencePlan =
+      await buildAtlasMultiAssetIntelligencePlan({
+        basePlan:
+          basePortfolioPlan,
+
+        minOrderUsd:
+          minBuy,
+      });
 
 
     if (
-      executableOrders.length ===
-      0
+      !intelligencePlan.valid
     ) {
       return json(
         200,
@@ -756,14 +748,97 @@ export async function POST(
             "blocked",
 
           reason:
-            "pending_below_minimum",
+            intelligencePlan.reason,
 
           funding:
             fundingSummary,
 
           accumulation,
 
-          portfolioPlan,
+          intelligence:
+            intelligencePlan,
+        }
+      );
+    }
+
+
+    /*
+     * The intelligence-approved plan is now THE plan that may
+     * advance through governance.
+     *
+     * Governance can never authorize amounts different from
+     * what intelligence approved during this cycle.
+     */
+
+    const portfolioPlan =
+      intelligencePlan
+        .approvedPlan;
+
+
+    const executableOrders =
+      portfolioPlan
+        .orders
+        .filter(
+          (
+            order
+          ) =>
+            order.executable &&
+            Boolean(
+              order.productId
+            ) &&
+            order.proposedBuyUsd >=
+              minBuy
+        );
+
+
+    /*
+     * No intelligence-approved entry this cycle.
+     *
+     * Persistent pending capital is NOT deleted or redirected.
+     * It remains assigned and will be evaluated again later.
+     */
+    if (
+      executableOrders.length ===
+        0
+    ) {
+      return json(
+        200,
+        {
+          ok: true,
+
+          status:
+            "intelligence_wait",
+
+          reason:
+            "no_intelligence_approved_orders",
+
+          funding:
+            fundingSummary,
+
+          accounting: {
+            model:
+              "full_capital_commitment",
+
+            newCashCommitmentPct:
+              100,
+
+            minCashBlocksAccumulation:
+              false,
+
+            minBuyUsd:
+              minBuy,
+          },
+
+          accumulation,
+
+          intelligence:
+            intelligencePlan,
+
+          execution:
+            "NOT_CALLED",
+
+          coinbaseOrdersSubmitted:
+            0,
         }
       );
     }
@@ -771,16 +846,11 @@ export async function POST(
 
     /*
      * ========================================================
-     * 5. DETERMINISTIC PORTFOLIO IDENTITY
+     * 6. DETERMINISTIC INTELLIGENCE-APPROVED PLAN ID
      * ========================================================
      *
-     * An unchanged pending plan receives the SAME plan ID.
-     *
-     * This prevents a recurring scheduler from disguising the
-     * same pending state as a brand-new portfolio plan.
-     *
-     * A material change to pending allocations/orders creates
-     * a different deterministic plan ID.
+     * We fingerprint the exact plan intelligence approved,
+     * including staged dollar amounts.
      */
 
     const portfolioPlanId =
@@ -791,8 +861,10 @@ export async function POST(
 
 
     /*
-     * Existing repository upsert semantics make saving this
-     * same deterministic plan safe and idempotent.
+     * Persist EXACTLY the intelligence-approved plan.
+     *
+     * The protected execution route later reloads this persisted
+     * plan. It cannot create caller-supplied instructions.
      */
     await saveAtlasPortfolioPlan({
       portfolioPlanId,
@@ -806,14 +878,12 @@ export async function POST(
 
     /*
      * ========================================================
-     * 6. GOVERNANCE
+     * 7. GOVERNANCE
      * ========================================================
      *
-     * Still NO execution and NO Coinbase order submission.
+     * Existing deterministic approval/authorization system.
      *
-     * The orchestrator is responsible for reusing existing
-     * governance for this deterministic plan instead of
-     * creating duplicate active approvals/authorizations.
+     * STILL NO EXECUTION HERE.
      */
 
     const governance =
@@ -824,10 +894,17 @@ export async function POST(
       });
 
 
+    /*
+     * ========================================================
+     * RESPONSE
+     * ========================================================
+     */
+
     return json(
       200,
       {
-        ok: true,
+        ok:
+          true,
 
         status:
           "authorized_ready",
@@ -835,7 +912,41 @@ export async function POST(
         funding:
           fundingSummary,
 
+        accounting: {
+          model:
+            "full_capital_commitment",
+
+          newCashCommitmentPct:
+            100,
+
+          minCashBlocksAccumulation:
+            false,
+
+          minBuyUsd:
+            minBuy,
+        },
+
         accumulation,
+
+        intelligence: {
+          valid:
+            intelligencePlan.valid,
+
+          reason:
+            intelligencePlan.reason,
+
+          portfolio:
+            intelligencePlan.intelligence,
+
+          observations:
+            intelligencePlan.observations,
+
+          basePlan:
+            intelligencePlan.basePlan,
+
+          approvedPlan:
+            intelligencePlan.approvedPlan,
+        },
 
         plan: {
           userId,
@@ -845,28 +956,49 @@ export async function POST(
           deterministic:
             true,
 
+          intelligenceApproved:
+            true,
+
           allocationRows,
 
           portfolioPlan,
         },
 
         governance,
+
+        /*
+         * Execution remains deliberately separate.
+         *
+         * The already-proven protected executor consumes only
+         * this persisted + approved + authorized plan.
+         */
+        execution:
+          "NOT_CALLED",
+
+        coinbaseOrdersSubmitted:
+          0,
       }
     );
 
   } catch (
     error
   ) {
-
     return json(
       500,
       {
-        ok: false,
+        ok:
+          false,
 
         error:
           error instanceof Error
             ? error.message
             : "unknown_error",
+
+        execution:
+          "NOT_CALLED",
+
+        coinbaseOrdersSubmitted:
+          0,
       }
     );
   }

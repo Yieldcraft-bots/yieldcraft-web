@@ -4,11 +4,20 @@
  * Pending Allocation Accumulation Engine
  * ------------------------------------------------------------
  * PURPOSE
- * Convert newly observed/unprocessed USD cash into deterministic
- * per-asset pending allocation balances.
+ * Convert 100% of genuinely new/unprocessed Atlas cash into
+ * deterministic per-asset pending allocation balances using
+ * the client's saved target allocation.
+ *
+ * CORE MULTI-ASSET RULE
+ * Every genuinely new Atlas dollar is committed to the client's
+ * portfolio allocation.
+ *
+ * Intelligence and execution timing are separate concerns.
+ * This engine accounts capital; it does not decide when to trade.
  *
  * SAFETY
  * - Pure calculation only
+ * - Multi-Asset only
  * - No Supabase
  * - No Coinbase
  * - No execution
@@ -21,27 +30,31 @@
  *
  * IMPORTANT
  * This engine does NOT decide whether cash came from a deposit,
- * sale, refund, or other source.
+ * sale, refund, transfer, or other source.
  *
  * It only prevents the SAME observed cash from being allocated
  * repeatedly across automation cycles.
  *
  * Sell/deposit-source safeguards remain a separate launch gate.
+ *
+ * BACKWARD COMPATIBILITY
+ * deployPct remains in the input contract temporarily so existing
+ * Multi-Asset callers do not break during launch migration.
+ *
+ * It no longer reduces portfolio accounting. 100% of genuinely
+ * new cash is committed to the client's allocation.
  * ============================================================
  */
-
 
 export type AtlasMultiAssetAllocationTarget = {
   symbol: string;
   targetPercent: number;
 };
 
-
 export type AtlasMultiAssetPendingInput = {
   symbol: string;
   pendingUsd: number;
 };
-
 
 export type AtlasMultiAssetAccumulationBucket = {
   symbol: string;
@@ -59,12 +72,19 @@ export type AtlasMultiAssetAccumulationBucket = {
   executable: boolean;
 };
 
-
 export type AtlasMultiAssetAccumulationInput = {
   currentCashUsd: number;
 
   accountedCashUsd: number;
 
+  /**
+   * Temporary compatibility field.
+   *
+   * Multi-Asset portfolio accounting now commits 100% of
+   * genuinely new cash regardless of this value.
+   *
+   * Intelligent deployment timing belongs downstream.
+   */
   deployPct: number;
 
   minOrderUsd: number;
@@ -75,7 +95,6 @@ export type AtlasMultiAssetAccumulationInput = {
   existingPending:
     readonly AtlasMultiAssetPendingInput[];
 };
-
 
 export type AtlasMultiAssetAccumulationResult = {
   valid: boolean;
@@ -98,6 +117,12 @@ export type AtlasMultiAssetAccumulationResult = {
 
   newUnprocessedCashUsd: number;
 
+  /**
+   * Compatibility field name.
+   *
+   * This now represents 100% of newly committed portfolio
+   * capital, not a percentage-reduced deployment amount.
+   */
   newlyDeployableUsd: number;
 
   resultingAccountedCashUsd: number;
@@ -108,54 +133,50 @@ export type AtlasMultiAssetAccumulationResult = {
     AtlasMultiAssetAccumulationBucket[];
 };
 
-
 function money(
   value: number
 ): number {
-
   return Number(
     value.toFixed(8)
   );
 }
 
-
 function normalizeSymbol(
   value: string
 ): string {
-
   return value
     .trim()
     .toUpperCase();
 }
 
-
 export function calculateAtlasMultiAssetAccumulation(
   input: AtlasMultiAssetAccumulationInput
 ): AtlasMultiAssetAccumulationResult {
-
   const currentCashUsd =
     money(
       input.currentCashUsd
     );
-
 
   const accountedCashUsd =
     money(
       input.accountedCashUsd
     );
 
-
+  /*
+   * deployPct is retained temporarily for caller compatibility.
+   *
+   * We still validate it while the old contract exists, but it
+   * does NOT reduce Multi-Asset portfolio accounting.
+   */
   const deployPct =
     Number(
       input.deployPct
     );
 
-
   const minOrderUsd =
     money(
       input.minOrderUsd
     );
-
 
   if (
     !Number.isFinite(
@@ -179,7 +200,6 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
   if (
     !Number.isFinite(
       accountedCashUsd
@@ -202,7 +222,13 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
+  /*
+   * Temporary compatibility validation.
+   *
+   * Once all Multi-Asset callers have migrated away from the
+   * legacy deployPct contract, this field can be removed in a
+   * separate isolated cleanup.
+   */
   if (
     !Number.isFinite(
       deployPct
@@ -226,7 +252,6 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
   if (
     !Number.isFinite(
       minOrderUsd
@@ -249,7 +274,6 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
   if (
     input.allocations.length === 0
   ) {
@@ -269,7 +293,6 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
   const allocations =
     input.allocations.map(
       (allocation) => ({
@@ -285,13 +308,11 @@ export function calculateAtlasMultiAssetAccumulation(
       })
     );
 
-
   const symbols =
     allocations.map(
       (allocation) =>
         allocation.symbol
     );
-
 
   if (
     new Set(
@@ -315,7 +336,6 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
   const allocationTotalPercent =
     money(
       allocations.reduce(
@@ -328,7 +348,6 @@ export function calculateAtlasMultiAssetAccumulation(
         0
       )
     );
-
 
   if (
     allocationTotalPercent !==
@@ -350,7 +369,6 @@ export function calculateAtlasMultiAssetAccumulation(
     };
   }
 
-
   /*
    * If cash decreased since the last observation, rebase
    * the accounting baseline downward.
@@ -360,7 +378,9 @@ export function calculateAtlasMultiAssetAccumulation(
    *
    * IMPORTANT:
    * The SOURCE of a future increase is NOT decided here.
-   * Sell/deposit classification belongs to a separate gate.
+   *
+   * Deposit / sale / refund / transfer classification belongs
+   * to a separate Multi-Asset source-safeguard layer.
    */
   const rebasedAccountedCashUsd =
     money(
@@ -370,33 +390,39 @@ export function calculateAtlasMultiAssetAccumulation(
       )
     );
 
-
   const newUnprocessedCashUsd =
     money(
       Math.max(
         currentCashUsd -
-        rebasedAccountedCashUsd,
+          rebasedAccountedCashUsd,
         0
       )
     );
 
-
   /*
-   * Apply deployment intelligence ONLY to genuinely
-   * unprocessed cash.
+   * ==========================================================
+   * MULTI-ASSET 100% CAPITAL COMMITMENT
+   * ==========================================================
    *
-   * The same unchanged Coinbase cash therefore cannot
-   * generate another deployment amount on the next cron.
+   * Every genuinely new Atlas dollar is committed to the
+   * client's current target portfolio.
+   *
+   * We deliberately DO NOT apply legacy-style deployPct here.
+   *
+   * This is portfolio accounting, not market-entry timing.
+   *
+   * Intelligence downstream decides:
+   * - BUY NOW
+   * - SCALE IN
+   * - WAIT
+   * - BLOCK
+   *
+   * Capital that is not yet executed remains assigned/pending.
    */
   const newlyDeployableUsd =
     money(
-      newUnprocessedCashUsd *
-      (
-        deployPct /
-        100
-      )
+      newUnprocessedCashUsd
     );
-
 
   const pendingMap =
     new Map<
@@ -404,17 +430,14 @@ export function calculateAtlasMultiAssetAccumulation(
       number
     >();
 
-
   for (
     const pending
     of input.existingPending
   ) {
-
     const symbol =
       normalizeSymbol(
         pending.symbol
       );
-
 
     const amount =
       money(
@@ -422,7 +445,6 @@ export function calculateAtlasMultiAssetAccumulation(
           pending.pendingUsd
         )
       );
-
 
     if (
       !symbol ||
@@ -434,13 +456,11 @@ export function calculateAtlasMultiAssetAccumulation(
       continue;
     }
 
-
     pendingMap.set(
       symbol,
       amount
     );
   }
-
 
   const buckets =
     allocations.map(
@@ -448,7 +468,6 @@ export function calculateAtlasMultiAssetAccumulation(
         allocation
       ):
         AtlasMultiAssetAccumulationBucket => {
-
         const previousPendingUsd =
           money(
             pendingMap.get(
@@ -457,28 +476,34 @@ export function calculateAtlasMultiAssetAccumulation(
             0
           );
 
-
+        /*
+         * 100% of genuinely new cash is distributed according
+         * to the client's saved 100% target allocation.
+         */
         const addedPendingUsd =
           money(
             newlyDeployableUsd *
-            (
-              allocation.targetPercent /
-              100
-            )
+              (
+                allocation.targetPercent /
+                100
+              )
           );
-
 
         const pendingUsd =
           money(
             previousPendingUsd +
-            addedPendingUsd
+              addedPendingUsd
           );
 
-
+        /*
+         * minOrderUsd is an EXECUTION-readiness threshold only.
+         *
+         * Amounts below this threshold remain safely pending
+         * and continue accumulating across future cycles.
+         */
         const executable =
           pendingUsd >=
           minOrderUsd;
-
 
         return {
           symbol:
@@ -503,21 +528,24 @@ export function calculateAtlasMultiAssetAccumulation(
       }
     );
 
-
   /*
    * Once this observation has been successfully persisted,
    * the current cash becomes the accounting baseline.
    *
-   * A repeat cron with unchanged cash therefore produces:
+   * Because 100% of newUnprocessedCashUsd has now entered
+   * portfolio pending state, advancing the baseline does not
+   * strand an undeployed percentage of the contribution.
+   *
+   * A repeat cycle with unchanged cash therefore produces:
    *
    * newUnprocessedCashUsd = 0
    * newlyDeployableUsd    = 0
    *
-   * Existing pending buckets remain unchanged.
+   * Existing pending buckets remain unchanged and available
+   * for downstream intelligence/execution evaluation.
    */
   const resultingAccountedCashUsd =
     currentCashUsd;
-
 
   return {
     valid: true,
