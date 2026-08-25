@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-const SENTINEL_STRIPE_LINK =
+const ATLAS_STRIPE_LINK =
   process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS || "/pricing";
 
 export default function AtlasPage() {
@@ -19,13 +19,20 @@ export default function AtlasPage() {
 
           <Link
             href="/atlas/quick-start"
-            className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
+            className="rounded-full border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-sm font-semibold text-sky-200 hover:border-sky-400"
           >
-            View Atlas Quick Start Guide
+            Atlas Quick Start
+          </Link>
+
+          <Link
+            href="/atlas/allocation"
+            className="rounded-full bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-sky-300"
+          >
+            Set My Allocation
           </Link>
 
           <a
-            href={SENTINEL_STRIPE_LINK}
+            href={ATLAS_STRIPE_LINK}
             target="_blank"
             rel="noreferrer"
             className="rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
@@ -37,161 +44,296 @@ export default function AtlasPage() {
         {/* Hero */}
         <div className="mb-12">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-400">
-            Long-term engine
+            Multi-asset long-term engine
           </p>
 
           <h1 className="mt-3 text-3xl font-bold text-slate-50 md:text-5xl">
             Atlas by YieldCraft
           </h1>
 
-          <p className="mt-4 max-w-2xl text-slate-400">
-            A disciplined accumulation engine designed to build long-term
-            positions automatically — without screen time, prediction, or
-            emotional decisions.
+          <p className="mt-4 max-w-3xl text-lg leading-7 text-slate-300">
+            Build a long-term portfolio around the allocation you choose.
+            Atlas combines client-defined portfolio targets with disciplined,
+            rules-based accumulation and protected execution infrastructure.
+          </p>
+
+          <p className="mt-4 max-w-3xl text-sm leading-6 text-slate-400">
+            Configure how you want your Atlas portfolio distributed across the
+            supported Atlas asset universe. Atlas then uses that allocation as
+            the foundation for future portfolio planning as eligible capital
+            becomes available.
           </p>
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
-            <span className="rounded-full border border-slate-800 bg-slate-900/40 px-4 py-2 text-sm text-slate-200">
-              Buy-only
-            </span>
-            <span className="rounded-full border border-slate-800 bg-slate-900/40 px-4 py-2 text-sm text-slate-200">
-              Continuous monitoring
-            </span>
-            <span className="rounded-full border border-slate-800 bg-slate-900/40 px-4 py-2 text-sm text-slate-200">
-              Liquidity-first
-            </span>
-            <span className="rounded-full border border-slate-800 bg-slate-900/40 px-4 py-2 text-sm text-slate-200">
-              Client-controlled exits
-            </span>
+            <Pill>Client-defined allocation</Pill>
+            <Pill>Multi-asset portfolio</Pill>
+            <Pill>Buy-only accumulation</Pill>
+            <Pill>Protected execution</Pill>
+            <Pill>Client-controlled exits</Pill>
           </div>
 
-          <p className="mt-4 max-w-2xl text-sm text-slate-400">
-            Runs independently from Pulse — with a dedicated long-term account
-            structure.
+          <div className="mt-7 flex flex-wrap gap-3">
+            <Link
+              href="/atlas/allocation"
+              className="inline-flex items-center justify-center rounded-full bg-sky-400 px-6 py-3 text-sm font-semibold text-slate-950 shadow-lg hover:bg-sky-300"
+            >
+              Set or Update My Allocation
+            </Link>
+
+            <Link
+              href="/atlas/quick-start"
+              className="inline-flex items-center justify-center rounded-full border border-slate-700 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-slate-500"
+            >
+              New Client Quick Start
+            </Link>
+          </div>
+
+          <p className="mt-5 max-w-2xl text-sm text-slate-400">
+            Atlas runs independently from Pulse and uses a dedicated Atlas
+            account or portfolio structure so long-term capital remains
+            separated from active trading systems.
+          </p>
+        </div>
+
+        {/* Setup path */}
+        <section className="mb-8 rounded-3xl border border-sky-500/20 bg-sky-500/[0.06] p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-300">
+            Atlas client path
           </p>
 
-          <div className="mt-6 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-4">
-            <p className="text-sm font-semibold text-emerald-300">
-              Who Atlas is for
-            </p>
-            <div className="mt-2 space-y-1 text-xs text-slate-300">
-              <p>• You want to build long-term crypto positions without staring at charts</p>
-              <p>• You value discipline over hype and short-term trades</p>
-              <p>• You prefer steady accumulation over trying to time the market</p>
-            </div>
+          <h2 className="mt-2 text-xl font-semibold text-slate-50">
+            Configure Atlas in a few clear steps
+          </h2>
 
-            <p className="mt-4 text-sm font-semibold text-rose-300">
-              Who Atlas is NOT for
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <SetupStep
+              number="1"
+              title="Choose your allocation"
+              text="Set the target percentage you want assigned to each available Atlas asset."
+            />
+
+            <SetupStep
+              number="2"
+              title="Connect dedicated Coinbase access"
+              text="Use the Atlas connection separately from Pulse and other active systems."
+            />
+
+            <SetupStep
+              number="3"
+              title="Confirm readiness"
+              text="Review your portfolio configuration and confirm your Atlas setup is ready."
+            />
+          </div>
+
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Link
+              href="/atlas/allocation"
+              className="rounded-full bg-sky-400 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-300"
+            >
+              Configure Allocation
+            </Link>
+
+            <Link
+              href="/atlas/quick-start"
+              className="rounded-full border border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500"
+            >
+              View Full Setup Guide
+            </Link>
+          </div>
+        </section>
+
+        {/* Who it is for */}
+        <div className="mb-8 rounded-2xl border border-emerald-400/20 bg-emerald-400/5 p-5">
+          <p className="text-sm font-semibold text-emerald-300">
+            Who Atlas is for
+          </p>
+
+          <div className="mt-3 space-y-1.5 text-sm text-slate-300">
+            <p>
+              • You want a disciplined way to build a long-term portfolio.
             </p>
-            <div className="mt-2 space-y-1 text-xs text-slate-300">
-              <p>• You want fast trades or daily action</p>
-              <p>• You expect instant results or immediate buys</p>
-              <p>• You want a system that sells automatically</p>
-            </div>
+            <p>
+              • You want control over how your portfolio is allocated.
+            </p>
+            <p>
+              • You prefer gradual accumulation over trying to predict every
+              market move.
+            </p>
+            <p>
+              • You want long-term capital separated from active trading.
+            </p>
+          </div>
+
+          <p className="mt-5 text-sm font-semibold text-rose-300">
+            Who Atlas is NOT for
+          </p>
+
+          <div className="mt-3 space-y-1.5 text-sm text-slate-300">
+            <p>• You want constant trades or daily action.</p>
+            <p>• You expect immediate purchases after funding.</p>
+            <p>• You expect guaranteed returns.</p>
+            <p>• You want Atlas to automatically decide when you should sell.</p>
           </div>
         </div>
 
         {/* Content */}
         <div className="grid gap-6">
           <Section title="How Atlas Works">
-            <ul className="space-y-2 text-slate-300">
-              <li>
-                • Atlas continuously monitors market conditions — it does not
-                rely on fixed schedules.
-              </li>
-              <li>
-                • Capital is deployed gradually into a curated, high-liquidity
-                asset universe.
-              </li>
-              <li>
-                • Position sizing adapts based on conditions — not emotion.
-              </li>
-              <li>• It never forces trades and never reacts impulsively.</li>
-            </ul>
+            <div className="space-y-3 text-slate-300">
+              <p>
+                <span className="font-semibold text-slate-100">
+                  1. You choose the portfolio.
+                </span>{" "}
+                Set target percentages across the Atlas asset universe. Your
+                saved targets must total exactly 100%.
+              </p>
 
-            <p className="mt-4 text-slate-400">
+              <p>
+                <span className="font-semibold text-slate-100">
+                  2. Atlas observes available capital.
+                </span>{" "}
+                Atlas uses the dedicated account connection to evaluate
+                available funding for the long-term portfolio.
+              </p>
+
+              <p>
+                <span className="font-semibold text-slate-100">
+                  3. Capital accumulates toward your targets.
+                </span>{" "}
+                Small amounts can remain pending until they meet the applicable
+                minimum needed for an eligible purchase.
+              </p>
+
+              <p>
+                <span className="font-semibold text-slate-100">
+                  4. Protected controls remain between planning and execution.
+                </span>{" "}
+                Saving an allocation does not itself submit an order.
+              </p>
+            </div>
+
+            <p className="mt-5 text-slate-400">
               <span className="font-semibold text-slate-200">
-                Time, not timing, does the heavy lifting.
+                The goal is disciplined portfolio building, not constant
+                activity.
               </span>
             </p>
           </Section>
 
-          <Section title="You Control Profit Taking">
+          <Section title="Your Allocation, Your Portfolio">
+            <p className="text-slate-300">
+              Atlas gives you direct control over the target percentages used
+              to build your long-term portfolio.
+            </p>
+
+            <p className="mt-3 text-slate-400">
+              You can review and update your allocation from the Atlas
+              allocation page. A valid portfolio must total exactly 100%.
+            </p>
+
+            <div className="mt-5">
+              <Link
+                href="/atlas/allocation"
+                className="inline-flex rounded-full bg-sky-400 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-300"
+              >
+                Set My Allocation
+              </Link>
+            </div>
+          </Section>
+
+          <Section title="Multi-Asset Portfolio">
+            <p className="text-slate-300">
+              Atlas is being built as a multi-asset portfolio system spanning
+              digital assets, public equities, and selected additional
+              investment exposures supported by the Atlas platform.
+            </p>
+
+            <p className="mt-3 text-slate-400">
+              Asset availability can differ by product readiness, account
+              capability, market session, exchange support, and execution
+              eligibility. An asset appearing in portfolio configuration does
+              not guarantee that an immediate order can be placed.
+            </p>
+
+            <p className="mt-3 text-xs text-slate-500">
+              Atlas evaluates execution eligibility separately from portfolio
+              configuration and fails closed when required conditions are not
+              met.
+            </p>
+          </Section>
+
+          <Section title="You Control Selling and Withdrawals">
+            <p className="text-slate-300">
+              Atlas is designed around accumulation. It does not automatically
+              decide when you should take profit or exit a position.
+            </p>
+
+            <p className="mt-3 text-slate-400">
+              You remain responsible for your own selling, withdrawals,
+              investment objectives, tax considerations, and account-level
+              decisions.
+            </p>
+          </Section>
+
+          <Section title="Dedicated Atlas Account Structure">
             <p className="text-slate-300">
               <span className="font-semibold text-slate-200">
-                You are always in control of when you take profit.
+                Atlas requires a separate Coinbase account or dedicated
+                portfolio from other YieldCraft execution systems.
               </span>{" "}
-              Atlas never sells assets or decides when to exit positions. You
-              choose if, when, and how positions are reduced or exited based on
-              your own goals, timeline, and tax considerations.
+              This separation protects accounting, credentials, and strategy
+              boundaries.
             </p>
 
             <p className="mt-3 text-slate-400">
-              Atlas helps you build positions with discipline — it does not tell
-              you when your journey is complete.
+              Do not use the same API credentials or active trading funds for
+              both Atlas and Pulse.
             </p>
           </Section>
 
-          <Section title="What Happens If You Sell">
+          <Section title="Existing Atlas Client?">
             <p className="text-slate-300">
-              If you reduce or exit a position manually, Atlas automatically
-              adjusts future allocations based on current holdings. No reset is
-              required.
+              Your allocation is now a core part of Atlas setup. Configure or
+              update your portfolio targets, then review the resulting
+              portfolio preview.
             </p>
 
-            <p className="mt-3 text-slate-400">
-              Atlas is designed to adapt to client decisions — not override
-              them.
-            </p>
-          </Section>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <Link
+                href="/atlas/allocation"
+                className="inline-flex items-center justify-center rounded-full bg-sky-400 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-300"
+              >
+                Set / Update Allocation
+              </Link>
 
-          <Section title="Asset Selection & Liquidity">
-            <p className="text-slate-300">
-              Atlas allocates only among a small universe of large-cap, highly
-              liquid digital assets. Liquidity is a core requirement so clients
-              can exit efficiently when they choose.
-            </p>
+              <Link
+                href="/atlas/preview"
+                className="inline-flex items-center justify-center rounded-full border border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500"
+              >
+                Review Portfolio Preview
+              </Link>
 
-            <ul className="mt-4 space-y-2 text-slate-300">
-              <li>• Market capitalization stability</li>
-              <li>• Deep spot liquidity and execution reliability</li>
-              <li>• Network maturity and long-term relevance</li>
-              <li>• Exchange availability and operational durability</li>
-            </ul>
-
-            <p className="mt-4 text-xs text-slate-500">
-              Asset inclusion is reviewed periodically and adjusted
-              deliberately. Atlas does not chase trends or react to short-term
-              price movement.
-            </p>
-          </Section>
-
-          <Section title="Account Structure (Required)">
-            <p className="text-slate-300">
-              <span className="font-semibold text-slate-200">
-                Atlas requires a separate Coinbase account or separate dedicated
-                portfolio from all other YieldCraft systems.
-              </span>{" "}
-              This separation protects Pulse, prevents risk bleed, and preserves
-              clean accounting.
-            </p>
-
-            <p className="mt-3 text-slate-400">
-              Atlas manages long-term accumulation. Active execution systems
-              manage shorter-horizon opportunity. These systems must never share
-              funds or API credentials.
-            </p>
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center justify-center rounded-full border border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-100 hover:border-slate-500"
+              >
+                Dashboard
+              </Link>
+            </div>
           </Section>
 
           <Section title="Pricing">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
                 <p className="text-3xl font-bold text-slate-50">$9</p>
+
                 <p className="text-xs text-slate-500">
                   per month · flat pricing
                 </p>
+
                 <p className="mt-2 text-sm text-slate-400">
-                  Atlas is designed to scale with any account size.
+                  Atlas is designed as a dedicated long-term portfolio
+                  membership.
                 </p>
               </div>
 
@@ -200,11 +342,11 @@ export default function AtlasPage() {
                   href="/atlas/quick-start"
                   className="inline-flex items-center justify-center rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500"
                 >
-                  View Atlas Quick Start Guide
+                  Atlas Quick Start
                 </Link>
 
                 <a
-                  href={SENTINEL_STRIPE_LINK}
+                  href={ATLAS_STRIPE_LINK}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center justify-center rounded-full bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-lg hover:bg-amber-300"
@@ -216,11 +358,13 @@ export default function AtlasPage() {
           </Section>
 
           <div className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-            <p className="text-xs text-slate-500">
-              Disclaimer: Atlas by YieldCraft is an automation and discipline
-              system. It does not guarantee returns. Digital assets carry risk.
-              Clients remain responsible for funding, withdrawals, and any
-              manual selling decisions.
+            <p className="text-xs leading-5 text-slate-500">
+              Disclaimer: Atlas by YieldCraft is an automation and portfolio
+              discipline system. It does not guarantee returns or eliminate
+              investment risk. Markets can lose value. Asset availability and
+              execution eligibility may vary. Clients remain responsible for
+              funding, withdrawals, selling decisions, investment objectives,
+              and tax considerations.
             </p>
           </div>
         </div>
@@ -238,8 +382,55 @@ function Section({
 }) {
   return (
     <section className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
-      <h2 className="text-lg font-semibold text-slate-50">{title}</h2>
-      <div className="mt-3">{children}</div>
+      <h2 className="text-lg font-semibold text-slate-50">
+        {title}
+      </h2>
+
+      <div className="mt-3">
+        {children}
+      </div>
     </section>
+  );
+}
+
+function Pill({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  return (
+    <span className="rounded-full border border-slate-800 bg-slate-900/40 px-4 py-2 text-sm text-slate-200">
+      {children}
+    </span>
+  );
+}
+
+function SetupStep({
+  number,
+  title,
+  text,
+}: {
+  number: string;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+      <div className="flex items-start gap-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sky-400 text-xs font-bold text-slate-950">
+          {number}
+        </span>
+
+        <div>
+          <p className="text-sm font-semibold text-slate-100">
+            {title}
+          </p>
+
+          <p className="mt-1 text-xs leading-5 text-slate-400">
+            {text}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
