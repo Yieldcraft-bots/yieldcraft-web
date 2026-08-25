@@ -81,53 +81,138 @@ function json(
 }
 
 
+/*
+ * ============================================================
+ * AUTHENTICATION
+ * ============================================================
+ *
+ * Diagnostic access may authenticate using ANY legitimate
+ * configured Atlas/server secret.
+ *
+ * IMPORTANT:
+ * We intentionally do not use fallback priority here.
+ *
+ * A fallback expression such as:
+ *
+ *   A || B || C
+ *
+ * would make only A valid whenever A exists.
+ *
+ * Instead, every configured candidate is checked independently.
+ *
+ * Secret values are never returned.
+ */
+
 function okAuth(
   req: Request
 ): boolean {
-  const secret =
-    process.env
-      .ATLAS_MULTI_ASSET_RUN_SECRET
-      ?.trim() ||
-    process.env
-      .ATLAS_RUN_SECRET
-      ?.trim() ||
-    process.env
-      .CRON_SECRET
-      ?.trim() ||
-    "";
 
-  if (!secret) {
+  const configuredSecrets =
+    [
+      process.env
+        .ATLAS_MULTI_ASSET_RUN_SECRET,
+
+      process.env
+        .ATLAS_RUN_SECRET,
+
+      process.env
+        .CRON_SECRET,
+    ]
+      .map(
+        (
+          value
+        ) =>
+          value?.trim() ??
+          ""
+      )
+      .filter(
+        (
+          value
+        ) =>
+          value.length >
+          0
+      );
+
+
+  if (
+    configuredSecrets.length ===
+      0
+  ) {
     return false;
   }
 
-  const header =
+
+  const atlasHeader =
     req.headers.get(
       "x-atlas-run-secret"
-    ) ??
+    )?.trim() ??
+    "";
+
+
+  const cronHeader =
     req.headers.get(
       "x-cron-secret"
-    ) ??
+    )?.trim() ??
+    "";
+
+
+  const authorizationHeader =
     req.headers.get(
       "authorization"
-    );
+    )?.trim() ??
+    "";
 
-  if (
-    header === secret ||
-    header ===
-      `Bearer ${secret}`
-  ) {
-    return true;
-  }
+
+  const bearerValue =
+    authorizationHeader
+      .toLowerCase()
+      .startsWith(
+        "bearer "
+      )
+      ? authorizationHeader
+          .slice(7)
+          .trim()
+      : "";
+
 
   const url =
     new URL(
       req.url
     );
 
-  return (
-    url.searchParams.get(
-      "secret"
-    ) === secret
+
+  const querySecret =
+    url.searchParams
+      .get(
+        "secret"
+      )
+      ?.trim() ??
+    "";
+
+
+  const presentedSecrets =
+    [
+      atlasHeader,
+      cronHeader,
+      bearerValue,
+      querySecret,
+    ]
+      .filter(
+        (
+          value
+        ) =>
+          value.length >
+          0
+      );
+
+
+  return presentedSecrets.some(
+    (
+      presented
+    ) =>
+      configuredSecrets.includes(
+        presented
+      )
   );
 }
 
@@ -154,6 +239,7 @@ export async function POST(
   req: Request
 ) {
   try {
+
     /*
      * ========================================================
      * 1. AUTHENTICATION
@@ -363,17 +449,6 @@ export async function POST(
      * ========================================================
      * 5. RECONSTRUCT READ-ONLY ACCUMULATION BUCKETS
      * ========================================================
-     *
-     * buildAtlasPendingPortfolioPlan() expects the full
-     * AtlasMultiAssetAccumulationBucket contract.
-     *
-     * Because this is diagnostic/read-only mode:
-     *
-     * previousPendingUsd = persisted pending
-     * addedPendingUsd    = 0
-     * pendingUsd         = persisted pending
-     * executableUsd      = pending when >= minBuy, else 0
-     * executable         = pending >= minBuy
      */
 
     const allocationPercentBySymbol =
@@ -400,6 +475,7 @@ export async function POST(
           (
             pending
           ) => {
+
             const symbol =
               normalizeSymbol(
                 pending.assetSymbol
@@ -504,6 +580,11 @@ export async function POST(
      * ========================================================
      * 7. INTELLIGENCE
      * ========================================================
+     *
+     * This invokes only the existing Multi-Asset intelligence
+     * planning layer.
+     *
+     * No governance or execution follows.
      */
 
     const intelligencePlan =
