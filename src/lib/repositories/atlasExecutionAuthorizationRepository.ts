@@ -34,19 +34,65 @@ import type {
 } from "../atlas-operations/atlas-execution-authorization-contract";
 
 
+const TABLE =
+  "atlas_execution_authorizations";
+
+
+function mapAuthorization(
+  data: any
+): AtlasExecutionAuthorizationContract {
+
+  return {
+    authorizationId:
+      data.authorization_id,
+
+    approvalId:
+      data.approval_id,
+
+    userId:
+      data.user_id,
+
+    portfolioPlanId:
+      data.portfolio_plan_id,
+
+    status:
+      data.status,
+
+    authorizedAt:
+      data.authorized_at,
+
+    createdAt:
+      data.created_at,
+
+    reason:
+      data.reason,
+  };
+}
+
+
 export class SupabaseAtlasExecutionAuthorizationRepository
 implements AtlasExecutionAuthorizationRepository
 {
+
   async save(
     authorization: AtlasExecutionAuthorizationContract
   ): Promise<void> {
-    const supabase = supabaseAdmin();
+
+    const supabase =
+      supabaseAdmin();
 
 
-    const { data: existing, error: lookupError } =
+    const {
+      data: existing,
+      error: lookupError,
+    } =
       await supabase
-        .from("atlas_execution_authorizations")
-        .select("id")
+        .from(
+          TABLE
+        )
+        .select(
+          "id"
+        )
         .eq(
           "authorization_id",
           authorization.authorizationId
@@ -87,10 +133,17 @@ implements AtlasExecutionAuthorizationRepository
 
 
     if (existing?.id) {
-      const { error } =
+
+      const {
+        error,
+      } =
         await supabase
-          .from("atlas_execution_authorizations")
-          .update(payload)
+          .from(
+            TABLE
+          )
+          .update(
+            payload
+          )
           .eq(
             "id",
             existing.id
@@ -106,10 +159,16 @@ implements AtlasExecutionAuthorizationRepository
     }
 
 
-    const { error } =
+    const {
+      error,
+    } =
       await supabase
-        .from("atlas_execution_authorizations")
-        .insert(payload);
+        .from(
+          TABLE
+        )
+        .insert(
+          payload
+        );
 
 
     if (error) {
@@ -122,13 +181,22 @@ implements AtlasExecutionAuthorizationRepository
     authorizationId: string,
     userId: string
   ): Promise<AtlasExecutionAuthorizationContract | null> {
-    const supabase = supabaseAdmin();
+
+    const supabase =
+      supabaseAdmin();
 
 
-    const { data, error } =
+    const {
+      data,
+      error,
+    } =
       await supabase
-        .from("atlas_execution_authorizations")
-        .select("*")
+        .from(
+          TABLE
+        )
+        .select(
+          "*"
+        )
         .eq(
           "authorization_id",
           authorizationId
@@ -137,42 +205,107 @@ implements AtlasExecutionAuthorizationRepository
           "user_id",
           userId
         )
-        .single();
+        .maybeSingle();
 
 
     if (error) {
-      if (error.code === "PGRST116") {
-        return null;
-      }
-
       throw error;
     }
 
 
-    return {
-      authorizationId:
-        data.authorization_id,
+    if (!data) {
+      return null;
+    }
 
-      approvalId:
-        data.approval_id,
 
-      userId:
-        data.user_id,
+    return mapAuthorization(
+      data
+    );
+  }
 
-      portfolioPlanId:
-        data.portfolio_plan_id,
 
-      status:
-        data.status,
+  /**
+   * Find existing authorization for one deterministic
+   * Multi-Asset portfolio plan.
+   *
+   * READ ONLY.
+   *
+   * This lets the Multi-Asset governance orchestrator reuse
+   * the existing active authorization instead of creating a
+   * duplicate every scheduler cycle.
+   *
+   * Historical duplicates may exist from before deterministic
+   * governance dedupe, so the newest matching row wins.
+   */
+  async findByPortfolioPlan(
+    portfolioPlanId: string,
+    userId: string
+  ): Promise<AtlasExecutionAuthorizationContract | null> {
 
-      authorizedAt:
-        data.authorized_at,
+    const normalizedPlanId =
+      portfolioPlanId.trim();
 
-      createdAt:
-        data.created_at,
 
-      reason:
-        data.reason,
-    };
+    const normalizedUserId =
+      userId.trim();
+
+
+    if (
+      !normalizedPlanId ||
+      !normalizedUserId
+    ) {
+      return null;
+    }
+
+
+    const supabase =
+      supabaseAdmin();
+
+
+    const {
+      data,
+      error,
+    } =
+      await supabase
+        .from(
+          TABLE
+        )
+        .select(
+          "*"
+        )
+        .eq(
+          "portfolio_plan_id",
+          normalizedPlanId
+        )
+        .eq(
+          "user_id",
+          normalizedUserId
+        )
+        .order(
+          "created_at",
+          {
+            ascending:
+              false,
+          }
+        )
+        .limit(
+          1
+        )
+        .maybeSingle();
+
+
+    if (error) {
+      throw error;
+    }
+
+
+    if (!data) {
+      return null;
+    }
+
+
+    return mapAuthorization(
+      data
+    );
   }
 }

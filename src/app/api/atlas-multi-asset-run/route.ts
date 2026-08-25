@@ -1,7 +1,7 @@
 /**
  * ============================================================
- * YieldCraft Atlas
- * Multi Asset Governance Run
+ * YieldCraft Atlas Multi-Asset
+ * Governance Run
  * ------------------------------------------------------------
  * PURPOSE
  * Resolve authoritative per-client Coinbase USD funding,
@@ -16,6 +16,8 @@
  * - Read-only Coinbase balance access
  * - Multi-Asset state tables only
  * - Same observed cash cannot be allocated repeatedly
+ * - Deterministic portfolio identity prevents identical
+ *   pending state from appearing as a new plan every cycle
  * - Uses existing approval state machine
  * - Uses existing authorization state machine
  * - No execution dispatch
@@ -26,7 +28,11 @@
  * ============================================================
  */
 
-import { NextResponse } from "next/server";
+import {
+  NextResponse,
+} from "next/server";
+
+import crypto from "crypto";
 
 import {
   getClientAllocationPlan,
@@ -53,23 +59,187 @@ import {
 } from "@/lib/atlas-multi-asset-pending-plan";
 
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+export const runtime =
+  "nodejs";
+
+export const dynamic =
+  "force-dynamic";
 
 
 function json(
   status: number,
   body: unknown
 ) {
+
   return NextResponse.json(
     body,
     {
       status,
+
       headers: {
         "Cache-Control":
           "no-store",
       },
     }
+  );
+}
+
+
+/**
+ * Produce a stable JSON representation so object-key ordering
+ * can never change the deterministic plan fingerprint.
+ */
+function canonicalize(
+  value: unknown
+): unknown {
+
+  if (
+    value === null ||
+    typeof value !==
+      "object"
+  ) {
+    return value;
+  }
+
+
+  if (
+    Array.isArray(
+      value
+    )
+  ) {
+    return value.map(
+      canonicalize
+    );
+  }
+
+
+  const input =
+    value as
+      Record<
+        string,
+        unknown
+      >;
+
+
+  const output:
+    Record<
+      string,
+      unknown
+    > =
+      {};
+
+
+  for (
+    const key
+    of Object.keys(
+      input
+    ).sort()
+  ) {
+
+    output[key] =
+      canonicalize(
+        input[key]
+      );
+  }
+
+
+  return output;
+}
+
+
+/**
+ * Convert a deterministic SHA-256 digest into a UUID-shaped
+ * identifier suitable for the existing portfolio_plan_id.
+ *
+ * Same user + same actual portfolio plan contents
+ * => same portfolioPlanId.
+ *
+ * Any material pending-plan change
+ * => different portfolioPlanId.
+ */
+function createDeterministicPortfolioPlanId(
+  userId: string,
+  portfolioPlan: unknown
+): string {
+
+  const canonicalPayload =
+    JSON.stringify(
+      canonicalize({
+        scope:
+          "atlas_multi_asset",
+
+        userId,
+
+        portfolioPlan,
+      })
+    );
+
+
+  const digest =
+    crypto
+      .createHash(
+        "sha256"
+      )
+      .update(
+        canonicalPayload
+      )
+      .digest(
+        "hex"
+      );
+
+
+  /*
+   * UUID-shaped deterministic value.
+   *
+   * Version nibble = 5
+   * Variant nibble = 8
+   */
+  const uuidHex =
+    (
+      digest.slice(
+        0,
+        12
+      ) +
+      "5" +
+      digest.slice(
+        13,
+        16
+      ) +
+      "8" +
+      digest.slice(
+        17,
+        32
+      )
+    );
+
+
+  return [
+    uuidHex.slice(
+      0,
+      8
+    ),
+
+    uuidHex.slice(
+      8,
+      12
+    ),
+
+    uuidHex.slice(
+      12,
+      16
+    ),
+
+    uuidHex.slice(
+      16,
+      20
+    ),
+
+    uuidHex.slice(
+      20,
+      32
+    ),
+  ].join(
+    "-"
   );
 }
 
@@ -137,11 +307,16 @@ export async function POST(
 
   try {
 
-    if (!okAuth(req)) {
+    if (
+      !okAuth(
+        req
+      )
+    ) {
       return json(
         401,
         {
           ok: false,
+
           error:
             "Unauthorized",
         }
@@ -161,12 +336,14 @@ export async function POST(
     if (
       typeof body !==
         "object" ||
-      body === null
+      body ===
+        null
     ) {
       return json(
         400,
         {
           ok: false,
+
           error:
             "invalid_request_body",
         }
@@ -235,6 +412,7 @@ export async function POST(
         400,
         {
           ok: false,
+
           error:
             "missing_user_id",
         }
@@ -246,13 +424,16 @@ export async function POST(
       !Number.isFinite(
         deployPct
       ) ||
-      deployPct <= 0 ||
-      deployPct > 100
+      deployPct <=
+        0 ||
+      deployPct >
+        100
     ) {
       return json(
         400,
         {
           ok: false,
+
           error:
             "invalid_deploy_percent",
         }
@@ -264,12 +445,14 @@ export async function POST(
       !Number.isFinite(
         minCash
       ) ||
-      minCash < 0
+      minCash <
+        0
     ) {
       return json(
         400,
         {
           ok: false,
+
           error:
             "invalid_min_cash",
         }
@@ -281,12 +464,14 @@ export async function POST(
       !Number.isFinite(
         minBuy
       ) ||
-      minBuy <= 0
+      minBuy <=
+        0
     ) {
       return json(
         400,
         {
           ok: false,
+
           error:
             "invalid_min_buy",
         }
@@ -310,7 +495,9 @@ export async function POST(
           userId
         );
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
 
       return json(
         200,
@@ -340,7 +527,8 @@ export async function POST(
       !Number.isFinite(
         availableCash
       ) ||
-      availableCash < 0
+      availableCash <
+        0
     ) {
       return json(
         200,
@@ -519,7 +707,9 @@ export async function POST(
       });
 
 
-    if (!portfolioPlan.valid) {
+    if (
+      !portfolioPlan.valid
+    ) {
       return json(
         200,
         {
@@ -546,7 +736,9 @@ export async function POST(
       portfolioPlan
         .orders
         .filter(
-          (order) =>
+          (
+            order
+          ) =>
             order.executable
         );
 
@@ -579,14 +771,29 @@ export async function POST(
 
     /*
      * ========================================================
-     * 5. PERSIST EXECUTABLE PORTFOLIO PLAN
+     * 5. DETERMINISTIC PORTFOLIO IDENTITY
      * ========================================================
+     *
+     * An unchanged pending plan receives the SAME plan ID.
+     *
+     * This prevents a recurring scheduler from disguising the
+     * same pending state as a brand-new portfolio plan.
+     *
+     * A material change to pending allocations/orders creates
+     * a different deterministic plan ID.
      */
 
     const portfolioPlanId =
-      crypto.randomUUID();
+      createDeterministicPortfolioPlanId(
+        userId,
+        portfolioPlan
+      );
 
 
+    /*
+     * Existing repository upsert semantics make saving this
+     * same deterministic plan safe and idempotent.
+     */
     await saveAtlasPortfolioPlan({
       portfolioPlanId,
 
@@ -603,6 +810,10 @@ export async function POST(
      * ========================================================
      *
      * Still NO execution and NO Coinbase order submission.
+     *
+     * The orchestrator is responsible for reusing existing
+     * governance for this deterministic plan instead of
+     * creating duplicate active approvals/authorizations.
      */
 
     const governance =
@@ -631,6 +842,9 @@ export async function POST(
 
           portfolioPlanId,
 
+          deterministic:
+            true,
+
           allocationRows,
 
           portfolioPlan,
@@ -640,7 +854,9 @@ export async function POST(
       }
     );
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     return json(
       500,

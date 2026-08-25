@@ -19,36 +19,82 @@
  * ============================================================
  */
 
-import { supabaseAdmin } from "../supabaseAdmin";
+import {
+  supabaseAdmin,
+} from "../supabaseAdmin";
 
 import type {
   AtlasApprovalContract,
-} from "../atlas-operations";
-
-import type {
   AtlasApprovalRepository,
 } from "../atlas-operations";
 
 
-const TABLE = "atlas_approvals";
+const TABLE =
+  "atlas_approvals";
+
+
+function mapApproval(
+  data: any
+): AtlasApprovalContract {
+
+  return {
+    approvalId:
+      data.approval_id,
+
+    userId:
+      data.user_id,
+
+    portfolioPlanId:
+      data.portfolio_plan_id,
+
+    status:
+      data.status,
+
+    approvedAt:
+      data.approved_at,
+
+    createdAt:
+      data.created_at,
+
+    reason:
+      data.reason,
+  };
+}
 
 
 export class SupabaseAtlasApprovalRepository
   implements AtlasApprovalRepository
 {
+
   async load(
     approvalId: string,
     userId: string
   ): Promise<AtlasApprovalContract | null> {
-    const supabase = supabaseAdmin();
+
+    const supabase =
+      supabaseAdmin();
 
 
-    const { data, error } = await supabase
-      .from(TABLE)
-      .select("*")
-      .eq("approval_id", approvalId)
-      .eq("user_id", userId)
-      .maybeSingle();
+    const {
+      data,
+      error,
+    } =
+      await supabase
+        .from(
+          TABLE
+        )
+        .select(
+          "*"
+        )
+        .eq(
+          "approval_id",
+          approvalId
+        )
+        .eq(
+          "user_id",
+          userId
+        )
+        .maybeSingle();
 
 
     if (error) {
@@ -61,45 +107,144 @@ export class SupabaseAtlasApprovalRepository
     }
 
 
-    return {
-      approvalId: data.approval_id,
-      userId: data.user_id,
-      portfolioPlanId: data.portfolio_plan_id,
-      status: data.status,
-      approvedAt: data.approved_at,
-      createdAt: data.created_at,
-      reason: data.reason,
-    };
+    return mapApproval(
+      data
+    );
+  }
+
+
+  /**
+   * Find existing governance for a deterministic portfolio plan.
+   *
+   * This is READ ONLY.
+   *
+   * Multi-Asset uses this method to prevent an unchanged
+   * deterministic plan from creating another approval every
+   * time the governance cycle runs.
+   *
+   * We return the newest matching record if historical
+   * duplicates exist from before deterministic dedupe.
+   */
+  async findByPortfolioPlan(
+    portfolioPlanId: string,
+    userId: string
+  ): Promise<AtlasApprovalContract | null> {
+
+    const normalizedPlanId =
+      portfolioPlanId.trim();
+
+
+    const normalizedUserId =
+      userId.trim();
+
+
+    if (
+      !normalizedPlanId ||
+      !normalizedUserId
+    ) {
+      return null;
+    }
+
+
+    const supabase =
+      supabaseAdmin();
+
+
+    const {
+      data,
+      error,
+    } =
+      await supabase
+        .from(
+          TABLE
+        )
+        .select(
+          "*"
+        )
+        .eq(
+          "portfolio_plan_id",
+          normalizedPlanId
+        )
+        .eq(
+          "user_id",
+          normalizedUserId
+        )
+        .order(
+          "created_at",
+          {
+            ascending:
+              false,
+          }
+        )
+        .limit(
+          1
+        )
+        .maybeSingle();
+
+
+    if (error) {
+      throw error;
+    }
+
+
+    if (!data) {
+      return null;
+    }
+
+
+    return mapApproval(
+      data
+    );
   }
 
 
   async save(
     approval: AtlasApprovalContract
   ): Promise<void> {
-    const supabase = supabaseAdmin();
+
+    const supabase =
+      supabaseAdmin();
 
 
-    const { error } = await supabase
-      .from(TABLE)
-      .upsert(
-        {
-          approval_id: approval.approvalId,
-          user_id: approval.userId,
-          portfolio_plan_id:
-            approval.portfolioPlanId,
-          status: approval.status,
-          approved_at:
-            approval.approvedAt,
-          reason: approval.reason,
-          created_at:
-            approval.createdAt,
-          updated_at:
-            new Date().toISOString(),
-        },
-        {
-          onConflict: "approval_id",
-        }
-      );
+    const {
+      error,
+    } =
+      await supabase
+        .from(
+          TABLE
+        )
+        .upsert(
+          {
+            approval_id:
+              approval.approvalId,
+
+            user_id:
+              approval.userId,
+
+            portfolio_plan_id:
+              approval.portfolioPlanId,
+
+            status:
+              approval.status,
+
+            approved_at:
+              approval.approvedAt,
+
+            reason:
+              approval.reason,
+
+            created_at:
+              approval.createdAt,
+
+            updated_at:
+              new Date()
+                .toISOString(),
+          },
+          {
+            onConflict:
+              "approval_id",
+          }
+        );
 
 
     if (error) {
