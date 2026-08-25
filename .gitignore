@@ -32,3 +32,4 @@ supabase/.temp/
 .atlas-operator-token.local
 .atlas-multi-asset-run-secret.local
 .atlas-live-order-id.local
+atlas-equity-products.txt
