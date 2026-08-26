@@ -10,6 +10,7 @@
  * SAFETY
  * - Requires authorization proof
  * - Requires live gateway approval
+ * - Requires shared-account product safety approval
  * - Requires deterministic execution fingerprint
  * - Atomically reserves execution before Coinbase submission
  * - Successful Coinbase submissions remain SUBMITTED
@@ -39,6 +40,10 @@ import type {
 import {
   evaluateAtlasLiveExecutionGateway,
 } from "./atlas-live-execution-gateway";
+
+import {
+  evaluateAtlasSharedAccountSafety,
+} from "./atlas-multi-asset-shared-account-safety";
 
 import {
   createAtlasExecutionFingerprint,
@@ -150,7 +155,96 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 2. DETERMINISTIC EXECUTION KEY
+   * 2. SHARED COINBASE ACCOUNT SAFETY GATE
+   * ========================================================
+   *
+   * CURRENT PRODUCTION INVARIANT:
+   *
+   * Atlas Multi-Asset BTC-USD is blocked while Atlas and
+   * Pulse share a Coinbase BTC balance.
+   *
+   * This prevents NEW Atlas Multi-Asset BTC accumulation from
+   * entering an account-level BTC pool visible to Pulse.
+   *
+   * This gate:
+   *
+   * - does NOT modify Pulse
+   * - does NOT modify legacy Atlas
+   * - does NOT create SELL capability
+   * - executes before Coinbase credential loading
+   * - executes before reservation
+   * - executes before Coinbase submission
+   *
+   * Non-BTC Atlas Multi-Asset instructions continue through
+   * the existing execution pipeline unchanged.
+   */
+
+  const sharedAccountSafety =
+    evaluateAtlasSharedAccountSafety(
+      instruction.productId
+    );
+
+
+  if (
+    !sharedAccountSafety.allowed
+  ) {
+
+    const audit =
+      createAtlasLiveOrderAudit({
+        status:
+          "BLOCKED",
+
+        userId:
+          authorization.userId,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        portfolioPlanId:
+          authorization.portfolioPlanId,
+
+        productId:
+          instruction.productId,
+
+        quoteSizeUsd:
+          instruction.quoteSizeUsd,
+
+        coinbaseOrderId:
+          null,
+
+        responseSummary:
+          sharedAccountSafety.reason,
+      });
+
+
+    await persistAtlasLiveAudit(
+      audit
+    );
+
+
+    return {
+      success:
+        false,
+
+      submitted:
+        false,
+
+      response: {
+        mode:
+          "live",
+
+        reason:
+          sharedAccountSafety.reason,
+
+        audit,
+      },
+    };
+  }
+
+
+  /*
+   * ========================================================
+   * 3. DETERMINISTIC EXECUTION KEY
    * ========================================================
    */
 
@@ -172,7 +266,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 3. CLIENT-SCOPED COINBASE CREDENTIALS
+   * 4. CLIENT-SCOPED COINBASE CREDENTIALS
    * ========================================================
    */
 
@@ -298,7 +392,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 4. EXACTLY-ONCE EXECUTION RESERVATION
+   * 5. EXACTLY-ONCE EXECUTION RESERVATION
    * ========================================================
    */
 
@@ -363,7 +457,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 5. COINBASE SUBMISSION
+   * 6. COINBASE SUBMISSION
    * ========================================================
    */
 
@@ -383,7 +477,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 6. FAILED SUBMISSION
+   * 7. FAILED SUBMISSION
    * ========================================================
    */
 
@@ -457,7 +551,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 7. SUCCESSFUL SUBMISSION
+   * 8. SUCCESSFUL SUBMISSION
    * ========================================================
    *
    * Coinbase accepting an order does NOT mean Atlas settles
