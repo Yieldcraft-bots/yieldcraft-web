@@ -1,27 +1,30 @@
 /**
  * ============================================================
- * YieldCraft Atlas
+ * YieldCraft Atlas Multi-Asset
  * Live Execution Executor
- *
+ * ------------------------------------------------------------
  * PURPOSE
- * Controlled live execution boundary for Atlas instructions.
+ * Controlled live Coinbase submission boundary for an already
+ * approved and authorized Atlas Multi-Asset instruction.
  *
  * SAFETY
  * - Requires authorization proof
  * - Requires live gateway approval
  * - Requires deterministic execution fingerprint
  * - Atomically reserves execution before Coinbase submission
- * - Reconciles authoritative Coinbase fill state
- * - Atomically consumes only confirmed filled pending USD
- * - Finalizes the same reservation after Coinbase response
- * - Uses the authorization userId to resolve that client's
- *   Atlas-scoped Coinbase credentials
+ * - Successful Coinbase submissions remain SUBMITTED
+ * - Settlement is owned exclusively by the submitted-order
+ *   reconciler + atomic PostgreSQL settlement transaction
+ * - Uses authorization userId for Atlas-scoped Coinbase creds
  * - No UI access
  * - No Pulse
  * - No Recon
+ * - No legacy Atlas BTC execution controls
  * - No policy mutation
  *
- * This file owns live execution only.
+ * IMPORTANT
+ * This file SUBMITS.
+ * It does NOT settle client pending allocation.
  * ============================================================
  */
 
@@ -60,14 +63,6 @@ import {
 import {
   extractCoinbaseOrderId,
 } from "./coinbase-order-builder";
-
-import {
-  reconcileAtlasLiveCoinbaseOrder,
-} from "./atlas-live-order-reconciliation";
-
-import {
-  SupabaseAtlasMultiAssetStateRepository,
-} from "./repositories/atlasMultiAssetStateRepository";
 
 
 export interface AtlasLiveExecutionExecutorResult {
@@ -123,6 +118,12 @@ export async function executeAtlasLiveInstruction(
   authorization: AtlasExecutionAuthorizationContract
 ): Promise<AtlasLiveExecutionExecutorResult> {
 
+  /*
+   * ========================================================
+   * 1. LIVE EXECUTION GATE
+   * ========================================================
+   */
+
   const gateway =
     evaluateAtlasLiveExecutionGateway(
       authorization,
@@ -131,12 +132,14 @@ export async function executeAtlasLiveInstruction(
 
 
   if (!gateway.allowed) {
+
     return {
       success: false,
       submitted: false,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         reason:
           gateway.reason,
@@ -144,6 +147,12 @@ export async function executeAtlasLiveInstruction(
     };
   }
 
+
+  /*
+   * ========================================================
+   * 2. DETERMINISTIC EXECUTION KEY
+   * ========================================================
+   */
 
   const fingerprint =
     createAtlasExecutionFingerprint({
@@ -161,6 +170,12 @@ export async function executeAtlasLiveInstruction(
     });
 
 
+  /*
+   * ========================================================
+   * 3. CLIENT-SCOPED COINBASE CREDENTIALS
+   * ========================================================
+   */
+
   let credentials;
 
 
@@ -175,7 +190,8 @@ export async function executeAtlasLiveInstruction(
 
     const audit =
       createAtlasLiveOrderAudit({
-        status: "BLOCKED",
+        status:
+          "BLOCKED",
 
         userId:
           authorization.userId,
@@ -210,7 +226,8 @@ export async function executeAtlasLiveInstruction(
       submitted: false,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         fingerprint,
 
@@ -229,7 +246,8 @@ export async function executeAtlasLiveInstruction(
 
     const audit =
       createAtlasLiveOrderAudit({
-        status: "BLOCKED",
+        status:
+          "BLOCKED",
 
         userId:
           authorization.userId,
@@ -264,7 +282,8 @@ export async function executeAtlasLiveInstruction(
       submitted: false,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         fingerprint,
 
@@ -278,8 +297,11 @@ export async function executeAtlasLiveInstruction(
 
 
   /*
-   * Atomic execution reservation.
+   * ========================================================
+   * 4. EXACTLY-ONCE EXECUTION RESERVATION
+   * ========================================================
    */
+
   const auditRepository =
     new SupabaseAtlasLiveOrderAuditRepository();
 
@@ -307,12 +329,25 @@ export async function executeAtlasLiveInstruction(
 
 
   if (!reservation.reserved) {
+
+    /*
+     * IMPORTANT:
+     *
+     * Return the deterministic fingerprint even when the
+     * execution already exists.
+     *
+     * The production orchestrator can then pass this SAME
+     * executionKey to reconciliation without submitting
+     * another Coinbase order.
+     */
+
     return {
       success: false,
       submitted: false,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         fingerprint,
 
@@ -327,8 +362,11 @@ export async function executeAtlasLiveInstruction(
 
 
   /*
-   * Coinbase submission boundary.
+   * ========================================================
+   * 5. COINBASE SUBMISSION
+   * ========================================================
    */
+
   const coinbaseResult =
     await submitAtlasLiveCoinbaseOrder(
       instruction,
@@ -344,8 +382,11 @@ export async function executeAtlasLiveInstruction(
 
 
   /*
-   * If Coinbase did not accept the order, finalize as FAILED.
+   * ========================================================
+   * 6. FAILED SUBMISSION
+   * ========================================================
    */
+
   if (
     !coinbaseResult.submitted ||
     !coinbaseOrderId
@@ -358,8 +399,7 @@ export async function executeAtlasLiveInstruction(
       status:
         "FAILED",
 
-      coinbaseOrderId:
-        coinbaseOrderId,
+      coinbaseOrderId,
 
       responseSummary:
         "coinbase_order_failed",
@@ -368,7 +408,8 @@ export async function executeAtlasLiveInstruction(
 
     const audit =
       createAtlasLiveOrderAudit({
-        status: "FAILED",
+        status:
+          "FAILED",
 
         userId:
           authorization.userId,
@@ -397,7 +438,8 @@ export async function executeAtlasLiveInstruction(
       submitted: false,
 
       response: {
-        mode: "live",
+        mode:
+          "live",
 
         fingerprint,
 
@@ -415,193 +457,26 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * AUTHORITATIVE FILL RECONCILIATION
+   * 7. SUCCESSFUL SUBMISSION
    * ========================================================
    *
-   * Submitted does not mean filled.
+   * Coinbase accepting an order does NOT mean Atlas settles
+   * client pending allocation here.
    *
-   * Atlas therefore queries Coinbase for the exact order and
-   * uses actual filled_value before consuming pending USD.
-   */
-  const reconciliation =
-    await reconcileAtlasLiveCoinbaseOrder({
-      userId:
-        authorization.userId,
-
-      orderId:
-        coinbaseOrderId,
-
-      expectedProductId:
-        instruction.productId,
-    });
-
-
-  if (!reconciliation.confirmed) {
-
-    await auditRepository.finalizeExecution({
-      executionKey:
-        fingerprint,
-
-      status:
-        "SUBMITTED",
-
-      coinbaseOrderId,
-
-      responseSummary:
-        reconciliation.reason,
-    });
-
-
-    const audit =
-      createAtlasLiveOrderAudit({
-        status: "SUBMITTED",
-
-        userId:
-          authorization.userId,
-
-        authorizationId:
-          authorization.authorizationId,
-
-        portfolioPlanId:
-          authorization.portfolioPlanId,
-
-        productId:
-          instruction.productId,
-
-        quoteSizeUsd:
-          instruction.quoteSizeUsd,
-
-        coinbaseOrderId,
-
-        responseSummary:
-          reconciliation.reason,
-      });
-
-
-    return {
-      success: true,
-      submitted: true,
-
-      response: {
-        mode: "live",
-
-        fingerprint,
-
-        authorizationId:
-          authorization.authorizationId,
-
-        audit,
-
-        reconciliation,
-
-        pendingSettlement:
-          null,
-
-        coinbase:
-          coinbaseResult.response,
-      },
-    };
-  }
-
-
-  /*
-   * ========================================================
-   * ATOMIC PENDING SETTLEMENT
-   * ========================================================
+   * Every accepted order becomes SUBMITTED.
    *
-   * Only actual Coinbase filled_value is consumed.
-   */
-  const stateRepository =
-    new SupabaseAtlasMultiAssetStateRepository();
-
-
-  const pendingSettlement =
-    await stateRepository.consumePendingAllocation({
-      userId:
-        authorization.userId,
-
-      assetSymbol:
-        instruction.symbol,
-
-      amountUsd:
-        reconciliation.filledValueUsd,
-    });
-
-
-  if (!pendingSettlement.consumed) {
-
-    await auditRepository.finalizeExecution({
-      executionKey:
-        fingerprint,
-
-      status:
-        "SUBMITTED",
-
-      coinbaseOrderId,
-
-      responseSummary:
-        "coinbase_fill_confirmed_pending_settlement_blocked",
-    });
-
-
-    const audit =
-      createAtlasLiveOrderAudit({
-        status: "SUBMITTED",
-
-        userId:
-          authorization.userId,
-
-        authorizationId:
-          authorization.authorizationId,
-
-        portfolioPlanId:
-          authorization.portfolioPlanId,
-
-        productId:
-          instruction.productId,
-
-        quoteSizeUsd:
-          instruction.quoteSizeUsd,
-
-        coinbaseOrderId,
-
-        responseSummary:
-          "coinbase_fill_confirmed_pending_settlement_blocked",
-      });
-
-
-    return {
-      success: true,
-      submitted: true,
-
-      response: {
-        mode: "live",
-
-        fingerprint,
-
-        authorizationId:
-          authorization.authorizationId,
-
-        audit,
-
-        reconciliation,
-
-        pendingSettlement,
-
-        coinbase:
-          coinbaseResult.response,
-      },
-    };
-  }
-
-
-  /*
-   * Finalize only after:
+   * The submitted-order reconciler owns:
    *
-   * Coinbase accepted
-   * -> Coinbase fill confirmed
-   * -> exact pending dollars atomically consumed
+   * Coinbase authoritative GET
+   * -> filled_value confirmation
+   * -> atomic pending consumption
+   * -> SUBMITTED -> SETTLED
+   *
+   * This gives Atlas ONE settlement implementation regardless
+   * of whether Coinbase fills instantly or several seconds
+   * later.
    */
+
   await auditRepository.finalizeExecution({
     executionKey:
       fingerprint,
@@ -612,13 +487,14 @@ export async function executeAtlasLiveInstruction(
     coinbaseOrderId,
 
     responseSummary:
-      "coinbase_order_filled_and_pending_settled",
+      "coinbase_order_submitted_pending_reconciliation",
   });
 
 
   const audit =
     createAtlasLiveOrderAudit({
-      status: "SUBMITTED",
+      status:
+        "SUBMITTED",
 
       userId:
         authorization.userId,
@@ -638,7 +514,7 @@ export async function executeAtlasLiveInstruction(
       coinbaseOrderId,
 
       responseSummary:
-        "coinbase_order_filled_and_pending_settled",
+        "coinbase_order_submitted_pending_reconciliation",
     });
 
 
@@ -647,7 +523,8 @@ export async function executeAtlasLiveInstruction(
     submitted: true,
 
     response: {
-      mode: "live",
+      mode:
+        "live",
 
       fingerprint,
 
@@ -656,9 +533,11 @@ export async function executeAtlasLiveInstruction(
 
       audit,
 
-      reconciliation,
+      reconciliation:
+        null,
 
-      pendingSettlement,
+      pendingSettlement:
+        null,
 
       coinbase:
         coinbaseResult.response,
