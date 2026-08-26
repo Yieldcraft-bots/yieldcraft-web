@@ -455,10 +455,14 @@ export default function AtlasQuickStartPage() {
           <StepCard
             id="step-api-key"
             number={4}
-            title="Create an Atlas Coinbase API key"
+            title="Enable Coinbase trading access and create your Atlas API key"
             bullets={[
-              "Open Coinbase API settings from the dedicated Atlas account or portfolio",
-              "Enable View + Trade only",
+              "Open the dedicated Coinbase account or portfolio you will use for Atlas",
+              "If you want Atlas to trade stocks, confirm your Coinbase account is eligible and enabled for equity trading",
+              "Complete any Coinbase-required brokerage, identity, eligibility, or regulatory steps shown in your account",
+              "Atlas can only trade assets that Coinbase makes available and tradable for your specific account",
+              "Open Coinbase API settings and create the dedicated Atlas API key",
+              "Enable View + Trade permissions only",
               "Keep withdrawals OFF",
               "Copy the API key name and private key",
               "Keep Coinbase open until YieldCraft verifies the connection",
@@ -472,11 +476,14 @@ export default function AtlasQuickStartPage() {
             }}
             comfort={{
               title:
-                "Protect the private key",
+                "Stock access requires Coinbase eligibility",
 
               lines: [
+                "Crypto access does not automatically mean your Coinbase account is enabled for stock trading.",
+                "To use Atlas equity assets, your Coinbase account must have Coinbase equity trading access.",
+                "Coinbase determines account, asset, geographic, and trading-session eligibility.",
+                "If Coinbase does not permit an equity for your account, Atlas will not attempt to bypass that restriction.",
                 "Coinbase may display the private key only once.",
-                "Use Coinbase copy controls rather than manually retyping credentials.",
                 "Never enable withdrawal permissions for the Atlas API key.",
               ],
             }}

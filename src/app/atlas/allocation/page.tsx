@@ -60,6 +60,42 @@ export default function AtlasAllocationPage() {
           </div>
         </div>
 
+        <div className="mb-6 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5">
+          <p className="text-sm font-semibold text-sky-300">
+            Coinbase equity eligibility
+          </p>
+
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Atlas supports both eligible cryptocurrency and equity products
+            through Coinbase. If you allocate to stocks, your connected
+            Coinbase account must be approved and enabled by Coinbase for
+            equity trading.
+          </p>
+
+          <p className="mt-3 text-xs leading-5 text-slate-400">
+            Before assigning percentages to equity assets, confirm that you
+            have completed any Coinbase-required stock-trading or brokerage
+            enrollment, identity verification, agreements, and eligibility
+            steps. Coinbase determines which products your account may trade.
+          </p>
+
+          <p className="mt-3 text-xs leading-5 text-slate-400">
+            If Coinbase does not enable stock trading or a specific equity for
+            your account, Atlas will not bypass that restriction. Eligible
+            cryptocurrency assets can continue to operate independently,
+            subject to Atlas planning and execution controls.
+          </p>
+
+          <div className="mt-4">
+            <Link
+              href="/atlas/quick-start"
+              className="inline-flex rounded-full border border-sky-500/30 bg-sky-500/10 px-4 py-2 text-xs font-semibold text-sky-200 hover:border-sky-400"
+            >
+              Review Coinbase setup requirements
+            </Link>
+          </div>
+        </div>
+
         <section className="rounded-3xl border border-slate-800 bg-slate-900/40 p-6">
           <ClientAllocationForm />
 

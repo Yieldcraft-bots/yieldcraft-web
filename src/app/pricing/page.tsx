@@ -14,13 +14,16 @@ const STARTER_URL =
   process.env.NEXT_PUBLIC_STRIPE_LINK_STARTER ??
   "#";
 
+
 const RECON_URL =
   process.env.NEXT_PUBLIC_STRIPE_LINK_RECON ??
   "#";
 
+
 const PRO_URL =
   process.env.NEXT_PUBLIC_STRIPE_LINK_PRO ??
   "#";
+
 
 const ATLAS_URL =
   process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ??
@@ -360,6 +363,39 @@ export default function PricingPage() {
                 systems. Funds and API credentials
                 should not be shared between the two
                 strategies.
+              </p>
+            </div>
+
+
+            <div className="mt-5 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-5">
+              <p className="text-sm font-semibold text-sky-300">
+                Coinbase stock-trading eligibility
+              </p>
+
+              <p className="mt-2 text-sm leading-6 text-slate-400">
+                Atlas supports both cryptocurrency and
+                eligible equity products through Coinbase.
+                To use equities in Atlas, your connected
+                Coinbase account must be approved and
+                enabled for stock trading by Coinbase.
+              </p>
+
+              <p className="mt-3 text-sm leading-6 text-slate-400">
+                Before allocating to stocks, sign in to
+                Coinbase and complete any stock-trading
+                or brokerage enrollment, identity
+                verification, agreements, or eligibility
+                steps Coinbase requires for your account.
+                Availability is determined by Coinbase
+                and may vary by account or jurisdiction.
+              </p>
+
+              <p className="mt-3 text-sm leading-6 text-slate-400">
+                If stock trading is not enabled on your
+                connected account, Atlas can continue to
+                support eligible cryptocurrency assets,
+                but equity orders will remain unavailable
+                until Coinbase enables that capability.
               </p>
             </div>
 
