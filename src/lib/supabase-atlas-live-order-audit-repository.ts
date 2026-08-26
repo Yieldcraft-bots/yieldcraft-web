@@ -4,8 +4,9 @@
  * Supabase Live Order Audit Repository
  *
  * PURPOSE
- * Supabase implementation for Atlas live audit persistence
- * and atomic execution reservations.
+ * Supabase implementation for Atlas live audit persistence,
+ * atomic execution reservations, submission finalization,
+ * and post-submission settlement reconciliation.
  *
  * SAFETY
  * - No execution logic
@@ -18,7 +19,7 @@
  * - No Recon
  *
  * This file only persists, reserves, finalizes,
- * and retrieves audit records.
+ * reconciles, and retrieves audit records.
  * ============================================================
  */
 
@@ -26,7 +27,9 @@ import type {
   AtlasLiveExecutionFinalizeInput,
   AtlasLiveExecutionReservationInput,
   AtlasLiveExecutionReservationResult,
+  AtlasLiveExecutionSettlementInput,
   AtlasLiveOrderAuditRepository,
+  AtlasLiveSubmittedExecution,
 } from "./atlas-live-order-audit-repository";
 
 import type {
@@ -239,12 +242,6 @@ export class SupabaseAtlasLiveOrderAuditRepository
     }
 
 
-    /*
-     * PostgreSQL unique_violation.
-     *
-     * Once execution_key has a UNIQUE constraint,
-     * only one request can reserve a given execution.
-     */
     if (error.code === "23505") {
       return {
         reserved: false,
@@ -299,6 +296,149 @@ export class SupabaseAtlasLiveOrderAuditRepository
     if (!data || data.length !== 1) {
       throw new Error(
         "Atlas execution reservation could not be finalized."
+      );
+    }
+  }
+
+
+  async loadSubmittedExecution(
+    executionKey: string
+  ): Promise<AtlasLiveSubmittedExecution | null> {
+
+    const normalizedExecutionKey =
+      executionKey.trim();
+
+
+    if (!normalizedExecutionKey) {
+      throw new Error(
+        "atlas_live_execution_key_missing"
+      );
+    }
+
+
+    const supabase =
+      getSupabase();
+
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("atlas_live_execution_logs")
+      .select(
+        "created_at,user_id,authorization_id,portfolio_plan_id,product_id,quote_size_usd,coinbase_order_id,response_summary,execution_key"
+      )
+      .eq(
+        "execution_key",
+        normalizedExecutionKey
+      )
+      .eq(
+        "status",
+        "SUBMITTED"
+      )
+      .maybeSingle();
+
+
+    if (error) {
+      throw error;
+    }
+
+
+    if (!data) {
+      return null;
+    }
+
+
+    if (
+      typeof data.coinbase_order_id !==
+        "string" ||
+      !data.coinbase_order_id.trim()
+    ) {
+      throw new Error(
+        "atlas_live_submitted_execution_order_id_missing"
+      );
+    }
+
+
+    return {
+      executionKey:
+        data.execution_key,
+
+      userId:
+        data.user_id,
+
+      authorizationId:
+        data.authorization_id,
+
+      portfolioPlanId:
+        data.portfolio_plan_id,
+
+      productId:
+        data.product_id,
+
+      quoteSizeUsd:
+        Number(
+          data.quote_size_usd
+        ),
+
+      coinbaseOrderId:
+        data.coinbase_order_id,
+
+      responseSummary:
+        data.response_summary,
+
+      createdAt:
+        data.created_at,
+    };
+  }
+
+
+  async settleSubmittedExecution(
+    input: AtlasLiveExecutionSettlementInput
+  ): Promise<void> {
+
+    const supabase =
+      getSupabase();
+
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("atlas_live_execution_logs")
+      .update({
+        status:
+          "SETTLED",
+
+        coinbase_order_id:
+          input.coinbaseOrderId,
+
+        response_summary:
+          input.responseSummary,
+      })
+      .eq(
+        "execution_key",
+        input.executionKey
+      )
+      .eq(
+        "status",
+        "SUBMITTED"
+      )
+      .eq(
+        "coinbase_order_id",
+        input.coinbaseOrderId
+      )
+      .select("id");
+
+
+    if (error) {
+      throw error;
+    }
+
+
+    if (!data || data.length !== 1) {
+      throw new Error(
+        "Atlas submitted execution could not be settled."
       );
     }
   }

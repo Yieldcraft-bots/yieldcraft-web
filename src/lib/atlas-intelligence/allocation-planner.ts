@@ -53,7 +53,8 @@ export function buildAllocationPlan(
       asset: input.asset,
       recommendedAmountUsd: 0,
       eligible: false,
-      reason: "Atlas allocation policy contains an invalid negative value.",
+      reason:
+        "Atlas allocation policy contains an invalid negative value.",
     };
   }
 
@@ -65,38 +66,62 @@ export function buildAllocationPlan(
       asset: input.asset,
       recommendedAmountUsd: 0,
       eligible: false,
-      reason: "Maximum buy amount is below the minimum buy amount.",
+      reason:
+        "Maximum buy amount is below the minimum buy amount.",
     };
   }
 
-  const rawAmount =
-    input.availableCash * (input.deployPct / 100);
-
-  const minimumAppliedAmount = Math.max(
-    rawAmount,
-    input.minBuy
+  const rawAmount = roundMoney(
+    input.availableCash *
+      (input.deployPct / 100)
   );
 
-  const cappedAmount =
-    input.maxBuy !== undefined
-      ? Math.min(minimumAppliedAmount, input.maxBuy)
-      : minimumAppliedAmount;
-
-  const recommendedAmount = roundMoney(cappedAmount);
-
-  if (recommendedAmount > input.availableCash) {
+  /*
+   * A minimum order is a floor for EXECUTABILITY,
+   * not permission to increase the deployment policy.
+   *
+   * Example:
+   * $25 cash × 20% = $5.
+   * If minBuy is $10, Atlas waits rather than silently
+   * doubling the intended deployment percentage.
+   */
+  if (rawAmount < input.minBuy) {
     return {
       asset: input.asset,
       recommendedAmountUsd: 0,
       eligible: false,
-      reason: "Insufficient available cash.",
+      reason:
+        "Calculated allocation is below the minimum buy amount.",
+    };
+  }
+
+  const cappedAmount =
+    input.maxBuy !== undefined
+      ? Math.min(rawAmount, input.maxBuy)
+      : rawAmount;
+
+  const recommendedAmount =
+    roundMoney(cappedAmount);
+
+  if (
+    recommendedAmount >
+    input.availableCash
+  ) {
+    return {
+      asset: input.asset,
+      recommendedAmountUsd: 0,
+      eligible: false,
+      reason:
+        "Insufficient available cash.",
     };
   }
 
   return {
     asset: input.asset,
-    recommendedAmountUsd: recommendedAmount,
+    recommendedAmountUsd:
+      recommendedAmount,
     eligible: true,
-    reason: "Atlas policy allocation calculated.",
+    reason:
+      "Atlas policy allocation calculated.",
   };
 }

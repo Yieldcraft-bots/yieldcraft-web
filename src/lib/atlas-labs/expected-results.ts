@@ -72,22 +72,32 @@ export const ATLAS_EXPECTED_RESULTS: readonly AtlasScenarioExpectation[] = [
 
   {
     scenarioId: "eth-only",
-    expectedEligible: true,
+    expectedEligible: false,
     expectedAsset: "ETH",
     expectedCompletionPct: 0,
+    expectedRecommendedAmountUsd: 0,
+    expectedReason:
+      "Highest-ranked opportunity is shadow-only.",
   },
 
   {
     scenarioId: "spacex-only",
-    expectedEligible: true,
+    expectedEligible: false,
     expectedAsset: "SPACEX",
     expectedCompletionPct: 0,
+    expectedRecommendedAmountUsd: 0,
+    expectedReason:
+      "Highest-ranked opportunity is shadow-only.",
   },
 
   {
     scenarioId: "mag7-only",
-    expectedEligible: true,
+    expectedEligible: false,
+    expectedAsset: "AAPL",
     expectedCompletionPct: 0,
+    expectedRecommendedAmountUsd: 0,
+    expectedReason:
+      "Highest-ranked opportunity is shadow-only.",
   },
 
   {

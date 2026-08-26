@@ -4,8 +4,8 @@
  * Live Order Audit Repository
  *
  * PURPOSE
- * Persistence boundary for Atlas live execution audit records
- * and execution reservations.
+ * Persistence boundary for Atlas live execution audit records,
+ * execution reservations, and post-submission settlement.
  *
  * SAFETY
  * - No execution logic
@@ -18,7 +18,7 @@
  * - No Recon
  *
  * This file only stores, reserves, finalizes,
- * and retrieves audit records.
+ * reconciles, and retrieves audit records.
  * ============================================================
  */
 
@@ -69,6 +69,36 @@ export type AtlasLiveExecutionFinalizeInput = {
 };
 
 
+export type AtlasLiveSubmittedExecution = {
+  executionKey: string;
+
+  userId: string;
+
+  authorizationId: string;
+
+  portfolioPlanId: string;
+
+  productId: string;
+
+  quoteSizeUsd: number;
+
+  coinbaseOrderId: string;
+
+  responseSummary: string;
+
+  createdAt: string;
+};
+
+
+export type AtlasLiveExecutionSettlementInput = {
+  executionKey: string;
+
+  coinbaseOrderId: string;
+
+  responseSummary: string;
+};
+
+
 export interface AtlasLiveOrderAuditRepository {
 
   create(
@@ -94,5 +124,18 @@ export interface AtlasLiveOrderAuditRepository {
   finalizeExecution(
     input:
       AtlasLiveExecutionFinalizeInput
+  ): Promise<void>;
+
+
+  loadSubmittedExecution(
+    executionKey: string
+  ): Promise<
+    AtlasLiveSubmittedExecution | null
+  >;
+
+
+  settleSubmittedExecution(
+    input:
+      AtlasLiveExecutionSettlementInput
   ): Promise<void>;
 }

@@ -1,7 +1,9 @@
 import Link from "next/link";
+
 import AtlasSummaryCards from "./components/AtlasSummaryCards";
 import AtlasFunnel from "./components/AtlasFunnel";
 import AtlasExecutionStatus from "./components/AtlasExecutionStatus";
+import AtlasAuthorizedExecution from "./components/AtlasAuthorizedExecution";
 import AtlasIntelligenceHealth from "./components/AtlasIntelligenceHealth";
 import AtlasActivityFeed from "./components/AtlasActivityFeed";
 import AtlasSystemHealth from "./components/AtlasSystemHealth";
@@ -36,6 +38,10 @@ export default function AtlasOperationsPage() {
 
         <div className="mt-10">
           <AtlasExecutionStatus />
+        </div>
+
+        <div className="mt-10">
+          <AtlasAuthorizedExecution />
         </div>
 
         <div className="mt-10">
