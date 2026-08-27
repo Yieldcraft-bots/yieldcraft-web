@@ -65,74 +65,70 @@ export const ATLAS_ASSET_REGISTRY: readonly AtlasAssetDefinition[] = [
   },
 
   // ------------------------------------------------------------------
-  // Private Markets
+  // Coinbase Equities
   // ------------------------------------------------------------------
 
   {
     symbol: "SPACEX",
     displayName: "SpaceX",
-    assetClass: "PRIVATE",
-    enabled: false,
-    status: "COMING_SOON",
+    assetClass: "STOCK",
+    enabled: true,
+    status: "ACTIVE",
   },
-
-  // ------------------------------------------------------------------
-  // MAG 7
-  // ------------------------------------------------------------------
 
   {
     symbol: "AAPL",
     displayName: "Apple",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 
   {
     symbol: "MSFT",
     displayName: "Microsoft",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 
   {
     symbol: "NVDA",
     displayName: "NVIDIA",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 
   {
     symbol: "AMZN",
     displayName: "Amazon",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 
   {
     symbol: "META",
     displayName: "Meta",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 
   {
     symbol: "GOOGL",
     displayName: "Alphabet",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 
   {
     symbol: "TSLA",
     displayName: "Tesla",
     assetClass: "STOCK",
-    enabled: false,
-    status: "COMING_SOON",
+    enabled: true,
+    status: "ACTIVE",
   },
 ] as const;

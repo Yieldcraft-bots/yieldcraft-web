@@ -120,15 +120,15 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
   {
     symbol: "SPACEX",
 
-    fractional: false,
+    fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
     supportsRecurring: false,
 
-    supportsMarketOrders: false,
+    supportsMarketOrders: true,
 
     supportsLimitOrders: false,
   },
@@ -138,7 +138,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
@@ -154,7 +154,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
@@ -170,7 +170,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
@@ -186,7 +186,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
@@ -202,7 +202,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
@@ -218,7 +218,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 
@@ -234,7 +234,7 @@ export const ATLAS_ASSET_CAPABILITIES: readonly AtlasAssetCapability[] = [
 
     fractional: true,
 
-    productionReady: false,
+    productionReady: true,
 
     shadowSupported: true,
 

@@ -43,7 +43,7 @@ export const ATLAS_BROKER_CAPABILITIES: readonly AtlasBrokerCapability[] = [
   {
     broker: "COINBASE",
 
-    supportedAssetClasses: ["CRYPTO"],
+    supportedAssetClasses: ["CRYPTO", "STOCK"],
 
     supportsFractional: true,
 
