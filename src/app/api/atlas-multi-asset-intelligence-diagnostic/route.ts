@@ -588,13 +588,15 @@ export async function POST(
      */
 
     const intelligencePlan =
-      await buildAtlasMultiAssetIntelligencePlan({
-        basePlan:
-          basePortfolioPlan,
+  await buildAtlasMultiAssetIntelligencePlan({
+    userId,
 
-        minOrderUsd:
-          minBuy,
-      });
+    basePlan:
+      basePortfolioPlan,
+
+    minOrderUsd:
+      minBuy,
+  });
 
 
     /*

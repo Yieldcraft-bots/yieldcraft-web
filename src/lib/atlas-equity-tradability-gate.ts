@@ -47,6 +47,24 @@ export type AtlasEquityTradabilityResult = {
   ticker: string | null;
 
   currentSession: string | null;
+
+  price: number | null;
+
+  pricePercentageChange24h: number | null;
+
+  volume24h: number | null;
+
+  volumePercentageChange24h: number | null;
+
+  bestBidPrice: number | null;
+
+  bestAskPrice: number | null;
+
+  high24h: number | null;
+
+  low24h: number | null;
+
+  midMarketPrice: number | null;
 };
 
 
@@ -81,6 +99,115 @@ function stringValue(
 }
 
 
+function numberValue(
+  value: unknown
+): number | null {
+
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number"
+  ) {
+    return null;
+  }
+
+
+  const parsed =
+    Number(
+      value
+    );
+
+
+  return Number.isFinite(
+    parsed
+  )
+    ? parsed
+    : null;
+}
+
+
+function resultBase(
+  productId: string,
+  ticker: string | null,
+  currentSession: string | null,
+  product:
+    Record<string, unknown> | null
+) {
+
+  return {
+    productId,
+
+    ticker,
+
+    currentSession,
+
+    price:
+      product
+        ? numberValue(
+            product.price
+          )
+        : null,
+
+    pricePercentageChange24h:
+      product
+        ? numberValue(
+            product
+              .price_percentage_change_24h
+          )
+        : null,
+
+    volume24h:
+      product
+        ? numberValue(
+            product.volume_24h
+          )
+        : null,
+
+    volumePercentageChange24h:
+      product
+        ? numberValue(
+            product
+              .volume_percentage_change_24h
+          )
+        : null,
+
+    bestBidPrice:
+      product
+        ? numberValue(
+            product.best_bid_price
+          )
+        : null,
+
+    bestAskPrice:
+      product
+        ? numberValue(
+            product.best_ask_price
+          )
+        : null,
+
+    high24h:
+      product
+        ? numberValue(
+            product.high_24h
+          )
+        : null,
+
+    low24h:
+      product
+        ? numberValue(
+            product.low_24h
+          )
+        : null,
+
+    midMarketPrice:
+      product
+        ? numberValue(
+            product.mid_market_price
+          )
+        : null,
+  };
+}
+
+
 export async function evaluateAtlasEquityTradability(
   userId: string,
   productId: string
@@ -109,11 +236,16 @@ export async function evaluateAtlasEquityTradability(
   if (!result.success) {
     return {
       allowed: false,
+
       reason:
         "coinbase_product_lookup_failed",
-      productId,
-      ticker: null,
-      currentSession: null,
+
+      ...resultBase(
+        productId,
+        null,
+        null,
+        null
+      ),
     };
   }
 
@@ -127,11 +259,16 @@ export async function evaluateAtlasEquityTradability(
   if (!product) {
     return {
       allowed: false,
+
       reason:
         "coinbase_product_lookup_failed",
-      productId,
-      ticker: null,
-      currentSession: null,
+
+      ...resultBase(
+        productId,
+        null,
+        null,
+        null
+      ),
     };
   }
 
@@ -192,17 +329,26 @@ export async function evaluateAtlasEquityTradability(
       : null;
 
 
+  const market =
+    resultBase(
+      productId,
+      ticker,
+      currentSession,
+      product
+    );
+
+
   if (
     productType !==
     "EQUITY"
   ) {
     return {
       allowed: false,
+
       reason:
         "product_not_equity",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
@@ -210,11 +356,11 @@ export async function evaluateAtlasEquityTradability(
   if (tradingDisabled) {
     return {
       allowed: false,
+
       reason:
         "equity_trading_disabled",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
@@ -222,11 +368,11 @@ export async function evaluateAtlasEquityTradability(
   if (viewOnly) {
     return {
       allowed: false,
+
       reason:
         "equity_view_only",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
@@ -239,11 +385,11 @@ export async function evaluateAtlasEquityTradability(
   ) {
     return {
       allowed: false,
+
       reason:
         "equity_not_tradable",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
@@ -256,11 +402,11 @@ export async function evaluateAtlasEquityTradability(
   ) {
     return {
       allowed: false,
+
       reason:
         "equity_buy_disabled",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
@@ -268,11 +414,11 @@ export async function evaluateAtlasEquityTradability(
   if (tradingHalted) {
     return {
       allowed: false,
+
       reason:
         "equity_trading_halted",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
@@ -283,21 +429,21 @@ export async function evaluateAtlasEquityTradability(
   ) {
     return {
       allowed: false,
+
       reason:
         "equity_not_normal_session",
-      productId,
-      ticker,
-      currentSession,
+
+      ...market,
     };
   }
 
 
   return {
     allowed: true,
+
     reason:
       "equity_normal_session_ready",
-    productId,
-    ticker,
-    currentSession,
+
+    ...market,
   };
 }

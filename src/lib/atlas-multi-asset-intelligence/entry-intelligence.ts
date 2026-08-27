@@ -15,6 +15,18 @@
  * - Pending capital is reevaluated every cycle.
  * - Atlas NEVER creates a SELL decision.
  *
+ * EQUITY COINBASE-ONLY LAUNCH MODE
+ * - Coinbase currently exposes authoritative equity execution
+ *   readiness but not live equity quote/candle data through the
+ *   Advanced Trade market-data API.
+ * - When executionReadinessOnly=true, Atlas does NOT invent
+ *   price, trend, momentum, volatility, or pullback signals.
+ * - The asset must still be execution eligible.
+ * - Coinbase must still prove fresh/open execution readiness.
+ * - Atlas permits only one minimum-order staged BUY amount.
+ * - Final Coinbase tradability/session checks still remain
+ *   authoritative immediately before order submission.
+ *
  * SAFETY
  * - Multi-Asset only
  * - Pure calculation
@@ -102,6 +114,19 @@ export interface AtlasMultiAssetMarketSnapshot {
    */
   dataFresh:
     boolean;
+
+  /**
+   * Coinbase-only equity launch mode.
+   *
+   * true means:
+   * - Coinbase has affirmatively proved current execution
+   *   readiness / NORMAL-session tradability.
+   * - Live quote/candle-derived intelligence is unavailable.
+   * - Atlas must not fabricate market signals.
+   * - Only a minimum-size staged accumulation may be approved.
+   */
+  executionReadinessOnly?:
+    boolean;
 }
 
 
@@ -158,6 +183,10 @@ export interface AtlasMultiAssetEntryDecision {
 
   /**
    * 0-100 composite entry score.
+   *
+   * In execution-readiness-only equity mode, score=50 represents
+   * a neutral/no-market-signal state. The staged action is
+   * explicitly policy-driven rather than score-driven.
    */
   score:
     number;
@@ -165,10 +194,6 @@ export interface AtlasMultiAssetEntryDecision {
   /**
    * Fraction of current pending dollars that intelligence
    * recommends deploying this cycle.
-   *
-   * 0   = deploy nothing
-   * 0.5 = staged entry
-   * 1   = deploy full currently executable pending bucket
    */
   deploymentFraction:
     number;
@@ -212,6 +237,7 @@ function clamp(
   minimum: number,
   maximum: number
 ): number {
+
   return Math.min(
     maximum,
     Math.max(
@@ -225,6 +251,7 @@ function clamp(
 function money(
   value: number
 ): number {
+
   return Number(
     value.toFixed(2)
   );
@@ -234,6 +261,7 @@ function money(
 function normalizeSigned(
   value: number
 ): number {
+
   return clamp(
     value,
     -1,
@@ -245,6 +273,7 @@ function normalizeSigned(
 function normalizeUnit(
   value: number
 ): number {
+
   return clamp(
     value,
     0,
@@ -256,7 +285,9 @@ function normalizeUnit(
 function regimePoints(
   regime: AtlasMarketRegime
 ): number {
+
   switch (regime) {
+
     case "STRONG_BULL":
       return 15;
 
@@ -289,6 +320,7 @@ function regimePoints(
 function calculateUrgency(
   waitCycles: number
 ): number {
+
   const normalizedCycles =
     Math.max(
       0,
@@ -296,6 +328,7 @@ function calculateUrgency(
         waitCycles
       )
     );
+
 
   return clamp(
     normalizedCycles * 3,
@@ -308,20 +341,24 @@ function calculateUrgency(
 export function evaluateAtlasMultiAssetEntry(
   input: AtlasMultiAssetEntryInput
 ): AtlasMultiAssetEntryDecision {
+
   const symbol =
     input.symbol
       .trim()
       .toUpperCase();
+
 
   const pendingUsd =
     money(
       input.pendingUsd
     );
 
+
   const minOrderUsd =
     money(
       input.minOrderUsd
     );
+
 
   /*
    * ==========================================================
@@ -330,6 +367,7 @@ export function evaluateAtlasMultiAssetEntry(
    */
 
   if (!symbol) {
+
     return {
       symbol:
         "",
@@ -372,6 +410,7 @@ export function evaluateAtlasMultiAssetEntry(
     pendingUsd <=
       0
   ) {
+
     return {
       symbol,
 
@@ -409,6 +448,7 @@ export function evaluateAtlasMultiAssetEntry(
   if (
     !input.executionEligible
   ) {
+
     return {
       symbol,
 
@@ -450,6 +490,7 @@ export function evaluateAtlasMultiAssetEntry(
     minOrderUsd <=
       0
   ) {
+
     return {
       symbol,
 
@@ -488,6 +529,13 @@ export function evaluateAtlasMultiAssetEntry(
     pendingUsd <
       minOrderUsd
   ) {
+
+    const urgency =
+      calculateUrgency(
+        input.waitCycles
+      );
+
+
     return {
       symbol,
 
@@ -504,9 +552,7 @@ export function evaluateAtlasMultiAssetEntry(
         0,
 
       urgencyScore:
-        calculateUrgency(
-          input.waitCycles
-        ),
+        urgency,
 
       reason:
         "Pending capital remains assigned but is below the execution minimum.",
@@ -518,10 +564,7 @@ export function evaluateAtlasMultiAssetEntry(
         pullback: 0,
         volatility: 0,
         relativeStrength: 0,
-        urgency:
-          calculateUrgency(
-            input.waitCycles
-          ),
+        urgency,
       },
     };
   }
@@ -530,6 +573,13 @@ export function evaluateAtlasMultiAssetEntry(
   if (
     !input.market.dataFresh
   ) {
+
+    const urgency =
+      calculateUrgency(
+        input.waitCycles
+      );
+
+
     return {
       symbol,
 
@@ -546,9 +596,7 @@ export function evaluateAtlasMultiAssetEntry(
         0,
 
       urgencyScore:
-        calculateUrgency(
-          input.waitCycles
-        ),
+        urgency,
 
       reason:
         "Market data is stale; pending capital remains assigned for reevaluation.",
@@ -560,10 +608,7 @@ export function evaluateAtlasMultiAssetEntry(
         pullback: 0,
         volatility: 0,
         relativeStrength: 0,
-        urgency:
-          calculateUrgency(
-            input.waitCycles
-          ),
+        urgency,
       },
     };
   }
@@ -572,6 +617,13 @@ export function evaluateAtlasMultiAssetEntry(
   if (
     !input.market.marketOpen
   ) {
+
+    const urgency =
+      calculateUrgency(
+        input.waitCycles
+      );
+
+
     return {
       symbol,
 
@@ -588,9 +640,7 @@ export function evaluateAtlasMultiAssetEntry(
         0,
 
       urgencyScore:
-        calculateUrgency(
-          input.waitCycles
-        ),
+        urgency,
 
       reason:
         "Market is not currently executable; pending capital remains assigned.",
@@ -602,10 +652,7 @@ export function evaluateAtlasMultiAssetEntry(
         pullback: 0,
         volatility: 0,
         relativeStrength: 0,
-        urgency:
-          calculateUrgency(
-            input.waitCycles
-          ),
+        urgency,
       },
     };
   }
@@ -613,13 +660,112 @@ export function evaluateAtlasMultiAssetEntry(
 
   /*
    * ==========================================================
-   * ENTRY SCORE
+   * COINBASE-ONLY EQUITY EXECUTION-READINESS MODE
    * ==========================================================
    *
-   * V1 deliberately uses transparent factors.
+   * Coinbase has already affirmatively proved the equity:
    *
-   * Future versions can improve or replace individual factors
-   * without changing the execution/governance architecture.
+   * - is an EQUITY product
+   * - trading is enabled
+   * - is not view-only
+   * - is tradable
+   * - BUY is enabled
+   * - is not halted
+   * - is in EQUITY_TRADING_SESSION_NORMAL
+   *
+   * Coinbase does not provide the live equity quote/candle data
+   * required for the normal Atlas scoring model.
+   *
+   * Therefore:
+   *
+   * - DO NOT invent market factors.
+   * - DO NOT issue BUY_NOW.
+   * - DO NOT deploy a percentage-derived large amount.
+   * - Permit only one minimum-order SCALE_IN canary.
+   *
+   * The live Coinbase adapter performs its own independent
+   * tradability/session check again immediately before POSTing
+   * the actual order.
+   */
+
+  if (
+    input.market
+      .executionReadinessOnly ===
+      true
+  ) {
+
+    const recommendedBuyUsd =
+      money(
+        Math.min(
+          pendingUsd,
+          minOrderUsd
+        )
+      );
+
+
+    const deploymentFraction =
+      pendingUsd >
+        0
+        ? clamp(
+            recommendedBuyUsd /
+              pendingUsd,
+            0,
+            1
+          )
+        : 0;
+
+
+    const urgency =
+      calculateUrgency(
+        input.waitCycles
+      );
+
+
+    return {
+      symbol,
+
+      action:
+        "SCALE_IN",
+
+      /*
+       * Neutral/no-market-signal score.
+       *
+       * SCALE_IN here is driven explicitly by Coinbase-verified
+       * execution readiness, not by pretending score >= 60.
+       */
+      score:
+        50,
+
+      deploymentFraction,
+
+      recommendedBuyUsd,
+
+      urgencyScore:
+        urgency,
+
+      reason:
+        "Coinbase confirms normal-session equity execution readiness; permit one minimum-size staged accumulation without fabricating unavailable market signals.",
+
+      components: {
+        regime: 0,
+        trend: 0,
+        momentum: 0,
+        pullback: 0,
+        volatility: 0,
+        relativeStrength: 0,
+        urgency,
+      },
+    };
+  }
+
+
+  /*
+   * ==========================================================
+   * NORMAL MARKET-DATA ENTRY SCORE
+   * ==========================================================
+   *
+   * This remains the existing crypto / fully-observed market
+   * intelligence path.
    */
 
   const regime =
@@ -627,11 +773,13 @@ export function evaluateAtlasMultiAssetEntry(
       input.market.regime
     );
 
+
   const trend =
     normalizeSigned(
       input.market.trendScore
     ) *
     20;
+
 
   const momentum =
     normalizeSigned(
@@ -639,11 +787,13 @@ export function evaluateAtlasMultiAssetEntry(
     ) *
     15;
 
+
   const pullback =
     normalizeUnit(
       input.market.pullbackQuality
     ) *
     20;
+
 
   /*
    * Lower volatility receives less penalty.
@@ -658,11 +808,13 @@ export function evaluateAtlasMultiAssetEntry(
       15
     );
 
+
   const relativeStrength =
     normalizeSigned(
       input.market.relativeStrengthScore
     ) *
     15;
+
 
   const urgency =
     calculateUrgency(
@@ -702,19 +854,6 @@ export function evaluateAtlasMultiAssetEntry(
    * ==========================================================
    * ACTION POLICY
    * ==========================================================
-   *
-   * Strong entry:
-   *   deploy all currently approved pending capital.
-   *
-   * Good/acceptable entry:
-   *   stage capital rather than waiting for perfection.
-   *
-   * Weak entry:
-   *   wait briefly and reevaluate.
-   *
-   * Persistent waiting:
-   *   urgency progressively moves acceptable opportunities
-   *   toward deployment.
    */
 
   let action:
@@ -731,6 +870,7 @@ export function evaluateAtlasMultiAssetEntry(
     score >=
       80
   ) {
+
     action =
       "BUY_NOW";
 
@@ -739,10 +879,12 @@ export function evaluateAtlasMultiAssetEntry(
 
     reason =
       "Strong entry quality; deploy the currently executable pending allocation.";
+
   } else if (
     score >=
       60
   ) {
+
     action =
       "SCALE_IN";
 
@@ -751,12 +893,14 @@ export function evaluateAtlasMultiAssetEntry(
 
     reason =
       "Constructive entry quality; stage capital into the position.";
+
   } else if (
     urgency >=
       15 &&
     score >=
       45
   ) {
+
     action =
       "SCALE_IN";
 
@@ -765,7 +909,9 @@ export function evaluateAtlasMultiAssetEntry(
 
     reason =
       "Entry is acceptable and capital has waited multiple cycles; begin disciplined accumulation.";
+
   } else {
+
     action =
       "WAIT";
 
@@ -822,8 +968,7 @@ export function evaluateAtlasMultiAssetEntry(
     reason,
 
     components: {
-      regime:
-        regime,
+      regime,
 
       trend:
         Number(
@@ -860,8 +1005,7 @@ export function evaluateAtlasMultiAssetEntry(
           )
         ),
 
-      urgency:
-        urgency,
+      urgency,
     },
   };
 }

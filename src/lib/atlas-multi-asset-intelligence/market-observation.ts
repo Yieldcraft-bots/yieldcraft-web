@@ -4,39 +4,35 @@
  * Market Observation V1
  * ------------------------------------------------------------
  * PURPOSE
- * Read current Coinbase market candles for one Atlas asset and
+ * Read current Coinbase market data for one Atlas asset and
  * convert those observations into the normalized market inputs
  * required by Multi-Asset Entry Intelligence.
  *
- * V1 MEASURES
- * - directional trend
- * - short-term momentum
- * - pullback / entry quality
- * - realized volatility
- * - relative strength versus recent history
- * - broad market regime
- * - market-data freshness
+ * DATA SOURCES
+ * - CRYPTO:
+ *   Public Coinbase five-minute candles.
+ *
+ * - STOCK:
+ *   Authenticated Coinbase EQUITY product snapshot using the
+ *   canonical Coinbase product ID.
  *
  * IMPORTANT
- * This module observes markets only.
- *
- * It NEVER:
- * - submits an order
- * - accesses client credentials
- * - accesses Supabase
- * - changes allocations
- * - changes pending balances
- * - approves or authorizes anything
- * - creates SELL instructions
+ * Coinbase candle endpoints are not used for equities.
  *
  * SAFETY
  * - Atlas Multi-Asset only
- * - Read-only public market data
+ * - Read-only market data
+ * - No order submission
+ * - No approval mutation
+ * - No authorization mutation
+ * - No Supabase
  * - No legacy Atlas
  * - No Pulse
  * - No Recon
  * - No execution imports
- * - No database
+ *
+ * Any market-data failure returns an unavailable observation.
+ * Unavailable observations can NEVER become permission to buy.
  * ============================================================
  */
 
@@ -44,6 +40,14 @@ import type {
   AtlasMarketRegime,
   AtlasMultiAssetMarketSnapshot,
 } from "./entry-intelligence";
+
+import {
+  getAtlasAsset,
+} from "../atlas-assets";
+
+import {
+  evaluateAtlasEquityTradability,
+} from "../atlas-equity-tradability-gate";
 
 
 type CoinbaseCandle = {
@@ -223,7 +227,10 @@ function normalizeUnit(
 }
 
 
-function determineRegime(
+/**
+ * Crypto regime based on candle-derived short/long averages.
+ */
+function determineCryptoRegime(
   shortAverage:
     number,
   longAverage:
@@ -342,6 +349,12 @@ function unavailableObservation(
 }
 
 
+/**
+ * ============================================================
+ * CRYPTO MARKET DATA
+ * ============================================================
+ */
+
 async function loadCoinbaseCandles(
   productId:
     string
@@ -350,17 +363,13 @@ async function loadCoinbaseCandles(
   const nowSeconds =
     Math.floor(
       Date.now() /
-      1000
+        1000
     );
 
 
   /*
    * Five-minute candles covering roughly the previous
    * five hours.
-   *
-   * This is intentionally short-horizon V1 entry intelligence,
-   * not long-term asset-selection logic. The client already
-   * selected the asset through their allocation mandate.
    */
   const startSeconds =
     nowSeconds -
@@ -451,37 +460,12 @@ async function loadCoinbaseCandles(
 }
 
 
-export async function observeAtlasMultiAssetMarket(
-  input: {
-    symbol:
-      string;
-
-    productId:
-      string;
-  }
+async function observeCryptoMarket(
+  symbol:
+    string,
+  productId:
+    string
 ): Promise<AtlasMultiAssetMarketObservation> {
-
-  const symbol =
-    input.symbol
-      .trim()
-      .toUpperCase();
-
-
-  const productId =
-    input.productId
-      .trim();
-
-
-  if (
-    !symbol ||
-    !productId
-  ) {
-    return unavailableObservation(
-      symbol,
-      productId
-    );
-  }
-
 
   let rawCandles:
     CoinbaseCandle[];
@@ -498,9 +482,6 @@ export async function observeAtlasMultiAssetMarket(
 
     /*
      * Market-data failure must NEVER become permission to buy.
-     *
-     * Return stale/unavailable observation so intelligence
-     * chooses WAIT rather than inventing market conditions.
      */
     return unavailableObservation(
       symbol,
@@ -582,10 +563,6 @@ export async function observeAtlasMultiAssetMarket(
       );
 
 
-  /*
-   * We want enough observations for both a short and longer
-   * moving window. Insufficient history fails closed.
-   */
   if (
     candles.length <
       20
@@ -609,19 +586,13 @@ export async function observeAtlasMultiAssetMarket(
   const latestCandle =
     candles[
       candles.length -
-      1
+        1
     ];
 
 
   const latestPrice =
     latestCandle.close;
 
-
-  /*
-   * ==========================================================
-   * TREND
-   * ==========================================================
-   */
 
   const shortWindow =
     closes.slice(
@@ -658,22 +629,12 @@ export async function observeAtlasMultiAssetMarket(
       : 0;
 
 
-  /*
-   * +/- 2% short-vs-long separation maps to the ends of the
-   * normalized trend scale.
-   */
   const trendScore =
     normalizeSigned(
       trendDifference,
       0.02
     );
 
-
-  /*
-   * ==========================================================
-   * MOMENTUM
-   * ==========================================================
-   */
 
   const momentumReferenceIndex =
     Math.max(
@@ -692,28 +653,12 @@ export async function observeAtlasMultiAssetMarket(
     );
 
 
-  /*
-   * +/- 3% over the recent observation window maps to +/-1.
-   */
   const momentumScore =
     normalizeSigned(
       momentum,
       0.03
     );
 
-
-  /*
-   * ==========================================================
-   * PULLBACK QUALITY
-   * ==========================================================
-   *
-   * For an accumulation product, a controlled discount from a
-   * recent high can be preferable to chasing an extended move.
-   *
-   * A 0% pullback receives little benefit.
-   * Roughly 1-5% pullbacks progressively improve the score.
-   * Extremely deep moves do not receive unlimited benefit.
-   */
 
   const recentHigh =
     Math.max(
@@ -748,12 +693,6 @@ export async function observeAtlasMultiAssetMarket(
     );
 
 
-  /*
-   * ==========================================================
-   * REALIZED VOLATILITY
-   * ==========================================================
-   */
-
   const returns:
     number[] =
       [];
@@ -772,7 +711,7 @@ export async function observeAtlasMultiAssetMarket(
       percentChange(
         closes[
           index -
-          1
+            1
         ],
         closes[
           index
@@ -790,30 +729,12 @@ export async function observeAtlasMultiAssetMarket(
     );
 
 
-  /*
-   * 2% standard deviation per five-minute return is treated as
-   * the upper end of V1's volatility scale.
-   */
   const volatilityScore =
     normalizeUnit(
       realizedVolatility /
         0.02
     );
 
-
-  /*
-   * ==========================================================
-   * RELATIVE STRENGTH V1
-   * ==========================================================
-   *
-   * V1 compares recent performance with the asset's longer
-   * observation window.
-   *
-   * This deliberately avoids coupling the launch version to a
-   * second benchmark-data dependency. A future version can
-   * replace this component with cross-asset/benchmark strength
-   * without changing the intelligence or execution contracts.
-   */
 
   const shortReturn =
     percentChange(
@@ -849,28 +770,13 @@ export async function observeAtlasMultiAssetMarket(
     );
 
 
-  /*
-   * ==========================================================
-   * REGIME
-   * ==========================================================
-   */
-
   const regime =
-    determineRegime(
+    determineCryptoRegime(
       shortAverage,
       longAverage,
       momentum
     );
 
-
-  /*
-   * ==========================================================
-   * FRESHNESS
-   * ==========================================================
-   *
-   * Five-minute observations are considered usable when the
-   * newest candle is no more than 15 minutes old.
-   */
 
   const latestCandleAgeSeconds =
     Math.max(
@@ -891,13 +797,6 @@ export async function observeAtlasMultiAssetMarket(
       );
 
 
-  /*
-   * For the Coinbase execution universe, V1 treats a product
-   * with fresh actively-returning Coinbase candles as presently
-   * observable/executable from the intelligence perspective.
-   *
-   * Downstream execution eligibility remains authoritative.
-   */
   const marketOpen =
     dataFresh;
 
@@ -934,4 +833,218 @@ export async function observeAtlasMultiAssetMarket(
       dataFresh,
     },
   };
+}
+
+
+/**
+ * ============================================================
+ * EQUITY MARKET DATA
+ * ============================================================
+ *
+ * Coinbase does not expose the crypto candle endpoint for
+ * equities.
+ *
+ * Coinbase DOES expose authoritative execution readiness:
+ *
+ * - product_type = EQUITY
+ * - trading enabled
+ * - not view-only
+ * - tradable
+ * - BUY enabled
+ * - not halted
+ * - NORMAL trading session
+ *
+ * Coinbase currently does NOT expose reliable live equity
+ * price/bid/ask/candle data through the API paths available
+ * to Atlas.
+ *
+ * Therefore equities use an explicit Coinbase-only
+ * execution-readiness mode.
+ *
+ * We DO NOT invent historical or current market signals.
+ * ============================================================
+ */
+
+async function observeEquityMarket(
+  userId:
+    string,
+  symbol:
+    string,
+  productId:
+    string
+): Promise<AtlasMultiAssetMarketObservation> {
+
+  let equity;
+
+
+  try {
+
+    equity =
+      await evaluateAtlasEquityTradability(
+        userId,
+        productId
+      );
+
+  } catch {
+
+    return unavailableObservation(
+      symbol,
+      productId
+    );
+  }
+
+
+  /*
+   * Coinbase tradability/session state is authoritative.
+   *
+   * If Coinbase does not affirmatively prove normal-session
+   * tradability, intelligence must WAIT.
+   */
+  if (
+    !equity.allowed
+  ) {
+    return unavailableObservation(
+      symbol,
+      productId
+    );
+  }
+
+
+  /*
+   * Coinbase has proved execution readiness, but has not
+   * supplied trustworthy live price-derived market data.
+   *
+   * Do not manufacture any market signals.
+   *
+   * Entry Intelligence recognizes executionReadinessOnly=true
+   * and permits only a minimum-size staged accumulation.
+   *
+   * The live Coinbase execution adapter performs its own
+   * independent tradability/session check again immediately
+   * before submitting any real order.
+   */
+  return {
+    symbol,
+
+    productId,
+
+    observedAt:
+      new Date()
+        .toISOString(),
+
+    candleCount:
+      0,
+
+    latestPrice:
+      0,
+
+    snapshot: {
+      regime:
+        "NEUTRAL",
+
+      trendScore:
+        0,
+
+      momentumScore:
+        0,
+
+      pullbackQuality:
+        0,
+
+      volatilityScore:
+        0,
+
+      relativeStrengthScore:
+        0,
+
+      marketOpen:
+        true,
+
+      dataFresh:
+        true,
+
+      executionReadinessOnly:
+        true,
+    },
+  };
+}
+
+
+/**
+ * ============================================================
+ * PUBLIC OBSERVATION ENTRY
+ * ============================================================
+ */
+
+export async function observeAtlasMultiAssetMarket(
+  input: {
+    userId:
+      string;
+
+    symbol:
+      string;
+
+    productId:
+      string;
+  }
+): Promise<AtlasMultiAssetMarketObservation> {
+
+  const userId =
+    input.userId
+      .trim();
+
+
+  const symbol =
+    input.symbol
+      .trim()
+      .toUpperCase();
+
+
+  const productId =
+    input.productId
+      .trim();
+
+
+  if (
+    !userId ||
+    !symbol ||
+    !productId
+  ) {
+    return unavailableObservation(
+      symbol,
+      productId
+    );
+  }
+
+
+  const asset =
+    getAtlasAsset(
+      symbol
+    );
+
+
+  if (!asset) {
+    return unavailableObservation(
+      symbol,
+      productId
+    );
+  }
+
+
+  if (
+    asset.assetClass ===
+      "stock"
+  ) {
+    return observeEquityMarket(
+      userId,
+      symbol,
+      productId
+    );
+  }
+
+
+  return observeCryptoMarket(
+    symbol,
+    productId
+  );
 }

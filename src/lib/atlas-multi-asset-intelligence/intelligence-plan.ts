@@ -19,7 +19,7 @@
  *
  * SAFETY
  * - Atlas Multi-Asset only
- * - No credentials
+ * - No direct credential handling
  * - No Supabase
  * - No order submission
  * - No legacy Atlas
@@ -124,6 +124,9 @@ function unavailableObservation(
 
 export async function buildAtlasMultiAssetIntelligencePlan(
   input: {
+    userId:
+      string;
+
     basePlan:
       PortfolioExecutionPlan;
 
@@ -131,6 +134,11 @@ export async function buildAtlasMultiAssetIntelligencePlan(
       number;
   }
 ): Promise<AtlasMultiAssetIntelligencePlanResult> {
+
+  const userId =
+    input.userId
+      .trim();
+
   const basePlan =
     input.basePlan;
 
@@ -138,6 +146,57 @@ export async function buildAtlasMultiAssetIntelligencePlan(
     money(
       input.minOrderUsd
     );
+
+
+  if (
+    !userId
+  ) {
+    return {
+      valid:
+        false,
+
+      reason:
+        "user_id_required",
+
+      basePlan,
+
+      intelligence: {
+        valid:
+          false,
+
+        reason:
+          "user_id_required",
+
+        totalPendingUsd:
+          basePlan.deployableUsd,
+
+        recommendedDeployUsd:
+          0,
+
+        remainingPendingUsd:
+          basePlan.deployableUsd,
+
+        executableDecisionCount:
+          0,
+
+        waitingDecisionCount:
+          0,
+
+        blockedDecisionCount:
+          0,
+
+        decisions:
+          [],
+      },
+
+      observations:
+        [],
+
+      approvedPlan:
+        basePlan,
+    };
+  }
+
 
   if (
     !basePlan.valid
@@ -190,35 +249,48 @@ export async function buildAtlasMultiAssetIntelligencePlan(
 
 
   /*
-   * Observe every order with a valid mapped Coinbase product.
+   * Observe sequentially rather than blasting every Coinbase
+   * market endpoint concurrently.
    *
-   * Non-executable orders remain represented in the portfolio
-   * intelligence input but fail closed at execution eligibility.
+   * This matters now that equities use authenticated Coinbase
+   * product lookups and also reduces 429 pressure on crypto
+   * candle reads.
    */
-  const observations =
-    await Promise.all(
-      basePlan.orders.map(
-        async (
+  const observations:
+    AtlasMultiAssetMarketObservation[] =
+      [];
+
+
+  for (
+    const order
+    of basePlan.orders
+  ) {
+
+    if (
+      !order.productId
+    ) {
+      observations.push(
+        unavailableObservation(
           order
-        ) => {
-          if (
-            !order.productId
-          ) {
-            return unavailableObservation(
-              order
-            );
-          }
+        )
+      );
 
-          return observeAtlasMultiAssetMarket({
-            symbol:
-              order.symbol,
+      continue;
+    }
 
-            productId:
-              order.productId,
-          });
-        }
-      )
+
+    observations.push(
+      await observeAtlasMultiAssetMarket({
+        userId,
+
+        symbol:
+          order.symbol,
+
+        productId:
+          order.productId,
+      })
     );
+  }
 
 
   const observationBySymbol =
@@ -243,6 +315,7 @@ export async function buildAtlasMultiAssetIntelligencePlan(
         (
           order
         ) => {
+
           const symbol =
             order.symbol
               .trim()
@@ -255,6 +328,7 @@ export async function buildAtlasMultiAssetIntelligencePlan(
             unavailableObservation(
               order
             );
+
 
           return {
             symbol,
@@ -273,13 +347,6 @@ export async function buildAtlasMultiAssetIntelligencePlan(
                 order.productId
               ),
 
-            /*
-             * V1 starts at zero because wait-cycle persistence
-             * has not yet been introduced into the database.
-             *
-             * The interface is already future-ready for that
-             * isolated upgrade.
-             */
             waitCycles:
               0,
 
@@ -334,28 +401,13 @@ export async function buildAtlasMultiAssetIntelligencePlan(
     );
 
 
-  /*
-   * Build a shadow/governance-safe derived plan.
-   *
-   * BUY_NOW / SCALE_IN:
-   *   preserve the exact mapped product and use only the
-   *   intelligence-approved amount.
-   *
-   * WAIT / BLOCK:
-   *   mark the derived order non-executable while leaving the
-   *   underlying persistent pending bucket untouched.
-   *
-   * The existing reason union has no intelligence-specific
-   * reason yet. We therefore retain the original plan reason
-   * and expose the true intelligence reason separately in the
-   * intelligence decision ledger returned above.
-   */
   const approvedOrders:
     PortfolioExecutionPlanOrder[] =
       basePlan.orders.map(
         (
           order
         ) => {
+
           const symbol =
             order.symbol
               .trim()
@@ -365,6 +417,7 @@ export async function buildAtlasMultiAssetIntelligencePlan(
             decisionBySymbol.get(
               symbol
             );
+
 
           if (
             !decision ||
@@ -450,10 +503,6 @@ export async function buildAtlasMultiAssetIntelligencePlan(
         reason:
           "plan_ready",
 
-        /*
-         * Full pending capital remains the portfolio-level
-         * capital responsibility.
-         */
         deployableUsd:
           basePlan.deployableUsd,
 

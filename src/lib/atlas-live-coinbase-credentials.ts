@@ -24,6 +24,7 @@
  */
 
 import jwt from "jsonwebtoken";
+
 import crypto from "crypto";
 
 import {
@@ -63,6 +64,7 @@ function normalizePem(
       normalized.endsWith("'")
     )
   ) {
+
     normalized =
       normalized.slice(
         1,
@@ -301,6 +303,18 @@ export async function getAtlasLiveCoinbaseCredentials(
     userId,
     "POST",
     "/api/v3/brokerage/orders"
+  );
+}
+
+
+export async function getAtlasCoinbasePreviewCredentials(
+  userId: string
+): Promise<AtlasCoinbaseRequestContext> {
+
+  return createAtlasCoinbaseRequestContext(
+    userId,
+    "POST",
+    "/api/v3/brokerage/orders/preview"
   );
 }
 
