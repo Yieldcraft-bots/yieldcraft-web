@@ -177,9 +177,6 @@ function buildAtlasEquityMarketBuyOrder(
     equity_order_metadata: {
       equity_trading_session:
         "EQUITY_TRADING_SESSION_NORMAL",
-
-      displayed_order_config:
-        "MARKET_GFD",
     },
   };
 }
