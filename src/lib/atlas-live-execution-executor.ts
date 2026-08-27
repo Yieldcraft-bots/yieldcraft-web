@@ -50,6 +50,10 @@ import {
 } from "./atlas-live-execution-idempotency";
 
 import {
+  evaluateAtlasEquityAccumulationCooldown,
+} from "./atlas-equity-accumulation-cooldown";
+
+import {
   submitAtlasLiveCoinbaseOrder,
 } from "./atlas-live-coinbase-adapter";
 
@@ -266,7 +270,100 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 4. CLIENT-SCOPED COINBASE CREDENTIALS
+   * 4. EQUITY ACCUMULATION STAGE GATE
+   * ========================================================
+   *
+   * Equity execution-readiness mode must not repeatedly
+   * accumulate the same client/product every cron cycle.
+   *
+   * Production launch policy:
+   * - Equity only
+   * - Maximum settled stages per New York market date
+   * - Default = 1
+   * - Crypto passes through unchanged
+   * - Pending allocation remains untouched when blocked
+   * - Runs before credentials
+   * - Runs before reservation
+   * - Runs before Coinbase submission
+   *
+   * The database outstanding-order invariant remains an
+   * independent concurrency backstop.
+   */
+
+  const equityCooldown =
+    await evaluateAtlasEquityAccumulationCooldown({
+      userId:
+        authorization.userId,
+
+      productId:
+        instruction.productId,
+    });
+
+
+  if (
+    !equityCooldown.allowed
+  ) {
+
+    const audit =
+      createAtlasLiveOrderAudit({
+        status:
+          "BLOCKED",
+
+        userId:
+          authorization.userId,
+
+        authorizationId:
+          authorization.authorizationId,
+
+        portfolioPlanId:
+          authorization.portfolioPlanId,
+
+        productId:
+          instruction.productId,
+
+        quoteSizeUsd:
+          instruction.quoteSizeUsd,
+
+        coinbaseOrderId:
+          null,
+
+        responseSummary:
+          equityCooldown.reason,
+      });
+
+
+    await persistAtlasLiveAudit(
+      audit
+    );
+
+
+    return {
+      success:
+        false,
+
+      submitted:
+        false,
+
+      response: {
+        mode:
+          "live",
+
+        fingerprint,
+
+        reason:
+          equityCooldown.reason,
+
+        equityCooldown,
+
+        audit,
+      },
+    };
+  }
+
+
+  /*
+   * ========================================================
+   * 5. CLIENT-SCOPED COINBASE CREDENTIALS
    * ========================================================
    */
 
@@ -392,7 +489,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 5. EXACTLY-ONCE EXECUTION RESERVATION
+   * 6. EXACTLY-ONCE EXECUTION RESERVATION
    * ========================================================
    */
 
@@ -457,7 +554,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 6. COINBASE SUBMISSION
+   * 7. COINBASE SUBMISSION
    * ========================================================
    */
 
@@ -477,7 +574,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 7. FAILED SUBMISSION
+   * 8. FAILED SUBMISSION
    * ========================================================
    */
 
@@ -551,7 +648,7 @@ export async function executeAtlasLiveInstruction(
 
   /*
    * ========================================================
-   * 8. SUCCESSFUL SUBMISSION
+   * 9. SUCCESSFUL SUBMISSION
    * ========================================================
    *
    * Coinbase accepting an order does NOT mean Atlas settles
