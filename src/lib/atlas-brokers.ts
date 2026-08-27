@@ -41,7 +41,7 @@ export const ATLAS_BROKERS: readonly AtlasBroker[] = [
     supportsUsdc: true,
 
     supportsCrypto: true,
-    supportsStocks: false,
+    supportsStocks: true,
 
     enabled: true,
   },

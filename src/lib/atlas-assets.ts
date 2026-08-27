@@ -15,10 +15,16 @@
 
 export type AtlasBroker = "coinbase";
 
+export type AtlasAssetClass =
+  | "crypto"
+  | "stock";
+
 export type AtlasAsset = {
   id: string;
   symbol: string;
   displayName: string;
+
+  assetClass: AtlasAssetClass;
 
   broker: AtlasBroker;
 
@@ -38,6 +44,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "btc",
     symbol: "BTC",
     displayName: "Bitcoin",
+    assetClass: "crypto",
     broker: "coinbase",
     usdPair: "BTC-USD",
     usdcPair: "BTC-USDC",
@@ -48,6 +55,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "eth",
     symbol: "ETH",
     displayName: "Ethereum",
+    assetClass: "crypto",
     broker: "coinbase",
     usdPair: "ETH-USD",
     usdcPair: "ETH-USDC",
@@ -58,6 +66,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "sol",
     symbol: "SOL",
     displayName: "Solana",
+    assetClass: "crypto",
     broker: "coinbase",
     usdPair: "SOL-USD",
     usdcPair: "SOL-USDC",
@@ -68,6 +77,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "xrp",
     symbol: "XRP",
     displayName: "XRP",
+    assetClass: "crypto",
     broker: "coinbase",
     usdPair: "XRP-USD",
     usdcPair: "XRP-USDC",
@@ -78,6 +88,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "xlm",
     symbol: "XLM",
     displayName: "Stellar",
+    assetClass: "crypto",
     broker: "coinbase",
     usdPair: "XLM-USD",
     usdcPair: "XLM-USDC",
@@ -92,6 +103,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "aapl",
     symbol: "AAPL",
     displayName: "Apple",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "ec78ee42e2d0c969366fc2540fd2f49f0e8d2b8a8ad258417a814287eb8a2994",
@@ -104,6 +116,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "msft",
     symbol: "MSFT",
     displayName: "Microsoft",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "19c51a954ce8fe1b426cb03dbf0a7aafcbc5974e6def77d7d7748de857077a6a",
@@ -116,6 +129,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "nvda",
     symbol: "NVDA",
     displayName: "NVIDIA",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "0768434bfc699ec64c5f8e98f357444e72fcb1f2ac16a3126584d86c57a25c90",
@@ -128,6 +142,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "amzn",
     symbol: "AMZN",
     displayName: "Amazon",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "1863240f697ecfead180e27f4c0999cde5a3280cf48ccb62ddc23f1d9b7ec422",
@@ -140,6 +155,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "meta",
     symbol: "META",
     displayName: "Meta",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "f66c67e68612e01c3ea155ac44704157b8650cfc7ac443bf5671b5b05a416c38",
@@ -152,6 +168,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "googl",
     symbol: "GOOGL",
     displayName: "Alphabet",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "55af8e09d5845ff96668e8c755652a42ce6ec3b1f6dd06e9aec843e8f4510299",
@@ -164,6 +181,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "tsla",
     symbol: "TSLA",
     displayName: "Tesla",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "391b3854ce43dd60b22c0b3b635ebe7b8075e0a7f13b2a4fe2c302d229f00de7",
@@ -176,6 +194,7 @@ export const ATLAS_ASSETS: readonly AtlasAsset[] = [
     id: "spacex",
     symbol: "SPACEX",
     displayName: "SpaceX",
+    assetClass: "stock",
     broker: "coinbase",
     usdPair:
       "d0484aeacc93f88a18b0431b8d2aac6efededa3b203ff4b55c72b64805aa5a2e",

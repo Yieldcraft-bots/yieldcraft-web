@@ -202,8 +202,15 @@ export function buildAtlasPendingPortfolioPlan(
           }
 
 
+          const brokerSupportsAsset =
+            asset.assetClass ===
+              "crypto"
+              ? broker.supportsCrypto
+              : broker.supportsStocks;
+
+
           if (
-            !broker.supportsCrypto
+            !brokerSupportsAsset
           ) {
             return {
               symbol,
@@ -217,7 +224,10 @@ export function buildAtlasPendingPortfolioPlan(
               executable:
                 false,
               reason:
-                "broker_does_not_support_crypto",
+                asset.assetClass ===
+                  "crypto"
+                  ? "broker_does_not_support_crypto"
+                  : "broker_does_not_support_stocks",
             };
           }
 

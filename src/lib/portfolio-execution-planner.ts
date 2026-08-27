@@ -20,6 +20,7 @@ import {
   getAtlasAsset,
   type AtlasAsset,
 } from "./atlas-assets";
+
 import {
   getAtlasBroker,
   type AtlasBroker,
@@ -47,6 +48,7 @@ export type PortfolioExecutionPlanOrder = {
     | "broker_not_registered"
     | "broker_disabled"
     | "broker_does_not_support_crypto"
+    | "broker_does_not_support_stocks"
     | "no_supported_quote_pair"
     | "below_min_order";
 };
@@ -255,12 +257,19 @@ export function buildPortfolioExecutionPlan(
         );
       }
 
-      if (!broker.supportsCrypto) {
+      const brokerSupportsAsset =
+        asset.assetClass === "crypto"
+          ? broker.supportsCrypto
+          : broker.supportsStocks;
+
+      if (!brokerSupportsAsset) {
         return createBlockedOrder(
           allocation.symbol,
           allocation.targetPercent,
           proposedBuyUsd,
-          "broker_does_not_support_crypto",
+          asset.assetClass === "crypto"
+            ? "broker_does_not_support_crypto"
+            : "broker_does_not_support_stocks",
           asset,
           broker
         );
