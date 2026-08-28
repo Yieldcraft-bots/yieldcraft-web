@@ -394,18 +394,19 @@ export async function evaluateAtlasEquityAccumulationCooldown(
 
 
     /*
-     * Query recent SETTLED executions regardless of whether
-     * settled_at has been populated.
+     * ========================================================
+     * AUTHORITATIVE + LEGACY SETTLEMENT LOOKUPS
+     * ========================================================
      *
-     * New executions:
-     *   settled_at is authoritative.
+     * Authoritative executions are selected by settled_at.
      *
-     * Historical executions:
-     *   settled_at may be NULL because they predate the column.
-     *   created_at is used only as a conservative market-date
-     *   gating fallback.
+     * This is intentionally independent of created_at because
+     * an unusually delayed execution may have been created more
+     * than 48 hours ago but settle during the current market day.
      *
-     * It is NOT represented as authoritative settlement time.
+     * Historical executions that predate settled_at are queried
+     * separately and may use created_at only as a conservative
+     * market-day gating fallback.
      */
 
     const recentSince =
@@ -419,8 +420,8 @@ export async function evaluateAtlasEquityAccumulationCooldown(
 
 
     const {
-      data,
-      error,
+      data: authoritativeData,
+      error: authoritativeError,
     } =
       await supabase
         .from(
@@ -441,6 +442,62 @@ export async function evaluateAtlasEquityAccumulationCooldown(
           "status",
           "SETTLED"
         )
+        .not(
+          "settled_at",
+          "is",
+          null
+        )
+        .gte(
+          "settled_at",
+          recentSince
+        )
+        .order(
+          "settled_at",
+          {
+            ascending:
+              false,
+          }
+        )
+        .limit(
+          25
+        );
+
+
+    if (
+      authoritativeError
+    ) {
+
+      throw authoritativeError;
+    }
+
+
+    const {
+      data: legacyData,
+      error: legacyError,
+    } =
+      await supabase
+        .from(
+          "atlas_live_execution_logs"
+        )
+        .select(
+          "created_at, settled_at"
+        )
+        .eq(
+          "user_id",
+          userId
+        )
+        .eq(
+          "product_id",
+          productId
+        )
+        .eq(
+          "status",
+          "SETTLED"
+        )
+        .is(
+          "settled_at",
+          null
+        )
         .gte(
           "created_at",
           recentSince
@@ -458,11 +515,24 @@ export async function evaluateAtlasEquityAccumulationCooldown(
 
 
     if (
-      error
+      legacyError
     ) {
 
-      throw error;
+      throw legacyError;
     }
+
+
+    const data =
+      [
+        ...(
+          authoritativeData ??
+          []
+        ),
+        ...(
+          legacyData ??
+          []
+        ),
+      ];
 
 
     const observations:
@@ -472,8 +542,7 @@ export async function evaluateAtlasEquityAccumulationCooldown(
 
     for (
       const row of
-      data ??
-      []
+      data
     ) {
 
       /*
