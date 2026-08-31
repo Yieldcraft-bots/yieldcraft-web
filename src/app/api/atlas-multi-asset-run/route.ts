@@ -727,15 +727,15 @@ export async function POST(
      */
 
     const intelligencePlan =
-  await buildAtlasMultiAssetIntelligencePlan({
-    userId,
+      await buildAtlasMultiAssetIntelligencePlan({
+        userId,
 
-    basePlan:
-      basePortfolioPlan,
+        basePlan:
+          basePortfolioPlan,
 
-    minOrderUsd:
-      minBuy,
-  });
+        minOrderUsd:
+          minBuy,
+      });
 
 
     if (
@@ -794,6 +794,67 @@ export async function POST(
 
 
     /*
+     * Launch-safe diagnostics for the intelligence gate.
+     *
+     * IMPORTANT:
+     * - Observability only.
+     * - Does not change intelligence decisions.
+     * - Does not make any order executable.
+     * - Does not alter proposedBuyUsd.
+     * - Does not dispatch execution.
+     *
+     * This lets the controlled canary tell us exactly why an
+     * otherwise-valid intelligence plan produced zero executable
+     * orders without weakening any production safeguard.
+     */
+    const intelligenceGate = {
+      totalOrders:
+        portfolioPlan.orders.length,
+
+      executableOrders:
+        executableOrders.length,
+
+      rejectedOrders:
+        portfolioPlan.orders.length -
+        executableOrders.length,
+
+      minBuyUsd:
+        minBuy,
+
+      orders:
+        portfolioPlan.orders.map(
+          (
+            order
+          ) => ({
+            productId:
+              order.productId ??
+              null,
+
+            executable:
+              Boolean(
+                order.executable
+              ),
+
+            proposedBuyUsd:
+              order.proposedBuyUsd,
+
+            hasProductId:
+              Boolean(
+                order.productId
+              ),
+
+            meetsMinBuy:
+              Number.isFinite(
+                order.proposedBuyUsd
+              ) &&
+              order.proposedBuyUsd >=
+                minBuy,
+          })
+        ),
+    };
+
+
+    /*
      * No intelligence-approved entry this cycle.
      *
      * Persistent pending capital is NOT deleted or redirected.
@@ -835,6 +896,8 @@ export async function POST(
 
           intelligence:
             intelligencePlan,
+
+          intelligenceGate,
 
           execution:
             "NOT_CALLED",
