@@ -13,14 +13,12 @@ const ATLAS_STRIPE_LINK =
   process.env.NEXT_PUBLIC_STRIPE_LINK_ATLAS ||
   "/atlas";
 
-
 export default function AtlasQuickStartPage() {
   const scrollToId =
     useCallback(
       (
         id: string
       ) => {
-
         const el =
           document.getElementById(
             id
@@ -40,7 +38,6 @@ export default function AtlasQuickStartPage() {
       },
       []
     );
-
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
@@ -65,8 +62,8 @@ export default function AtlasQuickStartPage() {
             client-configured portfolio system.
             Choose how you want your Atlas portfolio
             allocated, connect a dedicated Atlas
-            Coinbase account or portfolio, and confirm
-            your setup is ready.
+            Coinbase account, and confirm your setup is
+            ready.
           </p>
 
           <div className="mt-6 rounded-xl border border-sky-500/25 bg-sky-500/10 p-4 text-sm text-sky-200">
@@ -74,7 +71,6 @@ export default function AtlasQuickStartPage() {
             allocation or verifying a Coinbase connection
             does not itself place a trade.
           </div>
-
 
           {/* QUICK PATH */}
           <div className="mt-8 rounded-3xl border border-slate-800 bg-slate-900/40 p-6 shadow-[0_0_60px_rgba(56,189,248,0.08)]">
@@ -167,7 +163,6 @@ export default function AtlasQuickStartPage() {
           </div>
         </div>
 
-
         {/* WHAT ATLAS IS */}
         <section className="mb-10 rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
           <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
@@ -249,7 +244,6 @@ export default function AtlasQuickStartPage() {
           </div>
         </section>
 
-
         {/* STATUS */}
         <section className="mb-10 rounded-3xl border border-slate-800 bg-slate-900/40 p-8">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -319,7 +313,6 @@ export default function AtlasQuickStartPage() {
           </p>
         </section>
 
-
         {/* CONNECTION NOTICE */}
         <div className="mb-10 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
           <p className="text-sm font-semibold text-sky-200">
@@ -335,7 +328,6 @@ export default function AtlasQuickStartPage() {
             itself submit a Coinbase order.
           </p>
         </div>
-
 
         {/* STEPS */}
         <div
@@ -377,7 +369,6 @@ export default function AtlasQuickStartPage() {
             }}
           />
 
-
           <StepCard
             id="step-plan"
             number={2}
@@ -412,15 +403,14 @@ export default function AtlasQuickStartPage() {
             }}
           />
 
-
           <StepCard
             id="step-coinbase"
             number={3}
-            title="Create or choose a dedicated Coinbase account / portfolio for Atlas"
+            title="Create or choose a dedicated Coinbase account for Atlas"
             bullets={[
-              "Do not use the same active trading account or API credentials you use for Pulse",
-              "Use a separate Coinbase account or dedicated Atlas portfolio",
-              "Fund the Atlas account or portfolio separately",
+              "Do not use the same Coinbase account or API credentials you use for Pulse",
+              "Use a separate Coinbase account dedicated to Atlas",
+              "Fund the Atlas Coinbase account separately",
             ]}
             primary={{
               label:
@@ -451,21 +441,22 @@ export default function AtlasQuickStartPage() {
             }}
           />
 
-
           <StepCard
             id="step-api-key"
             number={4}
             title="Enable Coinbase trading access and create your Atlas API key"
             bullets={[
-              "Open the dedicated Coinbase account or portfolio you will use for Atlas",
-              "If you want Atlas to trade stocks, confirm your Coinbase account is eligible and enabled for equity trading",
-              "Complete any Coinbase-required brokerage, identity, eligibility, or regulatory steps shown in your account",
-              "Atlas can only trade assets that Coinbase makes available and tradable for your specific account",
-              "Open Coinbase API settings and create the dedicated Atlas API key",
-              "Enable View + Trade permissions only",
-              "Keep withdrawals OFF",
-              "Copy the API key name and private key",
-              "Keep Coinbase open until YieldCraft verifies the connection",
+              "Open the dedicated Coinbase account you will use only for Atlas",
+              "If you want Atlas to trade stocks, complete Coinbase Stocks & Equities onboarding first and confirm the account is approved for equity trading",
+              "If Coinbase shows Stock trading unavailable, continue with supported crypto assets and do not allocate Atlas to equities",
+              "Open Coinbase API settings and create a new API key for Atlas",
+              "Turn View ON and Trade ON",
+              "Leave Transfer OFF and Receive OFF",
+              "Leave the IP whitelist blank unless YieldCraft specifically instructs otherwise",
+              "Under Signature algorithm, select ECDSA (Legacy SDKs) — the SECOND option",
+              "Do NOT select Ed25519 (Recommended)",
+              "Click Create & download, then copy the API key name and private key",
+              "Keep Coinbase open until YieldCraft Verify & Continue succeeds",
             ]}
             primary={{
               label:
@@ -482,13 +473,12 @@ export default function AtlasQuickStartPage() {
                 "Crypto access does not automatically mean your Coinbase account is enabled for stock trading.",
                 "To use Atlas equity assets, your Coinbase account must have Coinbase equity trading access.",
                 "Coinbase determines account, asset, geographic, and trading-session eligibility.",
-                "If Coinbase does not permit an equity for your account, Atlas will not attempt to bypass that restriction.",
-                "Coinbase may display the private key only once.",
-                "Never enable withdrawal permissions for the Atlas API key.",
+                "If Coinbase shows Stock trading unavailable, use supported crypto assets only and do not allocate to equities.",
+                "Coinbase may display the private key only once, so keep Coinbase open until YieldCraft verifies the connection.",
+                "Never enable Transfer or Receive permissions for the Atlas API key.",
               ],
             }}
           />
-
 
           <StepCard
             id="step-connect"
@@ -518,7 +508,6 @@ export default function AtlasQuickStartPage() {
               ],
             }}
           />
-
 
           <StepCard
             id="step-allocation"
@@ -555,7 +544,6 @@ export default function AtlasQuickStartPage() {
               ],
             }}
           />
-
 
           <StepCard
             id="step-dashboard"
@@ -594,7 +582,6 @@ export default function AtlasQuickStartPage() {
           />
 
         </div>
-
 
         {/* FOOTER ACTIONS */}
         <div className="mt-12 rounded-3xl border border-slate-800 bg-slate-900/40 p-7">
@@ -657,7 +644,6 @@ export default function AtlasQuickStartPage() {
   );
 }
 
-
 /* ============================================================
  * PRESENTATION COMPONENTS
  * ============================================================
@@ -675,7 +661,6 @@ function Pill({
     </span>
   );
 }
-
 
 function MiniStep({
   title,
@@ -713,7 +698,6 @@ function MiniStep({
   );
 }
 
-
 function InfoTile({
   title,
   text,
@@ -737,7 +721,6 @@ function InfoTile({
   );
 }
 
-
 function InfoCard({
   title,
   text,
@@ -760,7 +743,6 @@ function InfoCard({
     </div>
   );
 }
-
 
 function StatusItem({
   color,
@@ -796,7 +778,6 @@ function StatusItem({
           "bg-red-500",
       };
 
-
   const ringMap:
     Record<
       "green" |
@@ -814,7 +795,6 @@ function StatusItem({
         red:
           "shadow-[0_0_0_4px_rgba(239,68,68,0.12)]",
       };
-
 
   return (
     <div className="flex items-start gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
@@ -834,7 +814,6 @@ function StatusItem({
     </div>
   );
 }
-
 
 function StepCard({
   id,
