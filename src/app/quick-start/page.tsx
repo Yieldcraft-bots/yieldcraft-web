@@ -24,7 +24,7 @@ export default function QuickStartPage() {
         {/* HERO */}
         <div className="mb-10 max-w-3xl">
           <p className="text-xs font-semibold tracking-[0.32em] text-sky-400 uppercase">
-            Quick Start (Order-Enforced)
+            Pulse Quick Start
           </p>
 
           <h1 className="mt-4 text-4xl md:text-5xl font-extrabold leading-tight">
@@ -65,20 +65,21 @@ export default function QuickStartPage() {
             <div className="mt-5 grid gap-3 md:grid-cols-5">
               <MiniStep title="1) Join" subtitle="Create account / login" active />
               <MiniStep title="2) Plan" subtitle="Subscribe" />
-              <MiniStep title="3) Coinbase" subtitle="Account choice + API" />
-              <MiniStep title="4) Connect" subtitle="Paste keys securely" />
-              <MiniStep title="5) Dashboard" subtitle="Confirm lights" />
+              <MiniStep title="3) Coinbase" subtitle="Dedicated Pulse account" />
+              <MiniStep title="4) API Key" subtitle="View + Trade only" />
+              <MiniStep title="5) Connect" subtitle="Verify Pulse access" />
+              <MiniStep title="6) Dashboard" subtitle="Confirm lights" />
             </div>
 
             <div className="mt-5 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <p className="text-sm text-slate-200">
                 <span className="font-semibold text-slate-50">Important:</span>{" "}
-                it’s normal to see{" "}
+                it&apos;s normal to see{" "}
                 <span className="text-sky-300 font-semibold">no trade</span> right
                 away. Waiting is part of the strategy.
               </p>
               <p className="mt-1 text-xs text-slate-400">
-                Your “proof” is the green lights + heartbeat confirmation — not an
+                Your proof is the green lights + heartbeat confirmation — not an
                 immediate order.
               </p>
             </div>
@@ -100,11 +101,10 @@ export default function QuickStartPage() {
                 <span className="text-slate-50 font-semibold">consistency</span>,
                 not impulse. We help you build a repeatable habit:
                 <span className="text-slate-50 font-semibold">
-                  {" "}
-                  pay yourself first
+                  {" "}pay yourself first
                 </span>
                 , contribute consistently, then let disciplined automation do what
-                it’s built to do.
+                it&apos;s built to do.
               </p>
             </div>
 
@@ -144,13 +144,13 @@ export default function QuickStartPage() {
 
           <div className="mt-4 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
             <p className="text-sm font-semibold text-sky-200">
-              Best practice (recommended)
+              Dedicated Pulse structure
             </p>
+
             <p className="mt-1 text-xs text-slate-300">
-              Use a dedicated Coinbase account or dedicated portfolio for bots. It
-              keeps personal holdings separate and makes position tracking cleaner.
-              If you already hold BTC in the same account, the system may treat
-              that as an existing position when managing trades.
+              Use a separate Coinbase account dedicated to Pulse. If you also use
+              Atlas, do not use the same Coinbase account, funds, or API credentials
+              for both systems.
             </p>
           </div>
         </section>
@@ -161,7 +161,7 @@ export default function QuickStartPage() {
             <div>
               <h3 className="text-lg font-semibold">Live status lights</h3>
               <p className="mt-1 text-sm text-slate-400">
-                This is what “live” looks like even when there’s no signal yet.
+                This is what “live” looks like even when there&apos;s no signal yet.
               </p>
             </div>
 
@@ -209,10 +209,12 @@ export default function QuickStartPage() {
 
         {/* CONNECTION NOTICE */}
         <div className="mb-10 rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
-          <p className="text-sm font-semibold text-sky-200">Connection check ≠ trade</p>
+          <p className="text-sm font-semibold text-sky-200">
+            Connection check ≠ trade
+          </p>
           <p className="mt-1 text-xs text-slate-300">
-            When you connect your API key, YieldCraft performs a signed heartbeat
-            check. This confirms access — it does{" "}
+            When you connect your Pulse API key, YieldCraft performs a signed
+            heartbeat check. This confirms access — it does{" "}
             <span className="font-semibold">not</span> place a trade.
           </p>
         </div>
@@ -224,17 +226,17 @@ export default function QuickStartPage() {
             number={1}
             title="Join / Log in to YieldCraft"
             bullets={[
-              "Create your YieldCraft login (or sign in)",
-              "After login, come right back here to Quick Start",
-              "This unlocks your plan + secure key storage",
+              "Create your YieldCraft login or sign in",
+              "After login, return to Pulse Quick Start",
+              "One YieldCraft login can access your enabled YieldCraft products",
             ]}
             primary={{ label: "Create account", internalHref: "/login" }}
             secondary={{ label: "Login", internalHref: "/login" }}
             comfort={{
-              title: "Comfort check",
+              title: "Already signed in?",
               lines: [
                 "If you’re already logged in, this step is complete.",
-                "If you got here from a phone, it’s okay — this page will guide you.",
+                "Pulse and Atlas may use the same YieldCraft login, but their Coinbase accounts and API credentials remain separate.",
               ],
             }}
           />
@@ -242,18 +244,18 @@ export default function QuickStartPage() {
           <StepCard
             id="step-plan"
             number={2}
-            title="Subscribe to a plan (required before connecting Coinbase)"
+            title="Subscribe to a plan that includes Pulse"
             bullets={[
-              "Choose a plan that includes Pulse (core engine)",
-              "After checkout, return here (or reopen Quick Start)",
-              "Once active, the Coinbase step becomes your focus",
+              "Choose a plan that includes Pulse",
+              "After checkout, return here or reopen Quick Start",
+              "Once your plan is active, continue to the dedicated Pulse Coinbase account",
             ]}
             primary={{ label: "Choose a Plan", internalHref: "/pricing" }}
             comfort={{
               title: "Why plan before Coinbase?",
               lines: [
-                "It prevents users from doing the hardest step first.",
-                "It ensures the correct onboarding screens and permissions are active.",
+                "It establishes Pulse as the product you are setting up.",
+                "It keeps the onboarding path clear before you create exchange credentials.",
               ],
             }}
           />
@@ -261,14 +263,14 @@ export default function QuickStartPage() {
           <StepCard
             id="step-coinbase"
             number={3}
-            title="Coinbase: use your existing account or create a dedicated trading account (recommended)"
+            title="Create or choose a separate Coinbase account for Pulse"
             bullets={[
-              "If you already have Coinbase: you can use it, or create a dedicated account/portfolio for bots (recommended).",
-              "Dedicated account/portfolio keeps personal holdings separate and makes position tracking cleaner.",
-              "API key must be View + Trade only (NO withdrawals).",
+              "Use a separate Coinbase account dedicated to Pulse trading",
+              "If you also use Atlas, do not use the same Coinbase account for Pulse and Atlas",
+              "Fund the Pulse Coinbase account separately",
             ]}
             primary={{
-              label: "I already have Coinbase (continue)",
+              label: "I Have My Pulse Coinbase Ready",
               onClick: () => scrollToId("step-api-key"),
             }}
             secondary={{
@@ -276,16 +278,12 @@ export default function QuickStartPage() {
               label: "Open Coinbase",
               internalHref: `${COINBASE_GO_URL}?utm_campaign=quickstart&utm_content=step3_open_coinbase`,
             }}
-            tertiary={{
-              label: "Then go to API settings →",
-              href: COINBASE_API_SETTINGS_URL,
-            }}
             comfort={{
-              title: "Rules-of-thumb",
+              title: "Isolation rule",
               lines: [
-                "Never enable withdrawals on API keys.",
-                "If you already hold BTC in the same account, the system may treat that as an existing position.",
-                "If you choose a dedicated account/portfolio, keep it simple: fund it and let bots operate there.",
+                "Pulse and Atlas funds stay separate.",
+                "Pulse and Atlas API credentials stay separate.",
+                "This protects accounting and strategy boundaries.",
               ],
             }}
           />
@@ -293,23 +291,29 @@ export default function QuickStartPage() {
           <StepCard
             id="step-api-key"
             number={4}
-            title="Create a Coinbase API key (View + Trade only)"
+            title="Create your dedicated Pulse Coinbase API key"
             bullets={[
-              "Open Coinbase API settings",
-              "Create an API key with View + Trade only (NO withdrawals)",
-              "Copy two values: API key name + private key",
-              "If your Coinbase account/portfolio is new: deposit/fund it before trading can occur",
+              "Open the separate Coinbase account you will use only for Pulse",
+              "Open Coinbase API settings and create a new API key for Pulse",
+              "Turn View ON and Trade ON",
+              "Leave Transfer OFF and Receive OFF",
+              "Leave the IP whitelist blank unless YieldCraft specifically instructs otherwise",
+              "Under Signature algorithm, select ECDSA (Legacy SDKs) — the SECOND option",
+              "Do NOT select Ed25519 (Recommended)",
+              "Click Create & download, then copy the API key name and private key",
+              "Keep Coinbase open until YieldCraft Verify & Continue succeeds",
             ]}
             primary={{
-              label: "Open Coinbase API settings",
+              label: "Open Coinbase API Settings",
               href: COINBASE_API_SETTINGS_URL,
             }}
             comfort={{
-              title: "CRITICAL: don’t lose the private key",
+              title: "CRITICAL: use the correct API settings",
               lines: [
-                "Coinbase may show the private key ONE TIME. Don’t close that window yet.",
-                "Keep Coinbase open until you paste both values into YieldCraft and click Verify & Continue.",
-                "If you closed it, create a NEW API key and paste the new values.",
+                "Coinbase may display the private key only once, so keep Coinbase open until YieldCraft verifies the connection.",
+                "Never email or share your private key.",
+                "Pulse needs View + Trade only. Transfer and Receive must remain OFF.",
+                "Select ECDSA (Legacy SDKs), the SECOND signature option — not Ed25519.",
               ],
             }}
           />
@@ -317,20 +321,23 @@ export default function QuickStartPage() {
           <StepCard
             id="step-connect"
             number={5}
-            title="Connect your keys in YieldCraft (verify before leaving Coinbase)"
+            title="Connect your Pulse keys in YieldCraft"
             bullets={[
               "Open Connect Keys",
-              "Paste API key name + private key",
+              "Paste the dedicated Pulse API key name and private key",
               "Click Verify & Continue",
-              "Confirm: YOUR COINBASE turns GREEN (server-verified)",
+              "Confirm Pulse shows GREEN on your YieldCraft Dashboard",
             ]}
-            primary={{ label: "Open Connect Keys", internalHref: "/connect-keys" }}
+            primary={{
+              label: "Open Connect Keys",
+              internalHref: "/connect-keys?product=pulse",
+            }}
             comfort={{
-              title: "Comfort check",
+              title: "Verify before leaving Coinbase",
               lines: [
-                "Do not close Coinbase until YOUR COINBASE is GREEN in YieldCraft.",
-                "If connection fails, re-copy using Coinbase copy icons (don’t drag-select).",
-                "Withdrawals are never required — trades happen inside your exchange account.",
+                "Do not close Coinbase until Pulse is GREEN in YieldCraft.",
+                "Use the Pulse API credentials here — never the Atlas credentials.",
+                "If verification fails, re-copy the values using Coinbase’s copy buttons.",
               ],
             }}
           />
@@ -338,29 +345,30 @@ export default function QuickStartPage() {
           <StepCard
             id="step-dashboard"
             number={6}
-            title="Go to Dashboard and confirm green lights"
+            title="Go to Dashboard and confirm Pulse is ready"
             bullets={[
               "Open Dashboard",
-              "Confirm: Signed in + Plan active + YOUR COINBASE green",
-              "No trade is normal — waiting is part of the system",
+              "Confirm you are signed in and your plan is active",
+              "Confirm Pulse shows GREEN",
+              "No trade is normal — Pulse waits for qualifying conditions",
             ]}
             primary={{ label: "Go to Dashboard", internalHref: "/dashboard" }}
             comfort={{
-              title: "Important",
+              title: "Ready does not mean immediate activity",
               lines: [
                 "Connection check ≠ trade.",
-                "The system won’t force trades just to ‘feel active’.",
-                "Green lights mean the system is ready — the engine waits for the right moment.",
+                "Pulse will not force trades just to appear active.",
+                "GREEN means the connection is ready — the engine still waits for its rules and risk controls.",
               ],
             }}
           />
         </div>
 
-        {/* SIMPLE FOOTER ACTIONS (NON-CONFUSING) */}
+        {/* SIMPLE FOOTER ACTIONS */}
         <div className="mt-12 rounded-3xl border border-slate-800 bg-slate-900/40 p-7">
-          <h3 className="text-xl font-semibold">Need a shortcut?</h3>
+          <h3 className="text-xl font-semibold">Already partway through setup?</h3>
           <p className="mt-2 text-sm text-slate-400 max-w-3xl">
-            Use these only if you already know where you are in the steps above.
+            Jump directly to the step you need.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-3">
@@ -372,10 +380,10 @@ export default function QuickStartPage() {
             </Link>
 
             <Link
-              href="/connect-keys"
+              href="/connect-keys?product=pulse"
               className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
             >
-              Connect Keys
+              Connect Pulse Keys
             </Link>
 
             <Link
@@ -392,7 +400,6 @@ export default function QuickStartPage() {
               Atlas
             </Link>
 
-            {/* Optional: extra affiliate-friendly shortcut */}
             <Link
               href={`${COINBASE_GO_URL}?utm_campaign=quickstart&utm_content=footer_open_coinbase`}
               className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
@@ -497,7 +504,6 @@ function StepCard({
   bullets,
   primary,
   secondary,
-  tertiary,
   comfort,
 }: {
   id?: string;
@@ -506,7 +512,6 @@ function StepCard({
   bullets: string[];
   primary: { label: string; href?: string; internalHref?: string; onClick?: () => void };
   secondary?: { label: string; href?: string; internalHref?: string };
-  tertiary?: { label: string; href?: string; internalHref?: string };
   comfort: { title: string; lines: string[] };
 }) {
   return (
@@ -533,7 +538,6 @@ function StepCard({
             </ul>
 
             <div className="mt-5 flex flex-wrap gap-3">
-              {/* Primary */}
               {primary.onClick ? (
                 <button
                   type="button"
@@ -560,7 +564,6 @@ function StepCard({
                 </a>
               )}
 
-              {/* Secondary */}
               {secondary ? (
                 secondary.internalHref ? (
                   <Link
@@ -577,27 +580,6 @@ function StepCard({
                     className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
                   >
                     {secondary.label}
-                  </a>
-                )
-              ) : null}
-
-              {/* Tertiary */}
-              {tertiary ? (
-                tertiary.internalHref ? (
-                  <Link
-                    href={tertiary.internalHref}
-                    className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
-                  >
-                    {tertiary.label}
-                  </Link>
-                ) : (
-                  <a
-                    href={tertiary.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center justify-center rounded-full border border-slate-700 bg-slate-950/40 px-6 py-3 text-sm font-semibold text-slate-100 hover:border-sky-500/50"
-                  >
-                    {tertiary.label}
                   </a>
                 )
               ) : null}
