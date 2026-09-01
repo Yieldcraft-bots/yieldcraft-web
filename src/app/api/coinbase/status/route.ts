@@ -9,9 +9,14 @@ type ProductScope = "pulse" | "atlas";
 type ScopeRequest = ProductScope | "all";
 
 function getBearer(req: Request): string | null {
-  const h = req.headers.get("authorization") || req.headers.get("Authorization");
+  const h =
+    req.headers.get("authorization") ||
+    req.headers.get("Authorization");
+
   if (!h) return null;
+
   const m = h.match(/^Bearer\s+(.+)$/i);
+
   return m?.[1]?.trim() || null;
 }
 
@@ -24,121 +29,268 @@ function json(status: number, body: any) {
 
 function normalizeScope(v: string | null): ScopeRequest {
   if (!v) return "all";
-  return v.toLowerCase() === "atlas" ? "atlas" : "pulse";
+
+  return v.toLowerCase() === "atlas"
+    ? "atlas"
+    : "pulse";
 }
 
 export async function GET(req: Request) {
   try {
     const token = getBearer(req);
-    if (!token) return json(401, { connected: false, reason: "not_authenticated" });
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-    const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!token) {
+      return json(401, {
+        connected: false,
+        reason: "not_authenticated",
+      });
+    }
+
+    const url =
+      process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      process.env.SUPABASE_URL;
+
+    const service =
+      process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!url || !service) {
-      return json(500, { connected: false, reason: "server_misconfigured" });
+      return json(500, {
+        connected: false,
+        reason: "server_misconfigured",
+      });
     }
 
-    const admin = createClient(url, service, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
+    const admin = createClient(
+      url,
+      service,
+      {
+        auth: {
+          persistSession: false,
+          autoRefreshToken: false,
+        },
+      }
+    );
 
-    const { data: userData, error: userErr } = await admin.auth.getUser(token);
-    const userId = userData?.user?.id || null;
+    const {
+      data: userData,
+      error: userErr,
+    } =
+      await admin.auth.getUser(token);
+
+    const userId =
+      userData?.user?.id || null;
+
     if (userErr || !userId) {
-      return json(401, { connected: false, reason: "not_authenticated" });
+      return json(401, {
+        connected: false,
+        reason: "not_authenticated",
+      });
     }
 
-    const reqUrl = new URL(req.url);
-    const productScope = normalizeScope(reqUrl.searchParams.get("product"));
+    const reqUrl =
+      new URL(req.url);
+
+    const productScope =
+      normalizeScope(
+        reqUrl.searchParams.get("product")
+      );
 
     let keys: any = null;
     let keyError: any = null;
 
     if (productScope === "all") {
-      const result = await admin
-        .from("coinbase_keys")
-        .select("api_key_name, private_key, key_alg, updated_at, product_scope")
-        .eq("user_id", userId)
-        .in("product_scope", ["pulse", "atlas"])
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const pulseResult =
+        await admin
+          .from("coinbase_keys")
+          .select(
+            "api_key_name, private_key, key_alg, updated_at, product_scope"
+          )
+          .eq("user_id", userId)
+          .eq("product_scope", "pulse")
+          .order(
+            "updated_at",
+            { ascending: false }
+          )
+          .limit(1)
+          .maybeSingle();
 
-      keys = result.data;
-      keyError = result.error;
+      if (
+        pulseResult.error &&
+        !pulseResult.data
+      ) {
+        keyError =
+          pulseResult.error;
+      }
+
+      if (pulseResult.data) {
+        keys =
+          pulseResult.data;
+      }
+
+      if (!keys) {
+        const atlasResult =
+          await admin
+            .from("atlas_coinbase_keys")
+            .select(
+              "api_key_name, private_key, key_alg, updated_at, product_scope"
+            )
+            .eq("user_id", userId)
+            .eq("product_scope", "atlas")
+            .order(
+              "updated_at",
+              { ascending: false }
+            )
+            .limit(1)
+            .maybeSingle();
+
+        if (
+          atlasResult.error &&
+          !atlasResult.data
+        ) {
+          keyError =
+            atlasResult.error;
+        }
+
+        if (atlasResult.data) {
+          keys =
+            atlasResult.data;
+        }
+      }
     } else {
-      const result = await admin
-        .from("coinbase_keys")
-        .select("api_key_name, private_key, key_alg, updated_at, product_scope")
-        .eq("user_id", userId)
-        .eq("product_scope", productScope)
-        .maybeSingle();
+      const credentialTable =
+        productScope === "atlas"
+          ? "atlas_coinbase_keys"
+          : "coinbase_keys";
 
-      keys = result.data;
-      keyError = result.error;
+      const result =
+        await admin
+          .from(credentialTable)
+          .select(
+            "api_key_name, private_key, key_alg, updated_at, product_scope"
+          )
+          .eq("user_id", userId)
+          .eq(
+            "product_scope",
+            productScope
+          )
+          .maybeSingle();
+
+      keys =
+        result.data;
+
+      keyError =
+        result.error;
     }
 
-    if (keyError || !keys) {
+    if (
+      keyError ||
+      !keys
+    ) {
       return json(200, {
         connected: false,
         reason: "no_keys",
-        product_scope: productScope,
+        product_scope:
+          productScope,
       });
     }
 
-    if (!keys.api_key_name?.trim() || !keys.private_key?.trim()) {
+    if (
+      !keys.api_key_name?.trim() ||
+      !keys.private_key?.trim()
+    ) {
       return json(200, {
         connected: false,
         reason: "invalid_keys",
-        product_scope: keys.product_scope ?? productScope,
+        product_scope:
+          keys.product_scope ??
+          productScope,
       });
     }
 
-    const effectiveScope = (keys.product_scope as ProductScope | null) ?? "pulse";
+    const effectiveScope =
+      (
+        keys.product_scope as
+          | ProductScope
+          | null
+      ) ?? "pulse";
 
-    const probeUrl = new URL(
-      `/api/coinbase/balances?product=${effectiveScope}`,
-      req.url
-    ).toString();
+    const probeUrl =
+      new URL(
+        `/api/coinbase/balances?product=${effectiveScope}`,
+        req.url
+      ).toString();
 
-    const probeRes = await fetch(probeUrl, {
-      cache: "no-store",
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const probeRes =
+      await fetch(
+        probeUrl,
+        {
+          cache: "no-store",
+          headers: {
+            Authorization:
+              `Bearer ${token}`,
+          },
+        }
+      );
 
     let probeJson: any = null;
+
     try {
-      probeJson = await probeRes.json();
+      probeJson =
+        await probeRes.json();
     } catch {
       probeJson = null;
     }
 
-    const probeOk = !!(probeRes.ok && probeJson && probeJson.ok === true);
+    const probeOk =
+      !!(
+        probeRes.ok &&
+        probeJson &&
+        probeJson.ok === true
+      );
 
     if (!probeOk) {
       return json(200, {
         connected: false,
-        reason: "coinbase_auth_failed",
-        product_scope: effectiveScope,
-        status: probeJson?.status ?? probeRes.status,
+        reason:
+          "coinbase_auth_failed",
+        product_scope:
+          effectiveScope,
+        status:
+          probeJson?.status ??
+          probeRes.status,
         hint:
           probeJson?.error ||
           "Check Coinbase API key permissions (View + Trade), portfolio, and that the key is Active.",
-        alg: keys.key_alg ?? "unknown",
-        updated_at: keys.updated_at ?? null,
+        alg:
+          keys.key_alg ??
+          "unknown",
+        updated_at:
+          keys.updated_at ??
+          null,
       });
     }
 
     return json(200, {
       connected: true,
       reason: "ok",
-      product_scope: effectiveScope,
-      alg: keys.key_alg ?? "unknown",
-      updated_at: keys.updated_at ?? null,
+      product_scope:
+        effectiveScope,
+      alg:
+        keys.key_alg ??
+        "unknown",
+      updated_at:
+        keys.updated_at ??
+        null,
     });
   } catch (err) {
-    console.error("coinbase/status error", err);
-    return json(500, { connected: false, reason: "server_error" });
+    console.error(
+      "coinbase/status error",
+      err
+    );
+
+    return json(500, {
+      connected: false,
+      reason: "server_error",
+    });
   }
 }

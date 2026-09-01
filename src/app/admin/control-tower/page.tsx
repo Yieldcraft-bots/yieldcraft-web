@@ -37,39 +37,74 @@ async function getAtlasHealth(): Promise<AtlasHealth | null> {
       .from("subscriptions")
       .select("user_id, plan, status");
 
-    const { data: keys } = await supabase
+    const { data: pulseKeys } = await supabase
       .from("coinbase_keys")
-      .select("user_id, product_scope");
+      .select("user_id, product_scope")
+      .eq("product_scope", "pulse");
 
-    const entitlementRows = Array.isArray(entitlements) ? entitlements : [];
-    const subscriptionRows = Array.isArray(subscriptions) ? subscriptions : [];
-    const keyRows = Array.isArray(keys) ? keys : [];
+    const { data: atlasKeys } = await supabase
+      .from("atlas_coinbase_keys")
+      .select("user_id, product_scope")
+      .eq("product_scope", "atlas");
 
-    const atlasEntitled = entitlementRows.filter((r: any) => r.atlas === true).length;
-    const pulseEntitled = entitlementRows.filter((r: any) => r.pulse === true).length;
+    const entitlementRows = Array.isArray(entitlements)
+      ? entitlements
+      : [];
+
+    const subscriptionRows = Array.isArray(subscriptions)
+      ? subscriptions
+      : [];
+
+    const pulseKeyRows = Array.isArray(pulseKeys)
+      ? pulseKeys
+      : [];
+
+    const atlasKeyRows = Array.isArray(atlasKeys)
+      ? atlasKeys
+      : [];
+
+    const atlasEntitled = entitlementRows.filter(
+      (r: any) => r.atlas === true
+    ).length;
+
+    const pulseEntitled = entitlementRows.filter(
+      (r: any) => r.pulse === true
+    ).length;
 
     const activeAtlasUserIds = new Set(
       subscriptionRows
         .filter((r: any) => {
           const plan = String(r.plan || "").toLowerCase();
-          return plan.includes("atlas") && r.status === "active";
+
+          return (
+            plan.includes("atlas") &&
+            r.status === "active"
+          );
         })
         .map((r: any) => r.user_id)
     );
 
     const atlasKeyUserIds = new Set(
-      keyRows
-        .filter((r: any) => r.product_scope === "atlas")
+      atlasKeyRows
+        .filter(
+          (r: any) =>
+            r.product_scope === "atlas"
+        )
         .map((r: any) => r.user_id)
     );
 
     const pulseKeyUserIds = new Set(
-      keyRows
-        .filter((r: any) => r.product_scope === "pulse")
+      pulseKeyRows
+        .filter(
+          (r: any) =>
+            r.product_scope === "pulse"
+        )
         .map((r: any) => r.user_id)
     );
 
-    const atlasLaunchReady = [...activeAtlasUserIds].filter((userId) =>
+    const atlasLaunchReady = [
+      ...activeAtlasUserIds,
+    ].filter((userId) =>
       atlasKeyUserIds.has(userId)
     ).length;
 
@@ -78,14 +113,30 @@ async function getAtlasHealth(): Promise<AtlasHealth | null> {
       total_entitlements: entitlementRows.length,
       atlas_entitled: atlasEntitled,
       pulse_entitled: pulseEntitled,
-      active_atlas_subscriptions: activeAtlasUserIds.size,
-      active_total_subscriptions: subscriptionRows.filter((r: any) => r.status === "active").length,
-      atlas_keys_connected: atlasKeyUserIds.size,
-      pulse_keys_connected: pulseKeyUserIds.size,
-      atlas_launch_ready: atlasLaunchReady,
-      atlas_needs_setup: Math.max(0, activeAtlasUserIds.size - atlasLaunchReady),
-      atlas_entitlement_subscription_gap: atlasEntitled - activeAtlasUserIds.size,
-      atlas_entitlement_key_gap: atlasEntitled - atlasKeyUserIds.size,
+      active_atlas_subscriptions:
+        activeAtlasUserIds.size,
+      active_total_subscriptions:
+        subscriptionRows.filter(
+          (r: any) =>
+            r.status === "active"
+        ).length,
+      atlas_keys_connected:
+        atlasKeyUserIds.size,
+      pulse_keys_connected:
+        pulseKeyUserIds.size,
+      atlas_launch_ready:
+        atlasLaunchReady,
+      atlas_needs_setup: Math.max(
+        0,
+        activeAtlasUserIds.size -
+          atlasLaunchReady
+      ),
+      atlas_entitlement_subscription_gap:
+        atlasEntitled -
+        activeAtlasUserIds.size,
+      atlas_entitlement_key_gap:
+        atlasEntitled -
+        atlasKeyUserIds.size,
     };
   } catch {
     return null;
@@ -95,13 +146,26 @@ async function getAtlasHealth(): Promise<AtlasHealth | null> {
 export default async function ControlTowerPage() {
   const atlas = await getAtlasHealth();
 
-  const atlasEntitled = atlas?.atlas_entitled ?? 0;
-  const atlasSubs = atlas?.active_atlas_subscriptions ?? 0;
-  const atlasKeys = atlas?.atlas_keys_connected ?? 0;
-  const atlasLaunchReady = atlas?.atlas_launch_ready ?? 0;
-  const atlasNeedsSetup = atlas?.atlas_needs_setup ?? 0;
-  const atlasSubGap = atlas?.atlas_entitlement_subscription_gap ?? 0;
-  const atlasKeyGap = atlas?.atlas_entitlement_key_gap ?? 0;
+  const atlasEntitled =
+    atlas?.atlas_entitled ?? 0;
+
+  const atlasSubs =
+    atlas?.active_atlas_subscriptions ?? 0;
+
+  const atlasKeys =
+    atlas?.atlas_keys_connected ?? 0;
+
+  const atlasLaunchReady =
+    atlas?.atlas_launch_ready ?? 0;
+
+  const atlasNeedsSetup =
+    atlas?.atlas_needs_setup ?? 0;
+
+  const atlasSubGap =
+    atlas?.atlas_entitlement_subscription_gap ?? 0;
+
+  const atlasKeyGap =
+    atlas?.atlas_entitlement_key_gap ?? 0;
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50 px-6 py-10">
@@ -110,41 +174,108 @@ export default async function ControlTowerPage() {
           YieldCraft Operator
         </p>
 
-        <h1 className="mt-3 text-4xl font-bold">Control Tower</h1>
+        <h1 className="mt-3 text-4xl font-bold">
+          Control Tower
+        </h1>
 
         <p className="mt-3 max-w-3xl text-slate-400">
-          Read-only launch and operations visibility for Pulse, Atlas, and Edge
-          telemetry. No execution controls. No trading changes. No policy
-          promotion from this page.
+          Read-only launch and operations visibility for
+          Pulse, Atlas, and Edge telemetry. No execution
+          controls. No trading changes. No policy promotion
+          from this page.
         </p>
 
         <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <StatusCard title="Launch Readiness" status="PASS" />
-          <StatusCard title="Pulse Health" status="Read-only" />
+          <StatusCard
+            title="Launch Readiness"
+            status="PASS"
+          />
+
+          <StatusCard
+            title="Pulse Health"
+            status="Read-only"
+          />
+
           <StatusCard
             title="Atlas Health"
-            status={atlas ? `${atlasLaunchReady} ready` : "Unavailable"}
+            status={
+              atlas
+                ? `${atlasLaunchReady} ready`
+                : "Unavailable"
+            }
           />
-          <StatusCard title="Edge Intelligence" status="Shadow-only" />
+
+          <StatusCard
+            title="Edge Intelligence"
+            status="Shadow-only"
+          />
         </div>
 
         <section className="mt-8 rounded-3xl border border-white/10 bg-white/[0.03] p-6">
-          <h2 className="text-xl font-semibold">Launch Readiness</h2>
+          <h2 className="text-xl font-semibold">
+            Launch Readiness
+          </h2>
+
           <p className="mt-2 max-w-3xl text-sm text-slate-400">
-            Static operator checklist for the public Atlas launch path. This
-            panel does not call APIs, change state, or touch execution.
+            Static operator checklist for the public Atlas
+            launch path. This panel does not call APIs,
+            change state, or touch execution.
           </p>
 
           <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <ChecklistItem label="Homepage" status="PASS" href="/" />
-            <ChecklistItem label="Pricing" status="PASS" href="/pricing" />
-            <ChecklistItem label="Atlas Page" status="PASS" href="/atlas" />
-            <ChecklistItem label="Atlas Quick Start" status="PASS" href="/atlas/quick-start" />
-            <ChecklistItem label="Success Page" status="PASS" href="/success" />
-            <ChecklistItem label="Connect Keys" status="PASS" href="/connect-keys?product=atlas" />
-            <ChecklistItem label="Dashboard" status="PASS" href="/dashboard" />
-            <ChecklistItem label="Login" status="PASS" href="/login" />
-            <ChecklistItem label="Stripe Flow" status="VERIFY" href="/pricing" />
+            <ChecklistItem
+              label="Homepage"
+              status="PASS"
+              href="/"
+            />
+
+            <ChecklistItem
+              label="Pricing"
+              status="PASS"
+              href="/pricing"
+            />
+
+            <ChecklistItem
+              label="Atlas Page"
+              status="PASS"
+              href="/atlas"
+            />
+
+            <ChecklistItem
+              label="Atlas Quick Start"
+              status="PASS"
+              href="/atlas/quick-start"
+            />
+
+            <ChecklistItem
+              label="Success Page"
+              status="PASS"
+              href="/success"
+            />
+
+            <ChecklistItem
+              label="Connect Keys"
+              status="PASS"
+              href="/connect-keys?product=atlas"
+            />
+
+            <ChecklistItem
+              label="Dashboard"
+              status="PASS"
+              href="/dashboard"
+            />
+
+            <ChecklistItem
+              label="Login"
+              status="PASS"
+              href="/login"
+            />
+
+            <ChecklistItem
+              label="Stripe Flow"
+              status="VERIFY"
+              href="/pricing"
+            />
           </div>
         </section>
 
@@ -155,9 +286,23 @@ export default async function ControlTowerPage() {
             body="Pulse visibility lives in the operator roster. This page only links to it and summarizes the operational lane."
             items={[
               ["Roster", "Existing"],
-              ["Pulse entitled", String(atlas?.pulse_entitled ?? "—")],
-              ["Pulse keys", String(atlas?.pulse_keys_connected ?? "—")],
-              ["Execution controls", "None"],
+              [
+                "Pulse entitled",
+                String(
+                  atlas?.pulse_entitled ?? "—"
+                ),
+              ],
+              [
+                "Pulse keys",
+                String(
+                  atlas?.pulse_keys_connected ??
+                    "—"
+                ),
+              ],
+              [
+                "Execution controls",
+                "None",
+              ],
             ]}
             href="/admin/operators/pulse-roster"
             cta="Open Pulse Roster"
@@ -168,13 +313,34 @@ export default async function ControlTowerPage() {
             eyebrow="Launch lane"
             body="Atlas visibility tracks entitlement, subscription, connected keys, launch readiness, and setup friction without touching execution."
             items={[
-              ["Launch Ready", String(atlasLaunchReady)],
-              ["Atlas entitled", String(atlasEntitled)],
-              ["Active Atlas subs", String(atlasSubs)],
-              ["Atlas keys connected", String(atlasKeys)],
-              ["Needs setup", String(atlasNeedsSetup)],
-              ["Entitled vs subs gap", String(atlasSubGap)],
-              ["Entitled vs keys gap", String(atlasKeyGap)],
+              [
+                "Launch Ready",
+                String(atlasLaunchReady),
+              ],
+              [
+                "Atlas entitled",
+                String(atlasEntitled),
+              ],
+              [
+                "Active Atlas subs",
+                String(atlasSubs),
+              ],
+              [
+                "Atlas keys connected",
+                String(atlasKeys),
+              ],
+              [
+                "Needs setup",
+                String(atlasNeedsSetup),
+              ],
+              [
+                "Entitled vs subs gap",
+                String(atlasSubGap),
+              ],
+              [
+                "Entitled vs keys gap",
+                String(atlasKeyGap),
+              ],
             ]}
             href="/atlas/quick-start"
             cta="Open Atlas Quick Start"
@@ -186,8 +352,14 @@ export default async function ControlTowerPage() {
             body="Edge research stays observational. Candidate edges, suppression attribution, and policy status remain separated from execution."
             items={[
               ["Time Kill", "Shadow"],
-              ["Offensive candidates", "Watch"],
-              ["Policy promotion", "Disabled here"],
+              [
+                "Offensive candidates",
+                "Watch",
+              ],
+              [
+                "Policy promotion",
+                "Disabled here",
+              ],
             ]}
             href="/admin/edge-lab"
             cta="Open Edge Lab"
@@ -195,13 +367,30 @@ export default async function ControlTowerPage() {
         </section>
 
         <section className="mt-8 rounded-3xl border border-white/10 bg-white/[0.03] p-6">
-          <h2 className="text-xl font-semibold">Operator Links</h2>
+          <h2 className="text-xl font-semibold">
+            Operator Links
+          </h2>
 
           <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <TowerLink href="/admin/operators/pulse-roster" label="Pulse Roster" />
-            <TowerLink href="/admin/scout-watch" label="Scout Watch" />
-            <TowerLink href="/admin/edge-lab" label="Edge Lab" />
-            <TowerLink href="/admin/platform" label="Platform" />
+            <TowerLink
+              href="/admin/operators/pulse-roster"
+              label="Pulse Roster"
+            />
+
+            <TowerLink
+              href="/admin/scout-watch"
+              label="Scout Watch"
+            />
+
+            <TowerLink
+              href="/admin/edge-lab"
+              label="Edge Lab"
+            />
+
+            <TowerLink
+              href="/admin/platform"
+              label="Platform"
+            />
           </div>
         </section>
       </div>
@@ -209,11 +398,22 @@ export default async function ControlTowerPage() {
   );
 }
 
-function StatusCard({ title, status }: { title: string; status: string }) {
+function StatusCard({
+  title,
+  status,
+}: {
+  title: string;
+  status: string;
+}) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5">
-      <div className="text-sm text-slate-400">{title}</div>
-      <div className="mt-3 text-2xl font-semibold">{status}</div>
+      <div className="text-sm text-slate-400">
+        {title}
+      </div>
+
+      <div className="mt-3 text-2xl font-semibold">
+        {status}
+      </div>
     </div>
   );
 }
@@ -239,8 +439,13 @@ function ChecklistItem({
       href={href}
       className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/60 p-4 text-sm hover:bg-slate-800"
     >
-      <span className="font-semibold text-slate-100">{label}</span>
-      <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${tone}`}>
+      <span className="font-semibold text-slate-100">
+        {label}
+      </span>
+
+      <span
+        className={`rounded-full border px-3 py-1 text-xs font-semibold ${tone}`}
+      >
         {status}
       </span>
     </Link>
@@ -267,8 +472,14 @@ function TowerPanel({
       <div className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-400">
         {eyebrow}
       </div>
-      <h2 className="mt-3 text-xl font-semibold">{title}</h2>
-      <p className="mt-3 text-sm text-slate-400">{body}</p>
+
+      <h2 className="mt-3 text-xl font-semibold">
+        {title}
+      </h2>
+
+      <p className="mt-3 text-sm text-slate-400">
+        {body}
+      </p>
 
       <div className="mt-5 space-y-3">
         {items.map(([label, value]) => (
@@ -276,8 +487,13 @@ function TowerPanel({
             key={label}
             className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-900/60 p-3 text-sm"
           >
-            <span className="text-slate-400">{label}</span>
-            <span className="font-semibold text-slate-100">{value}</span>
+            <span className="text-slate-400">
+              {label}
+            </span>
+
+            <span className="font-semibold text-slate-100">
+              {value}
+            </span>
           </div>
         ))}
       </div>
@@ -292,7 +508,13 @@ function TowerPanel({
   );
 }
 
-function TowerLink({ href, label }: { href: string; label: string }) {
+function TowerLink({
+  href,
+  label,
+}: {
+  href: string;
+  label: string;
+}) {
   return (
     <Link
       href={href}

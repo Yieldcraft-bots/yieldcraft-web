@@ -35,24 +35,19 @@ import type {
   AtlasCoinbaseRequestContext,
 } from "./atlas-live-coinbase-client";
 
-
 type CoinbaseKeyAlg =
   | "ES256"
   | "EdDSA";
-
 
 type AtlasCoinbaseHttpMethod =
   | "GET"
   | "POST";
 
-
 function normalizePem(
   pem: string
 ): string {
-
   let normalized =
     (pem || "").trim();
-
 
   if (
     (
@@ -64,7 +59,6 @@ function normalizePem(
       normalized.endsWith("'")
     )
   ) {
-
     normalized =
       normalized.slice(
         1,
@@ -72,12 +66,10 @@ function normalizePem(
       );
   }
 
-
   return normalized
     .replace(/\\n/g, "\n")
     .replace(/\r\n/g, "\n");
 }
-
 
 function buildAtlasClientCoinbaseJwt(
   apiKeyName: string,
@@ -86,22 +78,18 @@ function buildAtlasClientCoinbaseJwt(
   path: string,
   alg: CoinbaseKeyAlg
 ): string {
-
   const now =
     Math.floor(
       Date.now() / 1000
     );
-
 
   const nonce =
     crypto
       .randomBytes(16)
       .toString("hex");
 
-
   const uri =
     `${method} api.coinbase.com${path}`;
-
 
   return jwt.sign(
     {
@@ -111,13 +99,10 @@ function buildAtlasClientCoinbaseJwt(
       exp: now + 60,
       uri,
     },
-
     privateKeyPem as any,
-
     {
       algorithm:
         alg as any,
-
       header: {
         kid: apiKeyName,
         nonce,
@@ -126,14 +111,11 @@ function buildAtlasClientCoinbaseJwt(
   );
 }
 
-
 async function loadAtlasClientCoinbaseKeys(
   userId: string
 ) {
-
   const normalizedUserId =
     userId.trim();
-
 
   if (!normalizedUserId) {
     throw new Error(
@@ -141,18 +123,15 @@ async function loadAtlasClientCoinbaseKeys(
     );
   }
 
-
   const supabaseUrl =
     process.env.NEXT_PUBLIC_SUPABASE_URL ??
     process.env.SUPABASE_URL ??
     "";
 
-
   const serviceRoleKey =
     process.env
       .SUPABASE_SERVICE_ROLE_KEY ??
     "";
-
 
   if (!supabaseUrl) {
     throw new Error(
@@ -160,13 +139,11 @@ async function loadAtlasClientCoinbaseKeys(
     );
   }
 
-
   if (!serviceRoleKey) {
     throw new Error(
       "atlas_supabase_service_role_missing"
     );
   }
-
 
   const supabase =
     createClient(
@@ -179,13 +156,12 @@ async function loadAtlasClientCoinbaseKeys(
       }
     );
 
-
   const {
     data: keys,
     error: keysError,
   } =
     await supabase
-      .from("coinbase_keys")
+      .from("atlas_coinbase_keys")
       .select(
         "api_key_name, private_key, key_alg, product_scope"
       )
@@ -199,13 +175,11 @@ async function loadAtlasClientCoinbaseKeys(
       )
       .maybeSingle();
 
-
   if (keysError) {
     throw new Error(
       `atlas_coinbase_keys_lookup_failed:${keysError.message}`
     );
   }
-
 
   if (
     !keys?.api_key_name ||
@@ -216,12 +190,10 @@ async function loadAtlasClientCoinbaseKeys(
     );
   }
 
-
   const apiKeyName =
     String(
       keys.api_key_name
     ).trim();
-
 
   const privateKeyPem =
     normalizePem(
@@ -229,7 +201,6 @@ async function loadAtlasClientCoinbaseKeys(
         keys.private_key
       )
     );
-
 
   if (
     !apiKeyName ||
@@ -240,20 +211,17 @@ async function loadAtlasClientCoinbaseKeys(
     );
   }
 
-
   const keyAlgRaw =
     String(
       keys.key_alg ??
       "ES256"
     ).toUpperCase();
 
-
   const keyAlg:
     CoinbaseKeyAlg =
       keyAlgRaw === "EDDSA"
         ? "EdDSA"
         : "ES256";
-
 
   return {
     apiKeyName,
@@ -262,18 +230,15 @@ async function loadAtlasClientCoinbaseKeys(
   };
 }
 
-
 async function createAtlasCoinbaseRequestContext(
   userId: string,
   method: AtlasCoinbaseHttpMethod,
   path: string
 ): Promise<AtlasCoinbaseRequestContext> {
-
   const keys =
     await loadAtlasClientCoinbaseKeys(
       userId
     );
-
 
   const signedJwt =
     buildAtlasClientCoinbaseJwt(
@@ -284,21 +249,17 @@ async function createAtlasCoinbaseRequestContext(
       keys.keyAlg
     );
 
-
   return {
     apiKey:
       keys.apiKeyName,
-
     jwt:
       signedJwt,
   };
 }
 
-
 export async function getAtlasLiveCoinbaseCredentials(
   userId: string
 ): Promise<AtlasCoinbaseRequestContext> {
-
   return createAtlasCoinbaseRequestContext(
     userId,
     "POST",
@@ -306,11 +267,9 @@ export async function getAtlasLiveCoinbaseCredentials(
   );
 }
 
-
 export async function getAtlasCoinbasePreviewCredentials(
   userId: string
 ): Promise<AtlasCoinbaseRequestContext> {
-
   return createAtlasCoinbaseRequestContext(
     userId,
     "POST",
@@ -318,22 +277,18 @@ export async function getAtlasCoinbasePreviewCredentials(
   );
 }
 
-
 export async function getAtlasCoinbaseProductCredentials(
   userId: string,
   productId: string
 ): Promise<AtlasCoinbaseRequestContext> {
-
   const normalizedProductId =
     productId.trim();
-
 
   if (!normalizedProductId) {
     throw new Error(
       "atlas_coinbase_product_id_missing"
     );
   }
-
 
   return createAtlasCoinbaseRequestContext(
     userId,
@@ -344,22 +299,18 @@ export async function getAtlasCoinbaseProductCredentials(
   );
 }
 
-
 export async function getAtlasCoinbaseOrderCredentials(
   userId: string,
   orderId: string
 ): Promise<AtlasCoinbaseRequestContext> {
-
   const normalizedOrderId =
     orderId.trim();
-
 
   if (!normalizedOrderId) {
     throw new Error(
       "atlas_coinbase_order_id_missing"
     );
   }
-
 
   return createAtlasCoinbaseRequestContext(
     userId,
@@ -370,11 +321,9 @@ export async function getAtlasCoinbaseOrderCredentials(
   );
 }
 
-
 export async function refreshAtlasLiveCoinbaseCredentials(
   userId: string
 ): Promise<void> {
-
   await createAtlasCoinbaseRequestContext(
     userId,
     "POST",

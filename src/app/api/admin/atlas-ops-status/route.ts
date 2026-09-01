@@ -118,7 +118,7 @@ export async function GET(request: Request) {
         .select("user_id, plan, status"),
 
       client
-        .from("coinbase_keys")
+        .from("atlas_coinbase_keys")
         .select("user_id, product_scope"),
 
       client.auth.admin.listUsers({
@@ -380,7 +380,7 @@ export async function GET(request: Request) {
         atlasKeyUserIds.size,
 
       source:
-        "entitlements_subscriptions_coinbase_keys_auth_users",
+        "entitlements_subscriptions_atlas_coinbase_keys_auth_users",
 
       ok:
         !entitlementResult.error &&

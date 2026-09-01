@@ -4,7 +4,8 @@ import { createClient } from "@supabase/supabase-js";
 export const runtime = "nodejs";
 
 const ADMIN_USER_ID =
-  process.env.ADMIN_USER_ID?.trim() || "295165f4-df46-403f-8727-80408d6a2578";
+  process.env.ADMIN_USER_ID?.trim() ||
+  "295165f4-df46-403f-8727-80408d6a2578";
 
 function json(status: number, body: any) {
   return NextResponse.json(body, {
@@ -15,14 +16,21 @@ function json(status: number, body: any) {
 
 function requireEnv(name: string) {
   const v = process.env[name];
-  if (!v || !v.trim()) throw new Error(`Missing env: ${name}`);
+
+  if (!v || !v.trim()) {
+    throw new Error(`Missing env: ${name}`);
+  }
+
   return v.trim();
 }
 
 function sbService() {
   const url = requireEnv("SUPABASE_URL");
   const key = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
-  return createClient(url, key, { auth: { persistSession: false } });
+
+  return createClient(url, key, {
+    auth: { persistSession: false },
+  });
 }
 
 function okAdminSecret(req: Request) {
@@ -40,49 +48,85 @@ function okAdminSecret(req: Request) {
     req.headers.get("x-cron-secret") ||
     req.headers.get("x-yc-secret");
 
-  if (h && (h === secret || h === `Bearer ${secret}`)) return true;
+  if (
+    h &&
+    (h === secret ||
+      h === `Bearer ${secret}`)
+  ) {
+    return true;
+  }
 
   const url = new URL(req.url);
   const q = url.searchParams.get("secret");
+
   return q === secret;
 }
 
 async function okSupabaseAdmin(req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const auth =
+    req.headers.get("authorization") || "";
+
+  const token = auth.startsWith("Bearer ")
+    ? auth.slice(7).trim()
+    : "";
+
   if (!token) return false;
 
   const supabase = sbService();
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data?.user) return false;
+  const { data, error } =
+    await supabase.auth.getUser(token);
+
+  if (error || !data?.user) {
+    return false;
+  }
 
   return data.user.id === ADMIN_USER_ID;
 }
 
 function num(v: any, fallback: number) {
   const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
 export async function GET(req: Request) {
   try {
-    // ✅ allow either server secret OR verified Supabase admin token
-    const ok = okAdminSecret(req) || (await okSupabaseAdmin(req));
-    if (!ok) return json(401, { ok: false, error: "unauthorized" });
+    const ok =
+      okAdminSecret(req) ||
+      (await okSupabaseAdmin(req));
+
+    if (!ok) {
+      return json(401, {
+        ok: false,
+        error: "unauthorized",
+      });
+    }
 
     const url = new URL(req.url);
 
     const coreUserId =
       (
-        url.searchParams.get("core_user_id") ||
+        url.searchParams.get(
+          "core_user_id"
+        ) ||
         process.env.CORE_FUND_USER_ID ||
         ""
       ).trim() || null;
 
     const limitTrades = Math.max(
       1,
-      Math.min(200, num(url.searchParams.get("limit_trades"), 50))
+      Math.min(
+        200,
+        num(
+          url.searchParams.get(
+            "limit_trades"
+          ),
+          50
+        )
+      )
     );
 
     const client = sbService();
@@ -91,123 +135,261 @@ export async function GET(req: Request) {
     const inst = await client
       .from("institutional_snapshot_v1")
       .select("*")
-      .order("as_of", { ascending: false }) // use created_at if you don't have as_of
+      .order("as_of", {
+        ascending: false,
+      })
       .limit(1)
       .maybeSingle();
 
     // 2) Atlas launch health (read-only)
-    const entitlementsCount = await client
-      .from("entitlements")
-      .select("user_id, atlas, pulse", { count: "exact", head: false });
+    const entitlementsCount =
+      await client
+        .from("entitlements")
+        .select(
+          "user_id, atlas, pulse",
+          {
+            count: "exact",
+            head: false,
+          }
+        );
 
-    const subscriptionsCount = await client
-      .from("subscriptions")
-      .select("user_id, plan, status", { count: "exact", head: false });
+    const subscriptionsCount =
+      await client
+        .from("subscriptions")
+        .select(
+          "user_id, plan, status",
+          {
+            count: "exact",
+            head: false,
+          }
+        );
 
-    const coinbaseKeysCount = await client
-      .from("coinbase_keys")
-      .select("user_id, product_scope", { count: "exact", head: false });
+    const pulseKeysCount =
+      await client
+        .from("coinbase_keys")
+        .select(
+          "user_id, product_scope",
+          {
+            count: "exact",
+            head: false,
+          }
+        )
+        .eq("product_scope", "pulse");
 
-    const entitlementRows = Array.isArray(entitlementsCount.data)
-      ? entitlementsCount.data
-      : [];
+    const atlasKeysCount =
+      await client
+        .from("atlas_coinbase_keys")
+        .select(
+          "user_id, product_scope",
+          {
+            count: "exact",
+            head: false,
+          }
+        )
+        .eq("product_scope", "atlas");
 
-    const subscriptionRows = Array.isArray(subscriptionsCount.data)
-      ? subscriptionsCount.data
-      : [];
+    const entitlementRows =
+      Array.isArray(
+        entitlementsCount.data
+      )
+        ? entitlementsCount.data
+        : [];
 
-    const keyRows = Array.isArray(coinbaseKeysCount.data)
-      ? coinbaseKeysCount.data
-      : [];
+    const subscriptionRows =
+      Array.isArray(
+        subscriptionsCount.data
+      )
+        ? subscriptionsCount.data
+        : [];
 
-    const atlasEntitled = entitlementRows.filter((r: any) => r.atlas === true)
-      .length;
+    const pulseKeyRows =
+      Array.isArray(
+        pulseKeysCount.data
+      )
+        ? pulseKeysCount.data
+        : [];
 
-    const pulseEntitled = entitlementRows.filter((r: any) => r.pulse === true)
-      .length;
+    const atlasKeyRows =
+      Array.isArray(
+        atlasKeysCount.data
+      )
+        ? atlasKeysCount.data
+        : [];
 
-    const activeAtlasSubscriptions = subscriptionRows.filter((r: any) => {
-      const plan = String(r.plan || "").toLowerCase();
-      return plan.includes("atlas") && r.status === "active";
-    }).length;
+    const atlasEntitled =
+      entitlementRows.filter(
+        (r: any) =>
+          r.atlas === true
+      ).length;
 
-    const activeTotalSubscriptions = subscriptionRows.filter(
-      (r: any) => r.status === "active"
-    ).length;
+    const pulseEntitled =
+      entitlementRows.filter(
+        (r: any) =>
+          r.pulse === true
+      ).length;
 
-    const atlasKeysConnected = keyRows.filter(
-      (r: any) => r.product_scope === "atlas"
-    ).length;
+    const activeAtlasSubscriptions =
+      subscriptionRows.filter(
+        (r: any) => {
+          const plan = String(
+            r.plan || ""
+          ).toLowerCase();
 
-    const pulseKeysConnected = keyRows.filter(
-      (r: any) => r.product_scope === "pulse"
-    ).length;
+          return (
+            plan.includes("atlas") &&
+            r.status === "active"
+          );
+        }
+      ).length;
+
+    const activeTotalSubscriptions =
+      subscriptionRows.filter(
+        (r: any) =>
+          r.status === "active"
+      ).length;
+
+    const atlasKeysConnected =
+      atlasKeyRows.filter(
+        (r: any) =>
+          r.product_scope ===
+          "atlas"
+      ).length;
+
+    const pulseKeysConnected =
+      pulseKeyRows.filter(
+        (r: any) =>
+          r.product_scope ===
+          "pulse"
+      ).length;
 
     const atlasHealth = {
       ok:
         !entitlementsCount.error &&
         !subscriptionsCount.error &&
-        !coinbaseKeysCount.error,
+        !pulseKeysCount.error &&
+        !atlasKeysCount.error,
+
       error:
-        (entitlementsCount.error as any)?.message ||
-        (subscriptionsCount.error as any)?.message ||
-        (coinbaseKeysCount.error as any)?.message ||
+        (
+          entitlementsCount.error as any
+        )?.message ||
+        (
+          subscriptionsCount.error as any
+        )?.message ||
+        (
+          pulseKeysCount.error as any
+        )?.message ||
+        (
+          atlasKeysCount.error as any
+        )?.message ||
         null,
-      total_entitlements: entitlementRows.length,
-      atlas_entitled: atlasEntitled,
-      pulse_entitled: pulseEntitled,
-      active_atlas_subscriptions: activeAtlasSubscriptions,
-      active_total_subscriptions: activeTotalSubscriptions,
-      atlas_keys_connected: atlasKeysConnected,
-      pulse_keys_connected: pulseKeysConnected,
+
+      total_entitlements:
+        entitlementRows.length,
+
+      atlas_entitled:
+        atlasEntitled,
+
+      pulse_entitled:
+        pulseEntitled,
+
+      active_atlas_subscriptions:
+        activeAtlasSubscriptions,
+
+      active_total_subscriptions:
+        activeTotalSubscriptions,
+
+      atlas_keys_connected:
+        atlasKeysConnected,
+
+      pulse_keys_connected:
+        pulseKeysConnected,
+
       atlas_entitlement_subscription_gap:
-        atlasEntitled - activeAtlasSubscriptions,
-      atlas_entitlement_key_gap: atlasEntitled - atlasKeysConnected,
+        atlasEntitled -
+        activeAtlasSubscriptions,
+
+      atlas_entitlement_key_gap:
+        atlasEntitled -
+        atlasKeysConnected,
     };
 
     // 3) CoreFund snapshot
     let coreSnapshot: any = null;
-    let coreSnapshotSource: string | null = null;
+    let coreSnapshotSource:
+      | string
+      | null = null;
 
     if (coreUserId) {
       const s1 = await client
         .from("user_account_snapshot")
         .select("*")
-        .eq("user_id", coreUserId)
-        .order("as_of", { ascending: false })
+        .eq(
+          "user_id",
+          coreUserId
+        )
+        .order("as_of", {
+          ascending: false,
+        })
         .limit(1)
         .maybeSingle();
 
       if (!s1.error && s1.data) {
         coreSnapshot = s1.data;
-        coreSnapshotSource = "user_account_snapshot";
+        coreSnapshotSource =
+          "user_account_snapshot";
       } else {
         const s2 = await client
           .from("pnl_snapshots")
           .select("*")
-          .eq("user_id", coreUserId)
-          .order("as_of", { ascending: false })
+          .eq(
+            "user_id",
+            coreUserId
+          )
+          .order("as_of", {
+            ascending: false,
+          })
           .limit(1)
           .maybeSingle();
 
         if (!s2.error && s2.data) {
           coreSnapshot = s2.data;
-          coreSnapshotSource = "pnl_snapshots";
+          coreSnapshotSource =
+            "pnl_snapshots";
         } else {
           const s3 = await client
             .from("equity_state")
-            .select("user_id, peak_equity_usd, last_equity_usd, updated_at")
-            .eq("user_id", coreUserId)
+            .select(
+              "user_id, peak_equity_usd, last_equity_usd, updated_at"
+            )
+            .eq(
+              "user_id",
+              coreUserId
+            )
             .maybeSingle();
 
-          if (!s3.error && s3.data) {
+          if (
+            !s3.error &&
+            s3.data
+          ) {
             coreSnapshot = {
-              user_id: s3.data.user_id,
-              peak_equity_usd: s3.data.peak_equity_usd,
-              last_equity_usd: s3.data.last_equity_usd,
-              updated_at: s3.data.updated_at,
+              user_id:
+                s3.data.user_id,
+
+              peak_equity_usd:
+                s3.data
+                  .peak_equity_usd,
+
+              last_equity_usd:
+                s3.data
+                  .last_equity_usd,
+
+              updated_at:
+                s3.data.updated_at,
             };
-            coreSnapshotSource = "equity_state";
+
+            coreSnapshotSource =
+              "equity_state";
           }
         }
       }
@@ -215,60 +397,107 @@ export async function GET(req: Request) {
 
     // 4) Recent CoreFund trades
     let coreTrades: any[] = [];
-    let coreTradesSource: string | null = null;
+    let coreTradesSource:
+      | string
+      | null = null;
 
     if (coreUserId) {
       const t1 = await client
-        .from("corefund_trade_logs")
+        .from(
+          "corefund_trade_logs"
+        )
         .select("*")
-        .order("created_at", { ascending: false })
+        .order("created_at", {
+          ascending: false,
+        })
         .limit(limitTrades);
 
-      if (!t1.error && Array.isArray(t1.data) && t1.data.length) {
+      if (
+        !t1.error &&
+        Array.isArray(t1.data) &&
+        t1.data.length
+      ) {
         coreTrades = t1.data;
-        coreTradesSource = "corefund_trade_logs";
+        coreTradesSource =
+          "corefund_trade_logs";
       } else {
         const t2 = await client
           .from("trade_logs")
           .select("*")
-          .eq("user_id", coreUserId)
-          .order("created_at", { ascending: false })
+          .eq(
+            "user_id",
+            coreUserId
+          )
+          .order("created_at", {
+            ascending: false,
+          })
           .limit(limitTrades);
 
-        if (!t2.error && Array.isArray(t2.data)) {
+        if (
+          !t2.error &&
+          Array.isArray(t2.data)
+        ) {
           coreTrades = t2.data;
-          coreTradesSource = "trade_logs (filtered by user_id)";
+
+          coreTradesSource =
+            "trade_logs (filtered by user_id)";
         }
       }
     }
 
     return json(200, {
       ok: true,
-      as_of: new Date().toISOString(),
+      as_of:
+        new Date().toISOString(),
+
       institutional: {
         ok: !inst.error,
-        error: inst.error ? (inst.error as any).message || inst.error : null,
+
+        error: inst.error
+          ? (inst.error as any)
+              .message ||
+            inst.error
+          : null,
+
         data: inst.data ?? null,
       },
+
       atlas: atlasHealth,
+
       corefund: {
-        core_user_id: coreUserId,
-        snapshot_source: coreSnapshotSource,
-        snapshot: coreSnapshot,
-        trades_source: coreTradesSource,
-        trades: coreTrades,
-        limit_trades: limitTrades,
+        core_user_id:
+          coreUserId,
+
+        snapshot_source:
+          coreSnapshotSource,
+
+        snapshot:
+          coreSnapshot,
+
+        trades_source:
+          coreTradesSource,
+
+        trades:
+          coreTrades,
+
+        limit_trades:
+          limitTrades,
       },
     });
   } catch (e: any) {
     return json(500, {
       ok: false,
-      status: "INSTITUTIONAL_SNAPSHOT_ERROR",
-      error: e?.message || String(e),
+      status:
+        "INSTITUTIONAL_SNAPSHOT_ERROR",
+      error:
+        e?.message ||
+        String(e),
     });
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(
+  req: Request
+) {
   return GET(req);
 }

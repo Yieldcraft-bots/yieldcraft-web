@@ -239,7 +239,10 @@ function cooldownHours() {
 }
 
 function sellDetectThresholdBtc() {
-  return toNum(process.env.ATLAS_SELL_DETECT_THRESHOLD_BTC || "0.00000001", 0.00000001);
+  return toNum(
+    process.env.ATLAS_SELL_DETECT_THRESHOLD_BTC || "0.00000001",
+    0.00000001
+  );
 }
 
 function nowIso() {
@@ -277,7 +280,10 @@ function detectSellEvent(state: AtlasUserState | null, currentBtc: number) {
   return null;
 }
 
-async function loadAtlasUserState(client: any, userId: string): Promise<AtlasUserState | null> {
+async function loadAtlasUserState(
+  client: any,
+  userId: string
+): Promise<AtlasUserState | null> {
   const { data, error } = await client
     .from("atlas_user_state")
     .select("*")
@@ -443,24 +449,26 @@ export async function POST(req: Request) {
     }
 
     const cronAuthorized =
-  req.headers.get("x-vercel-cron") === "1" ||
-  url.searchParams.get("cron") === "1";
+      req.headers.get("x-vercel-cron") === "1" ||
+      url.searchParams.get("cron") === "1";
 
-if (liveRequested && !targetUserId && !cronAuthorized) {
-  return json(403, {
-    ok: false,
-    reason: "live_blocked_target_user_required",
-    dry_run: ATLAS_DRY_RUN,
-    live_armed: ATLAS_LIVE_ARMED,
-    target_user_id: null,
-  });
-}
+    if (liveRequested && !targetUserId && !cronAuthorized) {
+      return json(403, {
+        ok: false,
+        reason: "live_blocked_target_user_required",
+        dry_run: ATLAS_DRY_RUN,
+        live_armed: ATLAS_LIVE_ARMED,
+        target_user_id: null,
+      });
+    }
 
     const client = sb();
 
     let keyQuery = client
-      .from("coinbase_keys")
-      .select("user_id, api_key_name, private_key, key_alg, product_scope, updated_at")
+      .from("atlas_coinbase_keys")
+      .select(
+        "user_id, api_key_name, private_key, key_alg, product_scope, updated_at"
+      )
       .eq("product_scope", "atlas")
       .order("updated_at", { ascending: false });
 
@@ -510,9 +518,14 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
         const balancesBefore = summarizeBalances(accounts);
         const state = atlasMarketState();
 
-        const sellEvent = detectSellEvent(memoryBefore, balancesBefore.btc_available);
+        const sellEvent = detectSellEvent(
+          memoryBefore,
+          balancesBefore.btc_available
+        );
+
         const cooldownActive =
-          !sellEvent && isCooldownActive(memoryBefore?.cooldown_until || null);
+          !sellEvent &&
+          isCooldownActive(memoryBefore?.cooldown_until || null);
 
         if (sellEvent) {
           await upsertAtlasUserState(client, {
@@ -604,16 +617,22 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           continue;
         }
 
-        const allocation = allocationPreview(balancesBefore.cash_available_usd);
+        const allocation =
+          allocationPreview(
+            balancesBefore.cash_available_usd
+          );
 
-        const fundingPlan = buildFundingPlan(
-          balancesBefore.usd_available,
-          balancesBefore.usdc_available,
-          allocation.proposed_buy_usd
-        );
+        const fundingPlan =
+          buildFundingPlan(
+            balancesBefore.usd_available,
+            balancesBefore.usdc_available,
+            allocation.proposed_buy_usd
+          );
 
         const canBuildOrder =
-          allocation.eligible && fundingPlan.executable && fundingPlan.product_id;
+          allocation.eligible &&
+          fundingPlan.executable &&
+          fundingPlan.product_id;
 
         const orderPayload = canBuildOrder
           ? buildCoinbaseMarketBuyOrder(
@@ -627,13 +646,17 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
         if (!orderPayload) {
           await upsertAtlasUserState(client, {
             user_id: key.user_id,
-            last_cash_available_usd: balancesBefore.cash_available_usd,
-            last_btc_available: balancesBefore.btc_available,
-            cooldown_until: memoryBefore?.cooldown_until || null,
+            last_cash_available_usd:
+              balancesBefore.cash_available_usd,
+            last_btc_available:
+              balancesBefore.btc_available,
+            cooldown_until:
+              memoryBefore?.cooldown_until || null,
             market_state_used: state,
             notes: {
               event: "observed_no_order",
-              allocation_reason: allocation.reason,
+              allocation_reason:
+                allocation.reason,
             },
           });
 
@@ -658,14 +681,19 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
         if (!liveRequested) {
           await upsertAtlasUserState(client, {
             user_id: key.user_id,
-            last_cash_available_usd: balancesBefore.cash_available_usd,
-            last_btc_available: balancesBefore.btc_available,
-            cooldown_until: memoryBefore?.cooldown_until || null,
+            last_cash_available_usd:
+              balancesBefore.cash_available_usd,
+            last_btc_available:
+              balancesBefore.btc_available,
+            cooldown_until:
+              memoryBefore?.cooldown_until || null,
             market_state_used: state,
             notes: {
               event: "dry_run_order_ready",
-              proposed_buy_usd: allocation.proposed_buy_usd,
-              product_id: fundingPlan.product_id,
+              proposed_buy_usd:
+                allocation.proposed_buy_usd,
+              product_id:
+                fundingPlan.product_id,
             },
           });
 
@@ -687,70 +715,142 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           continue;
         }
 
-        const orderPath = "/api/v3/brokerage/orders";
-        const orderRes = await cbPost(key, orderPath, orderPayload);
-        const orderId = extractCoinbaseOrderId(orderRes.json);
+        const orderPath =
+          "/api/v3/brokerage/orders";
+
+        const orderRes =
+          await cbPost(
+            key,
+            orderPath,
+            orderPayload
+          );
+
+        const orderId =
+          extractCoinbaseOrderId(
+            orderRes.json
+          );
+
         const coinbaseOrderAccepted =
-  orderRes.ok &&
-  (orderRes.json as any)?.success === true &&
-  !!orderId;
+          orderRes.ok &&
+          (orderRes.json as any)?.success === true &&
+          !!orderId;
 
         await sleep(1250);
 
-        const acctAfter = await cbGet(key, "/api/v3/brokerage/accounts");
+        const acctAfter =
+          await cbGet(
+            key,
+            "/api/v3/brokerage/accounts"
+          );
+
         const accountsAfter =
-          acctAfter.ok && Array.isArray((acctAfter.json as any)?.accounts)
+          acctAfter.ok &&
+          Array.isArray(
+            (acctAfter.json as any)?.accounts
+          )
             ? (acctAfter.json as any).accounts
             : [];
 
-        const balancesAfter = acctAfter.ok ? summarizeBalances(accountsAfter) : null;
+        const balancesAfter =
+          acctAfter.ok
+            ? summarizeBalances(
+                accountsAfter
+              )
+            : null;
 
-        if (coinbaseOrderAccepted) ordersPlaced += 1;
+        if (coinbaseOrderAccepted) {
+          ordersPlaced += 1;
+        }
 
         await upsertAtlasUserState(client, {
           user_id: key.user_id,
           last_cash_available_usd:
-            balancesAfter?.cash_available_usd ?? balancesBefore.cash_available_usd,
-          last_btc_available: balancesAfter?.btc_available ?? balancesBefore.btc_available,
-          last_buy_at: coinbaseOrderAccepted ? nowIso() : memoryBefore?.last_buy_at || null,
-          last_buy_amount_usd: coinbaseOrderAccepted
-            ? allocation.proposed_buy_usd
-            : memoryBefore?.last_buy_amount_usd || null,
-          last_buy_order_id: coinbaseOrderAccepted ? orderId : memoryBefore?.last_buy_order_id || null,
-                    cooldown_until: coinbaseOrderAccepted
-            ? addHoursIso(cooldownHours())
-            : memoryBefore?.cooldown_until || null,
-          market_state_used: state,
+            balancesAfter?.cash_available_usd ??
+            balancesBefore.cash_available_usd,
+          last_btc_available:
+            balancesAfter?.btc_available ??
+            balancesBefore.btc_available,
+          last_buy_at:
+            coinbaseOrderAccepted
+              ? nowIso()
+              : memoryBefore?.last_buy_at ||
+                null,
+          last_buy_amount_usd:
+            coinbaseOrderAccepted
+              ? allocation.proposed_buy_usd
+              : memoryBefore
+                  ?.last_buy_amount_usd ||
+                null,
+          last_buy_order_id:
+            coinbaseOrderAccepted
+              ? orderId
+              : memoryBefore
+                  ?.last_buy_order_id ||
+                null,
+          cooldown_until:
+            coinbaseOrderAccepted
+              ? addHoursIso(
+                  cooldownHours()
+                )
+              : memoryBefore
+                  ?.cooldown_until ||
+                null,
+          market_state_used:
+            state,
           notes: {
-            event: coinbaseOrderAccepted ? "live_buy_submitted" : "live_buy_failed",
-            product_id: fundingPlan.product_id,
-            proposed_buy_usd: allocation.proposed_buy_usd,
-            coinbase_status: orderRes.status,
-            order_id: orderId,
+            event:
+              coinbaseOrderAccepted
+                ? "live_buy_submitted"
+                : "live_buy_failed",
+            product_id:
+              fundingPlan.product_id,
+            proposed_buy_usd:
+              allocation.proposed_buy_usd,
+            coinbase_status:
+              orderRes.status,
+            order_id:
+              orderId,
           },
         });
 
         users.push({
           user_id: key.user_id,
           product_scope: "atlas",
-          api_key_name: key.api_key_name,
-          status: coinbaseOrderAccepted ? "live_order_submitted" : "live_order_failed",
-          action: coinbaseOrderAccepted ? "live_buy_submitted" : "live_buy_failed",
+          api_key_name:
+            key.api_key_name,
+          status:
+            coinbaseOrderAccepted
+              ? "live_order_submitted"
+              : "live_order_failed",
+          action:
+            coinbaseOrderAccepted
+              ? "live_buy_submitted"
+              : "live_buy_failed",
           balances: {
-            before: balancesBefore,
-            after: balancesAfter,
+            before:
+              balancesBefore,
+            after:
+              balancesAfter,
           },
           memory: {
-            loaded: !!memoryBefore,
+            loaded:
+              !!memoryBefore,
             updated: true,
-            cooldown_active: false,
+            cooldown_active:
+              false,
           },
           allocation,
-          funding_plan: fundingPlan,
-          order_payload: orderPayload,
-          coinbase_status: orderRes.status,
-          coinbase: orderRes.json ?? orderRes.text,
-          order_id: orderId,
+          funding_plan:
+            fundingPlan,
+          order_payload:
+            orderPayload,
+          coinbase_status:
+            orderRes.status,
+          coinbase:
+            orderRes.json ??
+            orderRes.text,
+          order_id:
+            orderId,
         });
       } catch (e: any) {
         users.push({
@@ -758,29 +858,41 @@ if (liveRequested && !targetUserId && !cronAuthorized) {
           product_scope: "atlas",
           status: "error",
           action: "no_order_placed",
-          error: e?.message || String(e),
+          error:
+            e?.message ||
+            String(e),
         });
       }
     }
 
     return json(200, {
       ok: true,
-      mode: liveRequested
-        ? "ATLAS_LIVE_GATED_EXECUTION"
-        : "ATLAS_POLICY_V2_MEMORY_DRY_RUN_PREVIEW",
-      dry_run: ATLAS_DRY_RUN,
-      live_armed: ATLAS_LIVE_ARMED,
-      target_user_id: targetUserId || null,
-      atlas_key_rows: keys.length,
-      atlas_users_found: users.length,
-      orders_placed: ordersPlaced,
+      mode:
+        liveRequested
+          ? "ATLAS_LIVE_GATED_EXECUTION"
+          : "ATLAS_POLICY_V2_MEMORY_DRY_RUN_PREVIEW",
+      dry_run:
+        ATLAS_DRY_RUN,
+      live_armed:
+        ATLAS_LIVE_ARMED,
+      target_user_id:
+        targetUserId || null,
+      atlas_key_rows:
+        keys.length,
+      atlas_users_found:
+        users.length,
+      orders_placed:
+        ordersPlaced,
       users,
     });
   } catch (err: any) {
     return json(500, {
       ok: false,
-      reason: "server_error",
-      error: err?.message || String(err),
+      reason:
+        "server_error",
+      error:
+        err?.message ||
+        String(err),
     });
   }
 }
