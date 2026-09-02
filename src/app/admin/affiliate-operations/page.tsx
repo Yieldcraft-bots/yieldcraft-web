@@ -1,13 +1,16 @@
 import AffiliateSummaryCards from "./components/AffiliateSummaryCards";
 import AffiliateRosterTable from "./components/AffiliateRosterTable";
+import CoinbaseReferralSummaryCards from "./components/CoinbaseReferralSummaryCards";
 
 import { getAffiliateSummary } from "./lib/getAffiliateSummary";
 import { getAffiliateRoster } from "./lib/getAffiliateRoster";
+import { getCoinbaseReferralSummary } from "./lib/getCoinbaseReferralSummary";
 
 export default async function AffiliateOperationsPage() {
-  const [summary, affiliates] = await Promise.all([
+  const [summary, affiliates, coinbaseReferralSummary] = await Promise.all([
     getAffiliateSummary(),
     getAffiliateRoster(),
+    getCoinbaseReferralSummary(),
   ]);
 
   return (
@@ -29,6 +32,8 @@ export default async function AffiliateOperationsPage() {
         </div>
 
         <AffiliateSummaryCards summary={summary} />
+
+        <CoinbaseReferralSummaryCards summary={coinbaseReferralSummary} />
 
         <AffiliateRosterTable affiliates={affiliates} />
       </div>

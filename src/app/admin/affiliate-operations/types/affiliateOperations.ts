@@ -21,3 +21,12 @@ export interface AffiliateRecord {
   commissionRate: number;
   createdAt: string;
 }
+
+export interface CoinbaseReferralSummary {
+  clicksToday: number;
+  clicks7d: number;
+  clicks30d: number;
+  pulseClicks30d: number;
+  atlasClicks30d: number;
+  identifiedUsers30d: number;
+}
