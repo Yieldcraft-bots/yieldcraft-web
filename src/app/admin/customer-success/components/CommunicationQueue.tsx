@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/admin-fetch";
 import AtlasCard from "../../atlas-operations/components/AtlasCard";
 
 type CommunicationData = {
-  welcome_pending: number;
   keys_reminder: number;
-  weekly_summary_due: number;
-  platform_updates: number;
   action_required: number;
 };
 
@@ -17,26 +15,48 @@ type CustomerSuccessResponse = {
 };
 
 export default function CommunicationQueue() {
-  const [communication, setCommunication] = useState<CommunicationData | null>(
-    null
-  );
+  const [communication, setCommunication] =
+    useState<CommunicationData | null>(null);
+
+  const [errorMessage, setErrorMessage] =
+    useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
 
     async function loadCommunication() {
-      const res = await fetch("/api/admin/customer-success", {
-        cache: "no-store",
-      });
+      try {
+        const data =
+          await adminFetch<CustomerSuccessResponse>(
+            "/api/admin/customer-success",
+            {
+              method: "GET",
+              cache: "no-store",
+            }
+          );
 
-      const json: CustomerSuccessResponse = await res.json();
+        if (
+          alive &&
+          data.ok &&
+          data.communication
+        ) {
+          setCommunication(data.communication);
+          setErrorMessage(null);
+        }
+      } catch (error) {
+        if (!alive) {
+          return;
+        }
 
-      if (alive && json.ok && json.communication) {
-        setCommunication(json.communication);
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to load communication queue."
+        );
       }
     }
 
-    loadCommunication().catch(console.error);
+    void loadCommunication();
 
     return () => {
       alive = false;
@@ -45,22 +65,50 @@ export default function CommunicationQueue() {
 
   return (
     <AtlasCard title="Communication Queue">
+      {errorMessage ? (
+        <div
+          role="alert"
+          className="mb-4 rounded-xl border border-rose-500/30 bg-rose-950/20 p-4 text-sm text-rose-200"
+        >
+          Communication queue unavailable:{" "}
+          {errorMessage}
+        </div>
+      ) : null}
+
       <div className="space-y-4">
-        <QueueRow label="Welcome Pending" value={communication?.welcome_pending ?? "--"} />
-        <QueueRow label="Keys Reminder" value={communication?.keys_reminder ?? "--"} />
-        <QueueRow label="Weekly Summary Due" value={communication?.weekly_summary_due ?? "--"} />
-        <QueueRow label="Platform Updates" value={communication?.platform_updates ?? "--"} />
-        <QueueRow label="Action Required" value={communication?.action_required ?? "--"} />
+        <QueueRow
+          label="Keys Reminders"
+          value={
+            communication?.keys_reminder ??
+            "--"
+          }
+        />
+
+        <QueueRow
+          label="Action Required"
+          value={
+            communication?.action_required ??
+            "--"
+          }
+        />
       </div>
     </AtlasCard>
   );
 }
 
-function QueueRow(props: { label: string; value: number | string }) {
+function QueueRow(props: {
+  label: string;
+  value: number | string;
+}) {
   return (
     <div className="flex items-center justify-between rounded-2xl border border-white/10 bg-slate-950/40 p-4">
-      <span className="text-slate-400">{props.label}</span>
-      <span className="font-semibold text-white">{props.value}</span>
+      <span className="text-slate-400">
+        {props.label}
+      </span>
+
+      <span className="font-semibold text-white">
+        {props.value}
+      </span>
     </div>
   );
 }

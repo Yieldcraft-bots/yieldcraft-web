@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { isAuthorizedAdminRequest } from "@/lib/admin-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,13 +29,49 @@ function sbService() {
     {
       auth: {
         persistSession: false,
+        autoRefreshToken: false,
       },
     }
   );
 }
 
-export async function GET() {
+function normalizeEmail(value: any) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isWithinLastDays(
+  value: string | null | undefined,
+  days: number
+) {
+  if (!value) {
+    return false;
+  }
+
+  const timestamp = new Date(value).getTime();
+
+  if (!Number.isFinite(timestamp)) {
+    return false;
+  }
+
+  const cutoff =
+    Date.now() - days * 24 * 60 * 60 * 1000;
+
+  return timestamp >= cutoff;
+}
+
+export async function GET(request: Request) {
   try {
+    const authorized =
+      await isAuthorizedAdminRequest(request);
+
+    if (!authorized) {
+      return json(401, {
+        ok: false,
+        status: "UNAUTHORIZED",
+        error: "Admin authorization is required.",
+      });
+    }
+
     const client = sbService();
 
     const [
@@ -42,6 +79,7 @@ export async function GET() {
       subscriptionResult,
       pulseKeyResult,
       atlasKeyResult,
+      authUsersResult,
     ] = await Promise.all([
       client
         .from("entitlements")
@@ -68,6 +106,11 @@ export async function GET() {
           "user_id, product_scope, created_at"
         )
         .eq("product_scope", "atlas"),
+
+      client.auth.admin.listUsers({
+        page: 1,
+        perPage: 1000,
+      }),
     ]);
 
     const entitlementRows = Array.isArray(
@@ -93,6 +136,32 @@ export async function GET() {
     )
       ? atlasKeyResult.data
       : [];
+
+    const authUsers = Array.isArray(
+      authUsersResult?.data?.users
+    )
+      ? authUsersResult.data.users
+      : [];
+
+    const authByUserId = new Map(
+      authUsers.map((user: any) => [
+        user.id,
+        {
+          email: normalizeEmail(user.email),
+          display_name:
+            user.user_metadata?.full_name ||
+            user.user_metadata?.name ||
+            user.user_metadata?.display_name ||
+            null,
+          created_at:
+            user.created_at || null,
+          last_sign_in_at:
+            user.last_sign_in_at || null,
+          email_confirmed_at:
+            user.email_confirmed_at || null,
+        },
+      ])
+    );
 
     const atlasEntitledUserIds = new Set(
       entitlementRows
@@ -205,6 +274,9 @@ export async function GET() {
             row.user_id === userId
         );
 
+        const auth =
+          authByUserId.get(userId) || null;
+
         const atlasEntitled =
           atlasEntitledUserIds.has(userId);
 
@@ -234,7 +306,7 @@ export async function GET() {
           !atlasKeys
         ) {
           nextAction =
-            "Send Keys Reminder";
+            "Send Atlas Keys Reminder";
           health = "Needs Keys";
         } else if (
           pulseEntitled &&
@@ -247,13 +319,24 @@ export async function GET() {
 
         return {
           user_id: userId,
+          email:
+            auth?.email || null,
+          display_name:
+            auth?.display_name || null,
+          customer_label:
+            auth?.display_name ||
+            auth?.email ||
+            userId,
+          signup_at:
+            auth?.created_at || null,
+          last_sign_in_at:
+            auth?.last_sign_in_at || null,
+          email_confirmed_at:
+            auth?.email_confirmed_at || null,
           plan:
             subscription?.plan || null,
           subscription_status:
             subscription?.status ||
-            null,
-          signup_at:
-            subscription?.created_at ||
             null,
           atlas_entitled:
             atlasEntitled,
@@ -268,6 +351,26 @@ export async function GET() {
         };
       }
     );
+
+    customers.sort((a, b) => {
+      const aTime = a.signup_at
+        ? new Date(a.signup_at).getTime()
+        : 0;
+
+      const bTime = b.signup_at
+        ? new Date(b.signup_at).getTime()
+        : 0;
+
+      return bTime - aTime;
+    });
+
+    const newThisWeek =
+      customers.filter((customer) =>
+        isWithinLastDays(
+          customer.signup_at,
+          7
+        )
+      ).length;
 
     const waitingKeys =
       customers.filter((customer) =>
@@ -289,30 +392,36 @@ export async function GET() {
       ok: true,
       as_of: new Date().toISOString(),
       source:
-        "customer_success_read_only_v1",
+        "customer_success_read_only_v2",
       summary: {
-        new_this_week: customers.length,
-        awaiting_welcome: 0,
-        waiting_keys: waitingKeys,
+        total_customers:
+          customers.length,
+        new_this_week:
+          newThisWeek,
+        waiting_keys:
+          waitingKeys,
         ready_for_atlas:
           readyForAtlas,
       },
       onboarding: {
-        new_signups: customers.length,
-        awaiting_welcome: 0,
+        total_customers:
+          customers.length,
+        new_signups_7d:
+          newThisWeek,
         waiting_for_keys:
           waitingKeys,
         ready_for_atlas:
           readyForAtlas,
-        needs_funding: 0,
       },
       communication: {
-        welcome_pending: 0,
-        keys_reminder: waitingKeys,
-        weekly_summary_due: 0,
-        platform_updates: 0,
-        action_required:
+        keys_reminder:
           waitingKeys,
+        action_required:
+          customers.filter(
+            (customer) =>
+              customer.next_action !==
+              "No Action"
+          ).length,
       },
       customers,
       diagnostics: {
@@ -324,6 +433,8 @@ export async function GET() {
           !pulseKeyResult.error,
         atlas_keys_ok:
           !atlasKeyResult.error,
+        auth_users_ok:
+          !authUsersResult.error,
         keys_ok:
           !pulseKeyResult.error &&
           !atlasKeyResult.error,
@@ -338,6 +449,9 @@ export async function GET() {
             ?.message || null,
         atlas_keys_error:
           atlasKeyResult.error
+            ?.message || null,
+        auth_users_error:
+          authUsersResult.error
             ?.message || null,
         keys_error:
           pulseKeyResult.error
