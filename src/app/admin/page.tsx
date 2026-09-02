@@ -64,6 +64,12 @@ export default function AdminShell() {
             title="Investor"
             description="Investor and business operations."
           />
+
+          <AdminLink
+            href="/admin/affiliate-operations"
+            title="Affiliate Operations"
+            description="Affiliate performance, Coinbase referrals, commissions, and marketing operations."
+          />
         </div>
 
         <div className="mt-10 rounded-2xl border border-zinc-800 bg-zinc-950 p-6">
