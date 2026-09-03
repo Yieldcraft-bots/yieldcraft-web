@@ -36,6 +36,12 @@ export default function AdminShell() {
           />
 
           <AdminLink
+            href="/admin/customer-success"
+            title="Customer Success"
+            description="Client health, onboarding, communications, and support operations."
+          />
+
+          <AdminLink
             href="/admin/operators/pulse-roster"
             title="Pulse Roster"
             description="User reconciliation and key health."

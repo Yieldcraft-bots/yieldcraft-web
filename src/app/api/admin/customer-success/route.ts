@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAuthorizedAdminRequest } from "@/lib/admin-auth";
+import { deriveAtlasOperationalStatus } from "@/lib/atlas-operational-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -79,6 +80,7 @@ export async function GET(request: Request) {
       subscriptionResult,
       pulseKeyResult,
       atlasKeyResult,
+      atlasStateResult,
       authUsersResult,
     ] = await Promise.all([
       client
@@ -106,6 +108,12 @@ export async function GET(request: Request) {
           "user_id, product_scope, created_at"
         )
         .eq("product_scope", "atlas"),
+
+      client
+        .from("atlas_user_state")
+        .select(
+          "user_id, last_cash_available_usd, cooldown_until, notes"
+        ),
 
       client.auth.admin.listUsers({
         page: 1,
@@ -137,6 +145,12 @@ export async function GET(request: Request) {
       ? atlasKeyResult.data
       : [];
 
+    const atlasStateRows = Array.isArray(
+      atlasStateResult.data
+    )
+      ? atlasStateResult.data
+      : [];
+
     const authUsers = Array.isArray(
       authUsersResult?.data?.users
     )
@@ -161,6 +175,15 @@ export async function GET(request: Request) {
             user.email_confirmed_at || null,
         },
       ])
+    );
+
+    const atlasStateByUserId = new Map(
+      atlasStateRows
+        .filter((row: any) => row.user_id)
+        .map((row: any) => [
+          row.user_id,
+          row,
+        ])
     );
 
     const atlasEntitledUserIds = new Set(
@@ -294,6 +317,17 @@ export async function GET(request: Request) {
             userId
           );
 
+        const atlasState =
+          atlasStateByUserId.get(userId) ||
+          null;
+
+        const atlasOperationalStatus =
+          atlasState
+            ? deriveAtlasOperationalStatus(
+                atlasState
+              )
+            : null;
+
         let nextAction = "No Action";
         let health = "Healthy";
 
@@ -315,6 +349,24 @@ export async function GET(request: Request) {
           nextAction =
             "Send Pulse Keys Reminder";
           health = "Needs Keys";
+        } else if (
+          atlasEntitled &&
+          atlasKeys &&
+          atlasOperationalStatus?.status ===
+            "NEEDS_FUNDS"
+        ) {
+          nextAction =
+            "Fund Atlas Account";
+          health = "Needs Funds";
+        } else if (
+          atlasEntitled &&
+          atlasKeys &&
+          atlasOperationalStatus?.status ===
+            "COOLDOWN"
+        ) {
+          nextAction =
+            "Atlas Cooldown";
+          health = "Cooldown";
         }
 
         return {
@@ -346,6 +398,20 @@ export async function GET(request: Request) {
             atlasKeys,
           pulse_key_connected:
             pulseKeys,
+          atlas_operational_status:
+            atlasOperationalStatus?.status ||
+            null,
+          atlas_operational_reason:
+            atlasOperationalStatus?.reason ||
+            null,
+          atlas_cash_available_usd:
+            atlasOperationalStatus
+              ?.cash_available_usd ??
+            null,
+          atlas_cooldown_active:
+            atlasOperationalStatus
+              ?.cooldown_active ??
+            false,
           health,
           next_action: nextAction,
         };
@@ -385,14 +451,16 @@ export async function GET(request: Request) {
           customer.subscription_status ===
             "active" &&
           customer.atlas_entitled &&
-          customer.atlas_key_connected
+          customer.atlas_key_connected &&
+          customer.atlas_operational_status ===
+            "READY"
       ).length;
 
     return json(200, {
       ok: true,
       as_of: new Date().toISOString(),
       source:
-        "customer_success_read_only_v2",
+        "customer_success_read_only_v3",
       summary: {
         total_customers:
           customers.length,
@@ -433,6 +501,8 @@ export async function GET(request: Request) {
           !pulseKeyResult.error,
         atlas_keys_ok:
           !atlasKeyResult.error,
+        atlas_state_ok:
+          !atlasStateResult.error,
         auth_users_ok:
           !authUsersResult.error,
         keys_ok:
@@ -449,6 +519,9 @@ export async function GET(request: Request) {
             ?.message || null,
         atlas_keys_error:
           atlasKeyResult.error
+            ?.message || null,
+        atlas_state_error:
+          atlasStateResult.error
             ?.message || null,
         auth_users_error:
           authUsersResult.error

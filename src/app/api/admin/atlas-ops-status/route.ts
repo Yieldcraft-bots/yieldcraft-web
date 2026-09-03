@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { isAuthorizedAdminRequest } from "@/lib/admin-auth";
+import { deriveAtlasOperationalStatus } from "@/lib/atlas-operational-status";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,16 +38,6 @@ function sbService() {
 function num(v: any) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
-}
-
-function isCooldownActive(cooldownUntil?: string | null) {
-  if (!cooldownUntil) {
-    return false;
-  }
-
-  const t = new Date(cooldownUntil).getTime();
-
-  return Number.isFinite(t) && t > Date.now();
 }
 
 function normalizeEmail(v: any) {
@@ -206,53 +197,29 @@ export async function GET(request: Request) {
     };
 
     const users = rows.map((row: any) => {
-      const cash = num(
-        row.last_cash_available_usd
-      );
+      const operationalStatus =
+        deriveAtlasOperationalStatus(row);
 
-      const btc = num(
-        row.last_btc_available
-      );
+      const cash =
+        operationalStatus.cash_available_usd;
 
-      const cooldown = isCooldownActive(
-        row.cooldown_until
-      );
+      const status =
+        operationalStatus.status;
 
-      const notes = row.notes || {};
+      const reason =
+        operationalStatus.reason;
 
-      const allocationReason = String(
-        notes.allocation_reason ||
-          notes.reason ||
-          ""
-      );
-
-      let status = "READY";
-      let reason = "atlas_state_observed";
-
-      if (cooldown) {
-        status = "COOLDOWN";
-        reason = "cooldown_active";
+      if (status === "COOLDOWN") {
         summary.cooldown += 1;
-      } else if (
-        allocationReason.includes(
-          "below_min_cash"
-        ) ||
-        allocationReason.includes(
-          "insufficient"
-        ) ||
-        allocationReason.includes("cash")
-      ) {
-        status = "NEEDS_FUNDS";
-        reason = allocationReason;
-        summary.needs_funds += 1;
-      } else if (cash <= 0) {
-        status = "NEEDS_FUNDS";
-        reason =
-          "cash_available_zero_or_missing";
+      } else if (status === "NEEDS_FUNDS") {
         summary.needs_funds += 1;
       } else {
         summary.ready += 1;
       }
+
+      const btc = num(
+        row.last_btc_available
+      );
 
       const auth =
         authByUserId.get(row.user_id) || null;
