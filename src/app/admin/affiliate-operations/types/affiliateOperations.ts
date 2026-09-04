@@ -30,3 +30,10 @@ export interface CoinbaseReferralSummary {
   atlasClicks30d: number;
   identifiedUsers30d: number;
 }
+
+export interface AffiliateConversionSummary {
+  totalConversions: number;
+  totalReferredRevenue: number;
+  totalRecordedCommission: number;
+  latestConversionAt: string | null;
+}
