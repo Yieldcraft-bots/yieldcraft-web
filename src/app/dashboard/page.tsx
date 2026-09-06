@@ -1286,28 +1286,6 @@ export default function DashboardPage() {
               )}
 
               <StatusButton
-                label="PLATFORM ENGINE"
-                pill={platP}
-                onClick={() => {
-                  const ok = platformEngineConn === "ok" && platformEngineMeta.authOk;
-
-                  openPillModal({
-                    title: "PLATFORM ENGINE",
-                    tone: ok ? "green" : "red",
-                    body: [
-                      ok
-                        ? "✅ Platform engine can authenticate to Coinbase (server env keys)."
-                        : "❌ Platform engine auth is failing.",
-                      `Auth status: ${platformEngineMeta.authStatus ?? "—"}`,
-                      `Mode: ${platformEngineMeta.mode ?? "—"}`,
-                    ],
-                    footer: ["This is the platform server connectivity, not your personal keys."],
-                  });
-                }}
-                title="Click for details"
-              />
-
-              <StatusButton
                 label="TRADING STATUS"
                 pill={tradeP}
                 onClick={() => {
