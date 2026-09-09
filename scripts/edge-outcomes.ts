@@ -24,6 +24,14 @@ type EdgeHunterLog = {
   sample: number | null;
 };
 
+type ExistingOutcome = {
+  id: string;
+  log_id: string;
+  outcome_5m_bps: number | null;
+  outcome_15m_bps: number | null;
+  outcome_30m_bps: number | null;
+};
+
 type Candle = {
   time: Date;
   close: number;
@@ -39,7 +47,9 @@ async function fetchCandles(
   const res = await fetch(url);
 
   if (!res.ok) {
-    throw new Error(`Coinbase candles fetch failed: ${res.status} ${res.statusText}`);
+    throw new Error(
+      `Coinbase candles fetch failed: ${res.status} ${res.statusText}`
+    );
   }
 
   const data = await res.json();
@@ -68,28 +78,59 @@ async function getRecentLogs(limit = 25): Promise<EdgeHunterLog[]> {
   return (data ?? []) as EdgeHunterLog[];
 }
 
-async function getExistingOutcomeLogIds(logIds: string[]): Promise<Set<string>> {
-  if (logIds.length === 0) return new Set();
+async function getExistingOutcomes(
+  logIds: string[]
+): Promise<Map<string, ExistingOutcome[]>> {
+  const outcomeMap = new Map<string, ExistingOutcome[]>();
+
+  if (logIds.length === 0) return outcomeMap;
 
   const { data, error } = await supabase
     .from("edge_outcomes")
-    .select("log_id")
-    .in("log_id", logIds);
+    .select(
+      "id, log_id, outcome_5m_bps, outcome_15m_bps, outcome_30m_bps"
+    )
+    .in("log_id", logIds)
+    .not("horizon_minutes", "is", null);
 
   if (error) throw error;
 
-  return new Set((data ?? []).map((row: any) => row.log_id));
+  for (const row of (data ?? []) as ExistingOutcome[]) {
+    const existing = outcomeMap.get(row.log_id) ?? [];
+    existing.push(row);
+    outcomeMap.set(row.log_id, existing);
+  }
+
+  return outcomeMap;
 }
 
-function getReturnBps(candles: Candle[], idx: number, entryPrice: number): number | null {
+function getReturnBps(
+  candles: Candle[],
+  idx: number,
+  entryPrice: number
+): number | null {
   const candle = candles[idx];
+
   if (!candle) return null;
+
   return ((candle.close - entryPrice) / entryPrice) * 10000;
+}
+
+function isComplete(row: ExistingOutcome): boolean {
+  return (
+    row.outcome_5m_bps != null &&
+    row.outcome_15m_bps != null &&
+    row.outcome_30m_bps != null
+  );
 }
 
 async function buildOutcomeRow(log: EdgeHunterLog) {
   const start = new Date(log.created_at);
-  const end = new Date(start.getTime() + 30 * 60 * 1000);
+
+  // Request beyond the 30-minute horizon so the candle representing
+  // the +30 minute observation is available even when the API end
+  // boundary is exclusive.
+  const end = new Date(start.getTime() + 32 * 60 * 1000);
 
   const candles = await fetchCandles(
     log.product_id,
@@ -148,30 +189,51 @@ async function insertOutcome(row: any) {
   return data;
 }
 
+async function updateOutcome(id: string, row: any) {
+  const {
+    log_id: _logId,
+    created_at: _createdAt,
+    ...updatePayload
+  } = row;
+
+  const { data, error } = await supabase
+    .from("edge_outcomes")
+    .update(updatePayload)
+    .eq("id", id)
+    .select();
+
+  if (error) throw error;
+
+  return data;
+}
+
 async function main() {
   console.log("Edge Outcomes batch starting...");
 
   const logs = await getRecentLogs(25);
   console.log(`Fetched recent logs: ${logs.length}`);
 
-  const existingLogIds = await getExistingOutcomeLogIds(logs.map((l) => l.id));
-  console.log(`Already processed logs: ${existingLogIds.size}`);
-
-  const unprocessedLogs = logs.filter((log) => !existingLogIds.has(log.id));
-  console.log(`Unprocessed logs to score: ${unprocessedLogs.length}`);
-
-  if (unprocessedLogs.length === 0) {
-    console.log("Nothing new to process.");
-    return;
-  }
+  const existingOutcomes = await getExistingOutcomes(
+    logs.map((log) => log.id)
+  );
 
   let insertedCount = 0;
+  let updatedCount = 0;
+  let completeCount = 0;
   let skippedCount = 0;
 
-  for (const log of unprocessedLogs) {
+  for (const log of logs) {
     try {
       console.log("\n---");
       console.log(`Scoring log: ${log.id} @ ${log.created_at}`);
+
+      const existingRows = existingOutcomes.get(log.id) ?? [];
+
+      if (existingRows.some(isComplete)) {
+        console.log(`Already complete: ${log.id}`);
+        completeCount += 1;
+        continue;
+      }
 
       const row = await buildOutcomeRow(log);
 
@@ -180,15 +242,28 @@ async function main() {
         continue;
       }
 
-      console.log("Insert payload:");
+      console.log("Outcome payload:");
       console.dir(row, { depth: null });
 
-      const inserted = await insertOutcome(row);
+      if (existingRows.length > 0) {
+        // Do not create another duplicate. Repair one existing active
+        // horizon row by its primary key.
+        const target = existingRows[0];
 
-      console.log("Inserted row:");
-      console.dir(inserted, { depth: null });
+        const updated = await updateOutcome(target.id, row);
 
-      insertedCount += 1;
+        console.log(`Updated existing outcome row ${target.id}:`);
+        console.dir(updated, { depth: null });
+
+        updatedCount += 1;
+      } else {
+        const inserted = await insertOutcome(row);
+
+        console.log("Inserted new outcome row:");
+        console.dir(inserted, { depth: null });
+
+        insertedCount += 1;
+      }
     } catch (err) {
       skippedCount += 1;
       console.error(`Failed scoring log ${log.id}:`);
@@ -198,6 +273,8 @@ async function main() {
 
   console.log("\nBatch complete.");
   console.log(`Inserted: ${insertedCount}`);
+  console.log(`Updated incomplete: ${updatedCount}`);
+  console.log(`Already complete: ${completeCount}`);
   console.log(`Skipped/failed: ${skippedCount}`);
 }
 
