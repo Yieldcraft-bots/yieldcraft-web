@@ -37,7 +37,7 @@ jobs:
           ATLAS_WATCHDOG_DATABASE_URL: ${{ secrets.ATLAS_WATCHDOG_DATABASE_URL }}
           ATLAS_WATCHDOG_APPROVED_DATABASE_HOST: ${{ vars.ATLAS_WATCHDOG_APPROVED_DATABASE_HOST }}
           ATLAS_WATCHDOG_OWNER_PROJECTION_ONLY: "true"
-          ATLAS_WATCHDOG_EXPECTED_SCOPES: '[{"scopeId":"atlas-owner-v2-usd-20261118-disabled","deploymentId":"dpl_CGP1dmE85Bu6EYByzF2kj6NcEKPZ","enabled":false,"currency":"USD"}]'
+          ATLAS_WATCHDOG_EXPECTED_SCOPES: ${{ vars.ATLAS_WATCHDOG_EXPECTED_SCOPES || '[{"scopeId":"atlas-owner-v2-usd-20261118-disabled","deploymentId":"dpl_CGP1dmE85Bu6EYByzF2kj6NcEKPZ","enabled":false,"currency":"USD"}]' }}
         run: node .deployment-prep/atlas-operating-release/watchdog/github-actions.cjs
       - name: Check incident marker
         id: dedup
