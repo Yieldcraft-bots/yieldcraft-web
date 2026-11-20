@@ -6,10 +6,11 @@ const {tmpdir} = require('node:os');
 const {join} = require('node:path');
 
 async function run() {
-  const source = new URL(process.env.ATLAS_WATCHDOG_EVIDENCE_URL);
+  const projectionOnly = process.env.ATLAS_WATCHDOG_OWNER_PROJECTION_ONLY === 'true';
+  const source = projectionOnly ? null : new URL(process.env.ATLAS_WATCHDOG_EVIDENCE_URL);
   const token = process.env.ATLAS_WATCHDOG_EVIDENCE_TOKEN;
   const databaseUrl = process.env.ATLAS_WATCHDOG_DATABASE_URL;
-  if (source.protocol !== 'https:' || source.username || source.password || !token || !databaseUrl) {
+  if (!databaseUrl || (!projectionOnly && (source.protocol !== 'https:' || source.username || source.password || !token))) {
     throw Error('WATCHDOG_INPUTS_REQUIRED');
   }
 
@@ -18,7 +19,7 @@ async function run() {
     const evidence = join(directory, 'evidence.json');
     const spool = join(directory, 'incidents');
     await mkdir(spool, {mode: 0o700});
-    const response = await fetch(source, {
+    const response = projectionOnly ? null : await fetch(source, {
       headers: {Authorization: 'Bearer ' + token},
       redirect: 'error',
       signal: AbortSignal.timeout(10000),
@@ -40,6 +41,7 @@ async function run() {
         ATLAS_WATCHDOG_APPROVED_DATABASE_HOST: process.env.ATLAS_WATCHDOG_APPROVED_DATABASE_HOST,
         ATLAS_WATCHDOG_EXPECTED_SCOPES: process.env.ATLAS_WATCHDOG_EXPECTED_SCOPES,
         ATLAS_WATCHDOG_SCHEDULER_EVIDENCE: evidence,
+        ATLAS_WATCHDOG_OWNER_PROJECTION_ONLY: String(projectionOnly),
         ATLAS_WATCHDOG_SPOOL: spool,
       },
       stdio: ['ignore', 'inherit', 'ignore'],

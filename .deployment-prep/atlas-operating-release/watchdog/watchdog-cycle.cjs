@@ -36,9 +36,8 @@ async function readSchedulerEvidence(filename) {
   }
 }
 
-async function assess({expected, now, readProjection, readEvidence}) {
+async function assess({expected, now, readProjection, readEvidence, projectionOnly = false}) {
   let projection;
-  let evidence;
   let codes = [];
   try {
     projection = await readProjection();
@@ -54,8 +53,11 @@ async function assess({expected, now, readProjection, readEvidence}) {
 
   const observedAt = now();
   const slot = Math.floor((observedAt - grace) / interval) * interval;
-  try { evidence = await readEvidence(); } catch { /* stale or unavailable evidence fails closed below */ }
-  const scheduler = expected.map(({scopeId, deploymentId}) => assessScheduledCompletion({
+  let evidence;
+  if (!projectionOnly) {
+    try { evidence = await readEvidence(); } catch { /* stale or unavailable evidence fails closed below */ }
+  }
+  const scheduler = projectionOnly ? [] : expected.map(({scopeId, deploymentId}) => assessScheduledCompletion({
     now: observedAt, observedAt: evidence?.observedAt, scopeId, deploymentId,
     platform: evidence?.platform, witness: evidence?.witness,
   }));
@@ -69,6 +71,8 @@ async function assess({expected, now, readProjection, readEvidence}) {
     healthy: codes.length === 0,
     codes,
     action: codes.length === 0 ? 'NONE' : 'INSPECT_ONLY',
+    schedulerProven: false,
+    evidenceMode: projectionOnly ? 'OWNER_PERSISTED_CYCLE' : 'PROVIDER_AND_PERSISTED_CYCLE',
     schedulerCorrelated: scheduler.length > 0 && scheduler.every(result => result.state === 'HEALTHY'),
     expectedScopeCount: expected.length,
     productionMutations: 0,
@@ -104,9 +108,11 @@ async function record(directory, result) {
 }
 
 async function run(env = process.env) {
+  const projectionOnly = env.ATLAS_WATCHDOG_OWNER_PROJECTION_ONLY === 'true';
   const expected = JSON.parse(env.ATLAS_WATCHDOG_EXPECTED_SCOPES || 'null');
   if (!Array.isArray(expected) || expected.length < 1 || expected.length > 1000 ||
-      !isAbsolute(env.ATLAS_WATCHDOG_SPOOL || '') || !isAbsolute(env.ATLAS_WATCHDOG_SCHEDULER_EVIDENCE || '')) {
+      !isAbsolute(env.ATLAS_WATCHDOG_SPOOL || '') ||
+      (!projectionOnly && !isAbsolute(env.ATLAS_WATCHDOG_SCHEDULER_EVIDENCE || ''))) {
     throw Error('WATCHDOG_CONFIGURATION_REQUIRED');
   }
   const {Client} = require('pg');
@@ -115,7 +121,7 @@ async function run(env = process.env) {
   const url = (await readFile(join(credentials, 'database-url'), 'utf8')).trim();
   const db = new Client(connectionOptions(url, env.ATLAS_WATCHDOG_APPROVED_DATABASE_HOST));
   const result = await assess({
-    expected, now: Date.now,
+    expected, now: Date.now, projectionOnly,
     readProjection: async () => {
       try {
         await db.connect();

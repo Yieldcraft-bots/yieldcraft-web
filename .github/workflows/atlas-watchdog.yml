@@ -29,27 +29,14 @@ jobs:
           node-version: '22'
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: .deployment-prep/atlas-operating-release/watchdog
-      - name: Check evidence configuration
-        id: evidence-inputs
-        env:
-          EVIDENCE_URL: ${{ vars.ATLAS_WATCHDOG_EVIDENCE_URL }}
-          EVIDENCE_TOKEN: ${{ secrets.ATLAS_WATCHDOG_EVIDENCE_TOKEN }}
-        run: |
-          if [[ -n "$EVIDENCE_URL" && -n "$EVIDENCE_TOKEN" ]]; then
-            echo 'configured=true' >> "$GITHUB_OUTPUT"
-          else
-            echo '::notice::Live observation skipped because the verified scheduler feed is not configured.'
-          fi
       - name: Observe disabled owner scope
-        if: steps.evidence-inputs.outputs.configured == 'true'
         id: observe
         continue-on-error: true
         env:
           NODE_PATH: ${{ github.workspace }}/.deployment-prep/atlas-operating-release/watchdog/node_modules
           ATLAS_WATCHDOG_DATABASE_URL: ${{ secrets.ATLAS_WATCHDOG_DATABASE_URL }}
           ATLAS_WATCHDOG_APPROVED_DATABASE_HOST: ${{ vars.ATLAS_WATCHDOG_APPROVED_DATABASE_HOST }}
-          ATLAS_WATCHDOG_EVIDENCE_URL: ${{ vars.ATLAS_WATCHDOG_EVIDENCE_URL }}
-          ATLAS_WATCHDOG_EVIDENCE_TOKEN: ${{ secrets.ATLAS_WATCHDOG_EVIDENCE_TOKEN }}
+          ATLAS_WATCHDOG_OWNER_PROJECTION_ONLY: "true"
           ATLAS_WATCHDOG_EXPECTED_SCOPES: '[{"scopeId":"atlas-owner-v2-usd-20261118-disabled","deploymentId":"dpl_CGP1dmE85Bu6EYByzF2kj6NcEKPZ","enabled":false,"currency":"USD"}]'
         run: node .deployment-prep/atlas-operating-release/watchdog/github-actions.cjs
       - name: Check incident marker
