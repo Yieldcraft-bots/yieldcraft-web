@@ -1,0 +1,112 @@
+# Review candidate. Install on main only after identity, budget and delivery checks.
+name: Atlas Multi-Asset independent watchdog
+on:
+  workflow_dispatch:
+    inputs:
+      drill_id:
+        description: 'Fixture drill ID. Leave empty for live observation.'
+        required: false
+        type: string
+  schedule:
+    - cron: '2,17,32,47 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: atlas-multi-asset-watchdog
+  cancel-in-progress: false
+jobs:
+  observe:
+    if: github.event_name == 'schedule' || inputs.drill_id == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: atlas-watchdog
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: .deployment-prep/atlas-operating-release/watchdog
+      - name: Check evidence configuration
+        id: evidence-inputs
+        env:
+          EVIDENCE_URL: ${{ vars.ATLAS_WATCHDOG_EVIDENCE_URL }}
+          EVIDENCE_TOKEN: ${{ secrets.ATLAS_WATCHDOG_EVIDENCE_TOKEN }}
+        run: |
+          if [[ -n "$EVIDENCE_URL" && -n "$EVIDENCE_TOKEN" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::notice::Live observation skipped because the verified scheduler feed is not configured.'
+          fi
+      - name: Observe disabled owner scope
+        if: steps.evidence-inputs.outputs.configured == 'true'
+        id: observe
+        continue-on-error: true
+        env:
+          NODE_PATH: ${{ github.workspace }}/.deployment-prep/atlas-operating-release/watchdog/node_modules
+          ATLAS_WATCHDOG_DATABASE_URL: ${{ secrets.ATLAS_WATCHDOG_DATABASE_URL }}
+          ATLAS_WATCHDOG_APPROVED_DATABASE_HOST: ${{ vars.ATLAS_WATCHDOG_APPROVED_DATABASE_HOST }}
+          ATLAS_WATCHDOG_EVIDENCE_URL: ${{ vars.ATLAS_WATCHDOG_EVIDENCE_URL }}
+          ATLAS_WATCHDOG_EVIDENCE_TOKEN: ${{ secrets.ATLAS_WATCHDOG_EVIDENCE_TOKEN }}
+          ATLAS_WATCHDOG_EXPECTED_SCOPES: '[{"scopeId":"atlas-owner-v2-usd-20261118-disabled","deploymentId":"dpl_CGP1dmE85Bu6EYByzF2kj6NcEKPZ","enabled":false,"currency":"USD"}]'
+        run: node .deployment-prep/atlas-operating-release/watchdog/github-actions.cjs
+      - name: Check incident marker
+        id: dedup
+        if: steps.observe.outputs.incident != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/atlas-watchdog-notified
+          key: atlas-watchdog-v1-${{ steps.observe.outputs.incident }}
+      - name: Create incident marker
+        if: steps.observe.outputs.incident != '' && steps.dedup.outputs.cache-hit != 'true'
+        run: touch "$RUNNER_TEMP/atlas-watchdog-notified"
+      - name: Persist incident marker
+        if: steps.observe.outputs.incident != '' && steps.dedup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/atlas-watchdog-notified
+          key: atlas-watchdog-v1-${{ steps.observe.outputs.incident }}
+      - name: Raise redacted workflow failure
+        if: steps.observe.outcome == 'failure' && steps.dedup.outputs.cache-hit != 'true'
+        run: |
+          echo 'Atlas watchdog requires operator inspection.'
+          exit 1
+  fixture:
+    if: github.event_name == 'workflow_dispatch' && inputs.drill_id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify isolated missing-evidence cases
+        id: fixture
+        env:
+          ATLAS_WATCHDOG_DRILL_ID: ${{ inputs.drill_id }}
+        run: node .deployment-prep/atlas-operating-release/watchdog/github-fixture.cjs
+      - name: Check fixture notification marker
+        id: dedup
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/atlas-watchdog-fixture-notified
+          key: atlas-watchdog-fixture-v1-${{ steps.fixture.outputs.incident }}
+      - name: Create fixture marker
+        if: steps.dedup.outputs.cache-hit != 'true'
+        run: touch "$RUNNER_TEMP/atlas-watchdog-fixture-notified"
+      - name: Persist fixture marker
+        if: steps.dedup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/atlas-watchdog-fixture-notified
+          key: atlas-watchdog-fixture-v1-${{ steps.fixture.outputs.incident }}
+      - name: Raise one redacted drill notification
+        if: steps.dedup.outputs.cache-hit != 'true'
+        run: |
+          echo 'Atlas watchdog fixture verified. Operator receipt required.'
+          exit 1
+

@@ -1,0 +1,1 @@
+{"name":"atlas-watchdog-runtime","version":"1.0.0","private":true,"dependencies":{"pg":"8.23.1"}}
